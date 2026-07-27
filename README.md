@@ -81,6 +81,14 @@ cache, keyed by the prompt, selected model, and observed image preview SHA.
 After an interruption, rerunning the same command resumes from the first
 unfinished cluster without paying for already memoized readings.
 
+Kimiya permits at most eight images in one multimodal generation. OpenCull
+therefore curates clusters larger than eight as a hierarchical tournament:
+stable batches of at most eight advance up to four distinct finalists, and
+those finalists are compared in further rounds until one final comparison can
+apply the original cluster's `keep_per_group` ceiling. The original cluster
+remains one cluster in the report and is checkpointed only after the whole
+tournament completes.
+
 Multi-photo culling uses two visual layers. Gemini first describes every frame
 without selecting: pose/body, eyes/gaze, mouth/expression, readiness/timing,
 interaction, occlusion/surroundings, hard-to-repair defects, RAW-recoverable

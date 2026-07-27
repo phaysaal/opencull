@@ -111,6 +111,47 @@ class KernelTests(unittest.TestCase):
         self.assertIn("ceiling, not a quota", prompt)
         self.assertIn("Never reject a photograph", prompt)
 
+    def test_oversized_cluster_tournament_stays_within_image_limit(self):
+        candidates = [
+            {**GROUP["candidates"][0], "name": f"P{number:03d}.JPG"}
+            for number in range(35)
+        ]
+        large = {"id": "large", "candidates": candidates}
+        active = candidates
+        rounds = kernel.tournament_round_count(large, 8, 4)
+        self.assertGreater(rounds, 1)
+        for round_number in range(rounds - 1):
+            batches = kernel.candidate_batches(active, 8)
+            self.assertTrue(all(1 <= len(batch) <= 8 for batch in batches))
+            active = [
+                candidate
+                for batch in batches
+                for candidate in batch[:min(4, len(batch))]
+            ]
+        self.assertLessEqual(len(active), 8)
+
+    def test_eleven_photo_cluster_needs_shortlist_then_final(self):
+        candidates = [
+            {**GROUP["candidates"][0], "name": f"P{number:02d}.JPG"}
+            for number in range(11)
+        ]
+        large = {"id": "large", "candidates": candidates}
+        self.assertEqual(kernel.tournament_round_count(large, 8, 4), 2)
+        self.assertEqual(
+            [len(batch) for batch in kernel.candidate_batches(candidates, 8)],
+            [8, 3],
+        )
+        invalid_empty = {
+            "keepers": "",
+            "rationale": "all photos have poor quality",
+            "confidence": 0.5,
+        }
+        normalized = kernel.normalize_shortlist_recommendation(
+            invalid_empty, kernel.group_with_candidates(large, candidates[:8]), 4)
+        self.assertTrue(kernel.valid_shortlist_recommendation(
+            normalized, kernel.group_with_candidates(large, candidates[:8]), 4))
+        self.assertEqual(len(kernel._selected_names(normalized)), 4)
+
     def test_report_covers_groups_in_order(self):
         record = {"keepers": "A.CR3", "rationale": "sharpest", "confidence": 0.8}
         decision = kernel.decision_json(record, GROUP, 1)

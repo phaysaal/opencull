@@ -601,6 +601,135 @@ def curation_prompt(
     ])
 
 
+def candidate_batches(
+    candidates: list[dict[str, Any]], limit: float = 8
+) -> list[list[dict[str, Any]]]:
+    """Split candidates into stable comparison batches within the image cap."""
+    size = max(1, min(8, int(limit)))
+    source = candidates if isinstance(candidates, list) else []
+    return [source[index:index + size] for index in range(0, len(source), size)]
+
+
+def tournament_round_count(
+    group: dict[str, Any], limit: float = 8, survivors: float = 4
+) -> int:
+    """Rounds needed to reduce an oversized cluster and make one final choice."""
+    cap = max(2, min(8, int(limit)))
+    kept = max(1, min(cap - 1, int(survivors)))
+    count = len(group_candidates(group))
+    if count <= cap:
+        return 1
+    rounds = 0
+    while count > cap:
+        count = ((count + cap - 1) // cap) * kept
+        rounds += 1
+    return rounds + 1
+
+
+def group_with_candidates(
+    group: dict[str, Any],
+    candidates: list[dict[str, Any]],
+    round_number: float = 0,
+) -> dict[str, Any]:
+    """Create an ephemeral subgroup without changing candidate identities."""
+    allowed = {
+        candidate.get("name"): candidate
+        for candidate in group_candidates(group)
+    }
+    selected = [
+        allowed.get(candidate.get("name"))
+        for candidate in candidates
+        if isinstance(candidate, dict) and candidate.get("name") in allowed
+    ]
+    return {
+        "id": f"{group.get('id', 'group')}-round-{int(round_number) + 1}",
+        "candidates": [candidate for candidate in selected if candidate],
+    }
+
+
+def readings_for_candidates(
+    readings: Any, candidates: list[dict[str, Any]]
+) -> list[str]:
+    """Filter frame readings to a batch while retaining their JSON form."""
+    wanted = {
+        candidate.get("name") for candidate in candidates
+        if isinstance(candidate, dict)
+    }
+    selected = []
+    for reading in _parse_frame_readings(readings):
+        if reading.get("filename") in wanted:
+            selected.append(json.dumps(reading, sort_keys=True))
+    return selected
+
+
+def tournament_shortlist_prompt(
+    group: dict[str, Any],
+    readings: Any,
+    survivor_limit: float,
+    profile: str,
+) -> str:
+    maximum = min(
+        max(1, int(survivor_limit)), len(group_candidates(group)))
+    return "\n".join([
+        curation_prompt(group, readings, maximum, profile),
+        "",
+        "TOURNAMENT STAGE:",
+        "This is a preliminary comparison within one oversized original cluster.",
+        f"Advance at least one and at most {maximum} strongest, meaningfully "
+        "distinct candidates to the next comparison round.",
+        "Do not return an empty keeper list at this stage. A later round applies "
+        "the original final keeper ceiling.",
+    ])
+
+
+def valid_shortlist_recommendation(
+    record: Any, group: dict[str, Any], survivor_limit: float
+) -> bool:
+    return (
+        valid_recommendation(record, group, survivor_limit)
+        and len(_selected_names(record)) >= 1
+    )
+
+
+def normalize_shortlist_recommendation(
+    record: Any, group: dict[str, Any], survivor_limit: float
+) -> dict[str, Any]:
+    if valid_shortlist_recommendation(record, group, survivor_limit):
+        normalized = dict(record)
+        normalized["_fallback"] = False
+        return normalized
+    maximum = min(
+        max(1, int(survivor_limit)), len(group_candidates(group)))
+    preserved = [
+        candidate["name"] for candidate in group_candidates(group)[:maximum]
+    ]
+    return {
+        "keepers": ", ".join(preserved),
+        "rationale": (
+            "The preliminary curator returned an invalid shortlist. OpenCull "
+            "conservatively advanced the strongest scanner-ranked candidates "
+            "so the oversized cluster could continue to final comparison."
+        ),
+        "confidence": 0.0,
+        "_fallback": True,
+    }
+
+
+def selected_candidates(
+    record: Any, group: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Resolve validated selected names back to original candidate records."""
+    selected = set(_selected_names(record))
+    return [
+        candidate for candidate in group_candidates(group)
+        if candidate.get("name") in selected
+    ]
+
+
+def empty_recommendation() -> dict[str, Any]:
+    return {"keepers": "", "rationale": "", "confidence": 0.0}
+
+
 def _record_field(record: Any, name: str, default: Any = "") -> Any:
     return record.get(name, default) if isinstance(record, dict) else default
 

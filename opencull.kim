@@ -105,9 +105,39 @@ forall group in pending_groups:
             reading := normalize_group_reading(raw_reading, [candidate])
             check valid_group_reading(reading, [candidate])
             readings := readings + [frame_reading_json(reading, candidate)]
-        raw_rec := memo gen<Recommendation>(curation_prompt(group, readings, keep_per_group, profile), images=observed_photos) by B
-        rec := normalize_recommendation(raw_rec, group, keep_per_group)
-        check valid_recommendation(rec, group, keep_per_group)
+        if check len(group_candidates(group)) <= 8:
+            raw_rec := memo gen<Recommendation>(curation_prompt(group, readings, keep_per_group, profile), images=observed_photos) by B
+            rec := normalize_recommendation(raw_rec, group, keep_per_group)
+            check valid_recommendation(rec, group, keep_per_group)
+        else:
+            active_candidates := group_candidates(group)
+            tournament_rounds := tournament_round_count(group, 8, 4)
+            rec := empty_recommendation()
+            forall round_number in range(tournament_rounds):
+                round_finalists := []
+                round_batches := candidate_batches(active_candidates, 8)
+                forall batch in round_batches:
+                    batch_group := group_with_candidates(group, batch, round_number)
+                    batch_readings := readings_for_candidates(readings, batch)
+                    batch_photos := []
+                    forall batch_candidate in batch:
+                        batch_photo := observe image(candidate_path(source_directory, batch_candidate))
+                        check batch_photo.exists
+                        batch_photos := batch_photos + [batch_photo]
+                    if check round_number == tournament_rounds - 1:
+                        raw_batch_rec := memo gen<Recommendation>(curation_prompt(batch_group, batch_readings, keep_per_group, profile), images=batch_photos) by B
+                        batch_rec := normalize_recommendation(raw_batch_rec, batch_group, keep_per_group)
+                        check valid_recommendation(batch_rec, batch_group, keep_per_group)
+                        rec := batch_rec
+                    else:
+                        raw_batch_rec := memo gen<Recommendation>(tournament_shortlist_prompt(batch_group, batch_readings, 4, profile), images=batch_photos) by B
+                        batch_rec := normalize_shortlist_recommendation(raw_batch_rec, batch_group, 4)
+                        check valid_shortlist_recommendation(batch_rec, batch_group, 4)
+                        round_finalists := round_finalists + selected_candidates(batch_rec, batch_group)
+                if check round_number < tournament_rounds - 1:
+                    check len(round_finalists) > 0
+                    active_candidates := round_finalists
+            check valid_recommendation(rec, group, keep_per_group)
         decisions := decisions + [decision_json(rec, group, keep_per_group, readings)]
     checkpoint_state := build_checkpoint(hash(manifest), groups, decisions, keep_per_group, profile, false)
     check len(checkpoint_state) > 0
