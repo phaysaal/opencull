@@ -1,0 +1,12 @@
+.DS_Store
+.kimiya/
+.venv/
+__pycache__/
+*.pyc
+manifest.json
+opencull-results.json
+*-results.json
+*.checkpoint.json
+/opencull.py
+fixtures/generated/
+/realtests/

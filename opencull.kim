@@ -1,0 +1,141 @@
+-- OpenCull: explainable, agent-assisted photo culling.
+--
+-- The scanner measures and groups images without changing them. Kimiya then
+-- asks a declared generator for a recommendation, validates every filename
+-- mechanically, and asks a cross-family panel to warrant the final report.
+-- Only compact metrics and filenames enter prompts; image pixels do not.
+
+param photos: text = "."
+param output: text = "opencull-results.json"
+param keep_per_group: num = 2
+param recursive: bool = false
+param time_window: num = 8
+param hash_distance: num = 14
+param comparison_window: num = 16
+param adaptive: bool = true
+param tuning_budget: num = 8
+param profile: text = "family"
+param resume: bool = true
+param checkpoint: text = ""
+
+use "agents.kim"
+use python "scan.py"
+use python "opencull_kernel.py"
+
+context k_cull:
+    domain     = "ranking near-duplicate photographs from visual and measured quality evidence"
+    preserve   = [candidate_identity, measured_quality, requested_keep_count, uncertainty]
+    allow_loss = [wording, ordering]
+
+schema Recommendation:
+    keepers: text
+    rationale: text
+    confidence: num
+
+schema ClusterAssessment:
+    direction: text
+    target: text
+    rationale: text
+    confidence: num
+
+schema FrameReading:
+    pose_and_body: text
+    eyes_and_gaze: text
+    mouth_and_expression: text
+    readiness_and_timing: text
+    interaction_and_moment: text
+    occlusion_and_surroundings: text
+    irrecoverable_problems: text
+    recoverable_raw_issues: text
+    distinctive_variations: text
+    family_value: text
+    uncertainty: text
+    confidence: num
+
+initial_manifest := scan_directory(photos, recursive, time_window, hash_distance, comparison_window)
+manifest := initial_manifest
+source_directory := manifest_source(initial_manifest)
+assessments := []
+plan := build_tuning_plan(assessments, hash_distance, time_window)
+
+if check adaptive:
+    forall review in clustering_review_sets(initial_manifest, tuning_budget):
+        review_photos := []
+        forall candidate in review_candidates(review):
+            review_photo := observe image(candidate_path(source_directory, candidate))
+            check review_photo.exists
+            review_photos := review_photos + [review_photo]
+        assessment := memo gen<ClusterAssessment>(clustering_tuning_prompt(review), images=review_photos) by D
+        if check valid_cluster_assessment(assessment):
+            assessments := assessments + [cluster_assessment_json(assessment, review)]
+    plan := build_tuning_plan(assessments, hash_distance, time_window)
+    if check plan.changed:
+        tuned_manifest := scan_directory(photos, recursive, plan.time_window, plan.hash_distance, comparison_window)
+        manifest := accept_tuned_manifest(initial_manifest, tuned_manifest, plan)
+
+groups := parse_manifest(manifest)
+source_directory := manifest_source(manifest)
+tuning := tuning_audit(initial_manifest, manifest, assessments, plan, adaptive)
+check len(groups) > 0
+check keep_per_group >= 1
+check len(source_directory) > 0
+
+decisions := []
+checkpoint_file := checkpoint_path(output, checkpoint)
+checkpoint_state := load_checkpoint(checkpoint_file, hash(manifest), groups, keep_per_group, profile, resume)
+decisions := checkpoint_decisions(checkpoint_state, groups, keep_per_group)
+pending_groups := remaining_groups(groups, decisions)
+
+-- Each group is a search problem. Invalid filenames or the wrong number of
+-- selections retry; they can never reach the report. Each completed group is
+-- checkpointed independently, so an interrupted large run resumes at the
+-- first unfinished cluster. Exact-input memoization also avoids repeating
+-- already observed model readings.
+forall group in pending_groups:
+    if check len(group_candidates(group)) == 1:
+        decisions := decisions + [singleton_decision(group)]
+    else:
+        observed_photos := []
+        readings := []
+        forall candidate in group_candidates(group):
+            photo := observe image(candidate_path(source_directory, candidate))
+            check photo.exists
+            observed_photos := observed_photos + [photo]
+            raw_reading := memo gen<FrameReading>(frame_perception_prompt(candidate, profile), images=[photo]) by A
+            reading := normalize_group_reading(raw_reading, [candidate])
+            check valid_group_reading(reading, [candidate])
+            readings := readings + [frame_reading_json(reading, candidate)]
+        raw_rec := memo gen<Recommendation>(curation_prompt(group, readings, keep_per_group, profile), images=observed_photos) by B
+        rec := normalize_recommendation(raw_rec, group, keep_per_group)
+        check valid_recommendation(rec, group, keep_per_group)
+        decisions := decisions + [decision_json(rec, group, keep_per_group, readings)]
+    checkpoint_state := build_checkpoint(hash(manifest), groups, decisions, keep_per_group, profile, false)
+    check len(checkpoint_state) > 0
+    act file.overwrite(checkpoint_file, checkpoint_state)
+    settle until check file_exists(checkpoint_file) within 5
+
+check len(decisions) == len(groups)
+report := build_report(hash(manifest), groups, decisions, tuning)
+check report_covers_all_groups(report, groups)
+evidence := report_evidence(manifest, report)
+
+-- One live verdict warrants the complete deterministic report. Per-group
+-- search above does not repeatedly multiply the reliability invoice.
+-- If every group is a singleton there was no model decision to warrant.
+if check all_singletons(groups):
+    act file.overwrite(output, report)
+    settle until check file_exists(output) within 5
+    final_checkpoint := build_checkpoint(hash(manifest), groups, decisions, keep_per_group, profile, true)
+    check len(final_checkpoint) > 0
+    act file.overwrite(checkpoint_file, final_checkpoint)
+    commit(report)
+else:
+    if memo judge<5,4/5> (evidence |= report_policy(keep_per_group)) under k_cull panel [C, D]:
+        act file.overwrite(output, report)
+        settle until check file_exists(output) within 5
+        final_checkpoint := build_checkpoint(hash(manifest), groups, decisions, keep_per_group, profile, true)
+        check len(final_checkpoint) > 0
+        act file.overwrite(checkpoint_file, final_checkpoint)
+        commit(report)
+    else:
+        abstain
