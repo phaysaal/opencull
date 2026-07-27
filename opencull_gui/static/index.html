@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OpenCull Review</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">AI EVIDENCE + HUMAN REVIEW</p>
+      <h1>OpenCull</h1>
+    </div>
+    <div class="top-actions">
+      <span id="save-status" class="save-status">No human changes</span>
+      <span id="preview-status" class="status">Preview queue idle</span>
+      <span id="report-status" class="status">Loading report…</span>
+      <button id="export-button" class="primary-button" type="button">Export reviewed result</button>
+      <button id="organize-button" class="quiet-button" type="button">Export & organize</button>
+      <button id="about-button" class="quiet-button" type="button">Report details</button>
+    </div>
+  </header>
+
+  <section id="summary" class="summary" aria-label="Library summary"></section>
+
+  <main class="workspace">
+    <aside class="sidebar">
+      <div class="sidebar-tools">
+        <label class="search">
+          <span>Search</span>
+          <input id="search" type="search" placeholder="Cluster or filename">
+        </label>
+        <div id="filters" class="filters" aria-label="Cluster filters">
+          <button class="filter active" data-filter="all" type="button">All</button>
+          <button class="filter" data-filter="selected" type="button">Selected</button>
+          <button class="filter" data-filter="warning" type="button">Warnings</button>
+          <button class="filter" data-filter="fallback" type="button">Fallback</button>
+          <button class="filter" data-filter="empty" type="button">No keeper</button>
+          <button class="filter" data-filter="oversized" type="button">Tournament</button>
+          <button class="filter" data-filter="unreviewed" type="button">Unreviewed</button>
+          <button class="filter" data-filter="reviewed" type="button">Human reviewed</button>
+          <button class="filter" data-filter="modified" type="button">Human modified</button>
+        </div>
+        <p id="cluster-count" class="muted"></p>
+      </div>
+      <nav id="cluster-list" class="cluster-list" aria-label="Clusters"></nav>
+    </aside>
+
+    <section class="review">
+      <div id="empty-state" class="empty-state">
+        <h2>Select a cluster</h2>
+        <p>Inspect the photographs, AI recommendation, and complete evidence.</p>
+      </div>
+
+      <div id="cluster-view" hidden>
+        <header class="cluster-header">
+          <div>
+            <p id="cluster-position" class="eyebrow"></p>
+            <h2 id="cluster-title"></h2>
+            <p id="cluster-subtitle" class="muted"></p>
+          </div>
+          <div class="cluster-navigation">
+            <button id="previous-cluster" class="quiet-button" type="button">← Previous</button>
+            <button id="next-cluster" class="quiet-button" type="button">Next →</button>
+          </div>
+        </header>
+
+        <div id="cluster-alerts" class="alerts"></div>
+        <div id="photo-grid" class="photo-grid"></div>
+
+        <section class="human-review">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">HUMAN DECISION</p>
+              <h3>Final review</h3>
+            </div>
+            <span id="review-state" class="review-state"></span>
+          </div>
+          <p class="muted keyboard-help">
+            Shortcuts: number keys toggle photos, A accepts the AI choice,
+            N keeps none, U returns the cluster to unreviewed, ←/→ navigate.
+          </p>
+          <label class="notes-label">
+            <span>Reviewer note</span>
+            <textarea id="review-note" maxlength="5000" rows="3"
+              placeholder="Why did you agree or change the selection?"></textarea>
+          </label>
+          <div class="review-actions">
+            <button id="accept-ai" class="primary-button" type="button">Accept AI recommendation</button>
+            <button id="keep-none" class="quiet-button" type="button">Keep none</button>
+            <button id="mark-reviewed" class="quiet-button" type="button">Mark reviewed</button>
+            <button id="reset-review" class="quiet-button" type="button">Return to unreviewed</button>
+          </div>
+        </section>
+
+        <section class="evidence">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">CURATOR DECISION</p>
+              <h3>Why these photographs?</h3>
+            </div>
+            <span id="confidence" class="confidence"></span>
+          </div>
+          <p id="rationale" class="rationale"></p>
+
+          <details open>
+            <summary>Frame-by-frame photographic assessment</summary>
+            <div id="assessments" class="assessments"></div>
+          </details>
+
+          <details>
+            <summary>Raw decision JSON</summary>
+            <pre id="raw-decision"></pre>
+          </details>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="viewer">
+    <div class="viewer-shell">
+      <header>
+        <div>
+          <p class="eyebrow">DETAIL VIEW</p>
+          <h2 id="viewer-title"></h2>
+        </div>
+        <button id="close-viewer" class="close-button" type="button" aria-label="Close">×</button>
+      </header>
+      <div id="viewer-images" class="viewer-images"></div>
+      <footer>
+        <span>Click an image to toggle fit and actual preview size.</span>
+      </footer>
+    </div>
+  </dialog>
+
+  <dialog id="about">
+    <div class="about-shell">
+      <header>
+        <div>
+          <p class="eyebrow">REPORT DETAILS</p>
+          <h2>OpenCull evidence</h2>
+        </div>
+        <button id="close-about" class="close-button" type="button" aria-label="Close">×</button>
+      </header>
+      <dl id="report-details" class="report-details"></dl>
+      <details>
+        <summary>Adaptive clustering</summary>
+        <pre id="adaptive-json"></pre>
+      </details>
+      <section class="cache-controls">
+        <h3>Preview cache</h3>
+        <p id="cache-details" class="muted"></p>
+        <button id="clear-cache" class="quiet-button" type="button">Clear generated previews</button>
+      </section>
+      <details>
+        <summary>Complete report metadata</summary>
+        <pre id="metadata-json"></pre>
+      </details>
+    </div>
+  </dialog>
+
+  <dialog id="organize">
+    <div class="organize-shell">
+      <header>
+        <div>
+          <p class="eyebrow">PHASE 4 · CONTROLLED ACTION</p>
+          <h2>Export and organize</h2>
+        </div>
+        <button id="close-organize" class="close-button" type="button" aria-label="Close">×</button>
+      </header>
+
+      <section class="quick-exports">
+        <h3>Non-mutating exports</h3>
+        <p class="muted">Download selected filenames and provenance without changing photographs.</p>
+        <div class="form-row">
+          <label>Selection policy
+            <select id="export-policy">
+              <option value="human_only">Human-reviewed clusters only</option>
+              <option value="effective">Human where reviewed, AI elsewhere</option>
+              <option value="require_all">Require every cluster reviewed</option>
+              <option value="ai_only">AI recommendations only</option>
+              <option value="modified_only">Human-modified clusters only</option>
+            </select>
+          </label>
+          <div class="button-row">
+            <button class="quiet-button download-format" data-format="json" type="button">JSON</button>
+            <button class="quiet-button download-format" data-format="text" type="button">Text</button>
+            <button class="quiet-button download-format" data-format="csv" type="button">CSV</button>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <h3>Verified filesystem operation</h3>
+        <div class="operation-form">
+          <label>Action
+            <select id="operation-action">
+              <option value="copy">Copy and verify (recommended)</option>
+              <option value="move">Move with rollback journal</option>
+            </select>
+          </label>
+          <label>Layout
+            <select id="operation-layout">
+              <option value="opensull">One keeper folder</option>
+              <option value="selected_by_cluster">Selected folders per cluster</option>
+              <option value="cluster_inspection">Selected and not-selected per cluster</option>
+            </select>
+          </label>
+          <label class="wide">Destination
+            <input id="operation-destination" type="text" placeholder="/Volumes/Drive/OpenCull-Export">
+          </label>
+          <label class="check-label">
+            <input id="preserve-relative" type="checkbox"> Preserve relative paths
+          </label>
+          <label class="check-label">
+            <input id="include-companions" type="checkbox"> Include matching RAW/JPEG companions
+          </label>
+        </div>
+        <button id="run-preflight" class="primary-button" type="button">Run deterministic preflight</button>
+      </section>
+
+      <section id="preflight-result" hidden>
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">EXACT PLAN</p>
+            <h3 id="plan-title"></h3>
+          </div>
+          <span id="plan-status"></span>
+        </div>
+        <div id="plan-summary" class="plan-summary"></div>
+        <div id="plan-errors" class="alerts"></div>
+        <details>
+          <summary>Every planned file operation</summary>
+          <div class="operation-table-wrap">
+            <table class="operation-table">
+              <thead><tr><th>Cluster</th><th>Source</th><th>Destination</th><th>Bytes</th></tr></thead>
+              <tbody id="operation-rows"></tbody>
+            </table>
+          </div>
+        </details>
+        <label class="confirmation-label">
+          <span id="confirmation-help"></span>
+          <input id="operation-confirmation" type="text" autocomplete="off">
+        </label>
+        <div class="button-row">
+          <button id="execute-operation" class="danger-button" type="button" disabled>Execute exact plan</button>
+          <button id="cancel-operation" class="quiet-button" type="button" hidden>Pause operation</button>
+          <button id="rollback-operation" class="quiet-button" type="button" hidden>Rollback move</button>
+        </div>
+      </section>
+
+      <section>
+        <h3>Contact sheets</h3>
+        <p class="muted">Creates labelled JPEG sheets in the destination using the selected policy.</p>
+        <button id="create-contact-sheets" class="quiet-button" type="button">Create contact sheets</button>
+      </section>
+
+      <section id="operation-progress" hidden>
+        <h3>Operation journal</h3>
+        <progress id="operation-progress-bar" max="1" value="0"></progress>
+        <p id="operation-progress-text"></p>
+        <pre id="operation-journal"></pre>
+      </section>
+
+      <section>
+        <h3>Resume an interrupted journal</h3>
+        <div class="form-row">
+          <label class="wide">Journal path
+            <input id="resume-journal-path" type="text" placeholder="/path/to/report.plan.operation.json">
+          </label>
+          <button id="resume-operation" class="quiet-button" type="button">Resume journal</button>
+        </div>
+      </section>
+    </div>
+  </dialog>
+
+  <template id="photo-card-template">
+    <article class="photo-card">
+      <div class="image-button" role="button" tabindex="0">
+        <img loading="lazy" alt="">
+        <span class="image-loading">Preview queued…</span>
+        <button class="image-error" type="button" hidden>Retry preview</button>
+      </div>
+      <div class="photo-info">
+        <div>
+          <strong class="filename"></strong>
+          <span class="keeper-badge"></span>
+          <span class="human-badge"></span>
+        </div>
+        <div class="card-actions">
+          <button class="human-toggle primary-button" type="button">Keep</button>
+          <button class="compare-button quiet-button" type="button">Compare</button>
+        </div>
+      </div>
+    </article>
+  </template>
+
+  <script src="/app.js" defer></script>
+</body>
+</html>

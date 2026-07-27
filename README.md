@@ -216,6 +216,118 @@ with `recursive=true`, also pass `--recursive`. The script refuses missing or
 ambiguous filenames and existing destination files; it never overwrites a
 photograph.
 
+## Review results in the GUI
+
+The local review interface preserves the certified result JSON and source
+photographs as immutable evidence while storing human decisions separately:
+
+```bash
+python gui.py \
+  600_Fuji-results.json \
+  "/Volumes/NVMeF1/RawPhotos/Luvre/600_FUJI"
+```
+
+The server binds only to `127.0.0.1` and opens the browser automatically. It
+shows the library summary, cluster filters, lazy thumbnails, AI keepers,
+warnings, fallbacks, tournament clusters, side-by-side comparison, curator
+rationale, every stored frame assessment, adaptive-clustering evidence, and
+the raw decision JSON.
+
+Human review adds keeper/reject controls, AI-versus-human difference states,
+reviewer notes, reviewed/unreviewed progress, keyboard culling, last-position
+resume, restore-AI controls, and a provenance-labelled JSON export. Decisions
+are saved atomically beside the report as `REPORT.review.json`; the previous
+version is copied to `REPORT.review.json.bak`. The sidecar is cryptographically
+bound to the source report SHA and becomes read-only with a visible warning if
+the report changes. Concurrent browser writes use optimistic revisions rather
+than silently overwriting one another.
+
+Viewing and reviewing never modifies original photographs or the certified
+report. Generated JPEG previews are cached under `.opencull-cache/thumbnails`;
+JPEG and RAW files use the same audited preview decoder as the scanner. Review
+writes require a per-launch CSRF token, the server rejects non-local Host
+headers, and exports label each cluster with its decision provenance.
+
+Use `--no-browser` for a manual launch, `--port 9000` to choose another local
+port, or `--review /path/to/decisions.review.json` to choose a sidecar.
+
+Keyboard shortcuts outside text fields:
+
+- `1` through `9`: toggle that numbered photograph;
+- `A`: accept the AI recommendation;
+- `N`: keep none;
+- `U`: return the cluster to unreviewed;
+- left/right arrows: navigate filtered clusters.
+
+### Large-library preview performance
+
+Preview decoding runs through a bounded background priority queue rather than
+inside HTTP request threads. The visible cluster is scheduled first, adjacent
+clusters are prefetched at lower priority, and stale prefetch work is cancelled
+when navigation changes. The default is two workers to bound memory and RAW
+decoder pressure; choose between one and eight with:
+
+```bash
+python gui.py REPORT.json /path/to/photos --preview-workers 3
+```
+
+The GUI reports queued, decoding, ready, and failed previews plus disk-cache
+size. Decoder or disconnected-drive failures remain retryable. Cached JPEGs
+are integrity-checked before reuse, stale source files naturally receive new
+cache identities, and generated previews can be cleared from Report details
+without touching originals.
+
+The certified result does not contain scanner measurements. Supply the
+standalone scanner manifest when technical evidence should appear on photo
+cards:
+
+```bash
+python scan.py /path/to/photos -o shoot-manifest.json
+
+python gui.py REPORT.json /path/to/photos \
+  --manifest shoot-manifest.json
+```
+
+The manifest is accepted only when its complete photo identity set matches the
+report. When present, the GUI exposes capture time, dimensions, technical
+score, sharpness, exposure, contrast, clipping, composition proxy, and source
+hash prefix without changing the report.
+
+### Export and organize selected photographs
+
+The **Export & organize** dialog turns either the human-reviewed decisions or
+the original AI recommendations into JSON, text, or CSV. Its selection
+policies are explicit: human decisions only, effective decisions (human where
+reviewed and AI otherwise), require every cluster to be reviewed, AI only, or
+only clusters where the human changed the AI decision.
+
+Copy and move are separate, deliberate actions. Before enabling execution, the
+GUI produces a deterministic preflight plan listing every source,
+destination, byte count, missing file, collision, and free-space check. It can
+put keepers in one `opensull` directory, place them under
+`selected-by-cluster/cluster-N`, or copy every cluster into an inspection
+layout. Optional companion discovery includes a same-stem RAW or JPEG file.
+No destination is overwritten.
+
+Execution requires typing the exact confirmation shown by the GUI (`COPY
+<plan-id>` or `MOVE <plan-id>`). Each file is copied first, SHA-256 verified,
+and recorded in an atomic operation journal. A move removes its source only
+after that verification. Operations can be paused, resumed from their journal
+after restarting the GUI, and monitored in the browser. Verified move
+operations can be rolled back in reverse order; rollback refuses to overwrite
+an existing source or restore a destination whose content changed. Copy
+operations deliberately have no automatic destructive rollback.
+
+Contact-sheet export runs in the background and creates labelled JPEG pages
+from the same policy selection. The GUI reports page progress and supports
+cancellation. Operation journals and generated contact sheets are normal
+files at destinations chosen in the dialog; keep them when audit history is
+important.
+
+The original `move_selected.py` command remains available as a small,
+independent dry-run-first tool. The GUI workflow is preferable when provenance,
+preflight inspection, resumability, verification, or rollback is required.
+
 ## Current limitations
 
 Version 0.1 gives the declared generator the observed pixels, but the final

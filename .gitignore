@@ -1,5 +1,6 @@
 .DS_Store
 .kimiya/
+.opencull-cache/
 .venv/
 __pycache__/
 *.pyc
@@ -7,6 +8,8 @@ manifest.json
 opencull-results.json
 *-results.json
 *.checkpoint.json
+*.review.json
+*.review.json.bak
 /opencull.py
 fixtures/generated/
 /realtests/
