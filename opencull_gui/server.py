@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import subprocess
 import secrets
+import sys
+import io
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -14,6 +17,10 @@ from .actions import ActionController, ActionError, export_bytes
 from .photos import PhotoError, PhotoStore, PreviewManager
 from .report import ReportIndex
 from .reviews import ReviewError, ReviewStore
+from .xmp import xmp_zip
+from .jobs import JobError, JobManager
+from .providers import ProviderError, ProviderStore
+from .faces import FaceError, FaceStore
 
 
 STATIC_ROOT = Path(__file__).with_name("static")
@@ -31,6 +38,9 @@ class ReviewServer(ThreadingHTTPServer):
         measurements: dict | None = None,
         manifest_path: str | None = None,
         preview_workers: int = 2,
+        jobs: JobManager | None = None,
+        providers: ProviderStore | None = None,
+        faces: FaceStore | None = None,
     ):
         super().__init__(address, ReviewHandler)
         self.report = report
@@ -39,6 +49,9 @@ class ReviewServer(ThreadingHTTPServer):
         self.csrf_token = secrets.token_urlsafe(32)
         self.previews = PreviewManager(photos, workers=preview_workers)
         self.actions = ActionController(report, reviews, photos)
+        self.jobs = jobs
+        self.providers = providers
+        self.faces = faces
         self.payload = {
             **report.public_payload(photos.root),
             "measurements": measurements or {},
@@ -49,6 +62,12 @@ class ReviewServer(ThreadingHTTPServer):
         previews = getattr(self, "previews", None)
         if previews is not None:
             previews.shutdown()
+        jobs = getattr(self, "jobs", None)
+        if jobs is not None:
+            jobs.shutdown()
+        faces = getattr(self, "faces", None)
+        if faces is not None:
+            faces.shutdown()
         super().server_close()
 
 
@@ -154,6 +173,65 @@ class ReviewHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/review":
             self._json(self.server.reviews.public_state())
             return
+        if parsed.path == "/api/jobs":
+            if self.server.jobs is None:
+                self._json({"error": "job manager is disabled"}, HTTPStatus.NOT_FOUND)
+            else:
+                self._json(self.server.jobs.public())
+            return
+        if parsed.path == "/api/providers":
+            if self.server.providers is None:
+                self._json(
+                    {"error": "provider profiles are disabled"},
+                    HTTPStatus.NOT_FOUND)
+            else:
+                self._json(self.server.providers.public())
+            return
+        if parsed.path == "/api/people":
+            if self.server.faces is None:
+                self._json(
+                    {"error": "private face indexing is disabled"},
+                    HTTPStatus.NOT_FOUND)
+            else:
+                self._json(self.server.faces.public())
+            return
+        if parsed.path == "/api/person-faces":
+            if self.server.faces is None:
+                self._json(
+                    {"error": "private face indexing is disabled"},
+                    HTTPStatus.NOT_FOUND)
+                return
+            query = parse_qs(parsed.query)
+            try:
+                payload = self.server.faces.person_faces(
+                    query.get("id", [""])[0],
+                    offset=int(query.get("offset", ["0"])[0]),
+                    limit=int(query.get("limit", ["100"])[0]),
+                )
+            except (FaceError, ValueError) as exc:
+                self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                return
+            self._json(payload)
+            return
+        if parsed.path == "/api/face":
+            if self.server.faces is None:
+                self._json(
+                    {"error": "private face indexing is disabled"},
+                    HTTPStatus.NOT_FOUND)
+                return
+            query = parse_qs(parsed.query)
+            try:
+                crop = self.server.faces.face_crop(
+                    query.get("id", [""])[0])
+            except FaceError as exc:
+                self._json({"error": str(exc)}, HTTPStatus.NOT_FOUND)
+                return
+            output = io.BytesIO()
+            crop.save(output, "JPEG", quality=90)
+            body = output.getvalue()
+            self._headers(HTTPStatus.OK, "image/jpeg", len(body))
+            self.wfile.write(body)
+            return
         if parsed.path == "/api/export":
             self._json(self.server.reviews.export())
             return
@@ -169,6 +247,18 @@ class ReviewHandler(BaseHTTPRequestHandler):
                 self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
                 return
             self._download(body, content_type, filename)
+            return
+        if parsed.path == "/api/export/xmp":
+            query = parse_qs(parsed.query)
+            try:
+                body, filename = xmp_zip(
+                    self.server.reviews,
+                    query.get("policy", ["effective"])[0],
+                )
+            except ActionError as exc:
+                self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                return
+            self._download(body, "application/zip", filename)
             return
         if parsed.path == "/api/action/status":
             query = parse_qs(parsed.query)
@@ -224,7 +314,11 @@ class ReviewHandler(BaseHTTPRequestHandler):
                     body.get("note"),
                     body.get("reviewed"),
                     body.get("revision"),
+                    body.get("photo_annotations"),
+                    str(body.get("action", "review")),
                 )
+            elif parsed.path == "/api/review/undo":
+                state = self.server.reviews.undo(body.get("revision"))
             elif parsed.path == "/api/review/position":
                 state = self.server.reviews.update_position(
                     str(body.get("cluster_id", "")),
@@ -256,6 +350,130 @@ class ReviewHandler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/cache/clear":
                 result = self.server.previews.clear_cache()
                 self._json(result)
+                return
+            elif parsed.path == "/api/jobs/add":
+                if self.server.jobs is None:
+                    raise JobError("job manager is disabled")
+                result = self.server.jobs.add(
+                    str(body.get("photos", "")),
+                    str(body.get("output", "")),
+                    body.get("keep_per_group", 2),
+                    body.get("recursive", False),
+                    str(body.get("profile", "family")),
+                    str(body.get("provider_profile_id", "")),
+                )
+                self._json(result)
+                return
+            elif parsed.path == "/api/jobs/action":
+                if self.server.jobs is None:
+                    raise JobError("job manager is disabled")
+                result = self.server.jobs.action(
+                    str(body.get("job_id", "")),
+                    str(body.get("action", "")),
+                )
+                self._json(result)
+                return
+            elif parsed.path == "/api/jobs/open-review":
+                if self.server.jobs is None:
+                    raise JobError("job manager is disabled")
+                result = self.server.jobs.open_review(
+                    str(body.get("job_id", "")))
+                self._json(result)
+                return
+            elif parsed.path == "/api/jobs/pick-folder":
+                if sys.platform != "darwin":
+                    raise JobError("native folder selection is available only on macOS")
+                result = subprocess.run(
+                    [
+                        "osascript", "-e",
+                        'POSIX path of (choose folder with prompt '
+                        '"Choose a folder of photographs to cull")',
+                    ],
+                    capture_output=True, text=True, timeout=300, check=False,
+                )
+                if result.returncode != 0:
+                    if "-128" in result.stderr:
+                        raise JobError("folder selection was cancelled")
+                    raise JobError(
+                        f"folder chooser failed: {result.stderr.strip()}")
+                self._json({"photos": result.stdout.strip().rstrip("/")})
+                return
+            elif parsed.path == "/api/providers/save":
+                if self.server.providers is None:
+                    raise ProviderError("provider profiles are disabled")
+                result = self.server.providers.save(
+                    body.get("profile", {}),
+                    body.get("revision"),
+                    str(body.get("secret", "")),
+                )
+                self._json(result)
+                return
+            elif parsed.path == "/api/providers/delete":
+                if self.server.providers is None:
+                    raise ProviderError("provider profiles are disabled")
+                result = self.server.providers.delete(
+                    str(body.get("profile_id", "")),
+                    body.get("revision"),
+                    bool(body.get("remove_credential", False)),
+                )
+                self._json(result)
+                return
+            elif parsed.path == "/api/providers/test":
+                if self.server.providers is None:
+                    raise ProviderError("provider profiles are disabled")
+                result = self.server.providers.test_connection(
+                    str(body.get("profile_id", "")))
+                self._json(result)
+                return
+            elif parsed.path == "/api/people/start":
+                if self.server.faces is None:
+                    raise FaceError("private face indexing is disabled")
+                self._json(self.server.faces.start())
+                return
+            elif parsed.path == "/api/people/cancel":
+                if self.server.faces is None:
+                    raise FaceError("private face indexing is disabled")
+                self._json(self.server.faces.cancel())
+                return
+            elif parsed.path == "/api/people/rename":
+                if self.server.faces is None:
+                    raise FaceError("private face indexing is disabled")
+                self._json(self.server.faces.rename(
+                    str(body.get("person_id", "")),
+                    str(body.get("name", "")),
+                    bool(body.get("confirmed", False)),
+                ))
+                return
+            elif parsed.path == "/api/people/merge":
+                if self.server.faces is None:
+                    raise FaceError("private face indexing is disabled")
+                self._json(self.server.faces.merge(body.get("person_ids")))
+                return
+            elif parsed.path == "/api/people/split":
+                if self.server.faces is None:
+                    raise FaceError("private face indexing is disabled")
+                self._json(self.server.faces.split(
+                    str(body.get("person_id", "")),
+                    body.get("face_ids"),
+                ))
+                return
+            elif parsed.path == "/api/people/forget":
+                if self.server.faces is None:
+                    raise FaceError("private face indexing is disabled")
+                person_id = str(body.get("person_id", ""))
+                if body.get("confirmation") != f"FORGET {person_id}":
+                    raise FaceError(
+                        f"confirmation must exactly equal: FORGET {person_id}")
+                self._json(self.server.faces.forget(person_id))
+                return
+            elif parsed.path == "/api/people/delete-all":
+                if self.server.faces is None:
+                    raise FaceError("private face indexing is disabled")
+                if body.get("confirmation") != "DELETE ALL PRIVATE FACE DATA":
+                    raise FaceError(
+                        "confirmation must exactly equal: "
+                        "DELETE ALL PRIVATE FACE DATA")
+                self._json(self.server.faces.delete_all())
                 return
             elif parsed.path == "/api/action/preflight":
                 result = self.server.actions.preflight(**body)
@@ -301,7 +519,12 @@ class ReviewHandler(BaseHTTPRequestHandler):
                 self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
                 return
             self._json(state)
-        except (ReviewError, PhotoError, ActionError, TypeError, ValueError) as exc:
+        except (
+            ReviewError, PhotoError, ActionError, JobError,
+            ProviderError,
+            FaceError,
+            TypeError, ValueError,
+        ) as exc:
             status = (
                 HTTPStatus.CONFLICT
                 if "reload" in str(exc).lower()

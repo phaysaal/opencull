@@ -365,7 +365,10 @@ class Operation:
 
     def public(self) -> dict[str, Any]:
         with self._lock:
-            return deepcopy(self.journal)
+            return {
+                **deepcopy(self.journal),
+                "journal_path": str(self.journal_path),
+            }
 
     def _save(self) -> None:
         self.journal["updated_at"] = _now()
@@ -598,7 +601,10 @@ class ContactSheetOperation:
 
     def public(self) -> dict[str, Any]:
         with self._lock:
-            return deepcopy(self.journal)
+            return {
+                **deepcopy(self.journal),
+                "journal_path": str(self.journal_path),
+            }
 
     def _save(self) -> None:
         self.journal["updated_at"] = _now()

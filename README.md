@@ -218,6 +218,10 @@ photograph.
 
 ## Review results in the GUI
 
+The professional interface roadmap and the implementation record for completed
+UX phases are maintained in
+[`docs/professional-ux-roadmap.md`](docs/professional-ux-roadmap.md).
+
 The local review interface preserves the certified result JSON and source
 photographs as immutable evidence while storing human decisions separately:
 
@@ -327,6 +331,372 @@ important.
 The original `move_selected.py` command remains available as a small,
 independent dry-run-first tool. The GUI workflow is preferable when provenance,
 preflight inspection, resumability, verification, or rollback is required.
+
+### Phase 5: high-volume human review
+
+Each photograph can carry three independent human judgments: a keep, maybe,
+reject, or unrated flag; a zero-to-five-star rating; and an optional Lightroom
+color label. A keep flag also selects the photograph, while a reject flag
+removes it from the keepers. These judgments live in the report-bound review
+sidecar and are included in provenance exports. Existing Phase 2–4 sidecars
+load with empty Phase 5 fields; no manual migration is needed.
+
+Every cluster mutation appends a timestamped before/after entry to a bounded
+history. **Undo review** restores the last saved cluster state through the same
+revision-conflict protection as ordinary saves. The summary shows event count
+and a time-based remaining-work estimate once enough review activity exists.
+Filters find clusters containing maybe or rejected frames and curator decisions
+below 65% confidence.
+
+The detail viewer provides a cluster filmstrip, synchronized zoom and pan, and
+whole-frame, upper-body, or central-detail review crops. The upper-body crop is
+only a consistent visual aid—it does not claim to detect a face. Mark up to two
+frames with **Compare**, press `C`, and drag or zoom either frame to inspect the
+same region. `+` and `-` adjust zoom, `Z` undoes the last saved judgment, and
+normal culling shortcuts are suppressed while typing in notes or controls.
+
+Preview scheduling follows the active filtered order and queues the next two
+likely clusters after the visible one, while retaining the bounded workers and
+stale-prefetch cancellation from Phase 3.
+
+The Export dialog can download a Lightroom-oriented XMP ZIP without changing
+photographs. Standard `xmp:Rating` and `xmp:Label` fields carry stars and color;
+OpenCull's pick state and source identity remain in an explicit OpenCull
+namespace because Lightroom applications vary in how they map pick/reject
+flags. Extract the sidecars beside copies of the corresponding photographs and
+verify the mapping in the intended catalog before applying it to a production
+library.
+
+### Phase 6: culling queue and concurrent review
+
+Open **Culling queue** from any running review GUI to choose a macOS folder or
+enter its path, set the maximum keeper count, profile, recursion, and optional
+output path, and add it to a persistent queue. The default output is named from
+the source folder and placed in the OpenCull project directory. Existing
+outputs are never overwritten, duplicate active folders are refused, and all
+paths are resolved and validated before queuing.
+
+The queue lives in `.opencull-jobs.json` by default and runs exactly one Kimiya
+process at a time. Later folders advance automatically when the current run
+completes, fails, pauses, or is cancelled. The browser displays live state,
+bounded subprocess logs, output and checkpoint paths, and the count of
+independently checkpointed clusters. OpenRouter credentials remain in
+`../apis/opencull.api`; neither the API key nor file contents are sent to the
+browser or written into queue state.
+
+**Pause safely** terminates the supervised Kimiya process and retains its
+checkpoint. **Resume checkpoint** starts the same declared program with
+`resume=true`; Kimiya validates the manifest and ordered cluster identities
+before accepting prior decisions. Cancelled and failed jobs can likewise be
+resumed or retried explicitly. If the GUI closes while its child is still
+running, the next GUI instance records that process as detached and will not
+launch a competing queue job. It monitors the recorded PID until the process
+ends, then marks the result complete or makes the checkpoint resumable. For
+safety, a restarted GUI does not signal a detached PID because operating
+systems can reuse process numbers.
+
+Culling executes in a process separate from the threaded local review server.
+Preview generation, review saves, comparisons, and exports therefore remain
+available in the current tab or another browser tab while OpenRouter culling
+continues. A completed job offers **Open review in new tab**, which starts an
+additional review-only GUI on an automatically assigned local port. That
+review-only process disables its queue worker so there is still exactly one
+queue owner. It also offers a copyable terminal command as a transparent
+fallback.
+
+Choose a different queue state location when desired:
+
+```bash
+python gui.py REPORT.json /path/to/photos \
+  --jobs /path/to/private/opencull-jobs.json
+```
+
+The queue controls process execution, not remote inference cancellation.
+Pausing during an in-flight OpenRouter request may still allow that already
+submitted provider request to finish or be billed. The last completely
+validated cluster checkpoint remains the recovery boundary.
+
+### Phase 7: secure model-provider profiles
+
+Open **Culling queue → Provider settings** to create reusable profiles for:
+
+- OpenRouter, with optional mandatory zero-data-retention routing;
+- local Ollama using its native `/api/generate` interface;
+- Vast.ai, vLLM, LM Studio, or another OpenAI-compatible `/v1` endpoint.
+
+Each profile assigns separate models to agents A through D. A performs
+per-frame vision, B performs visual curation, C judges textual evidence, and D
+performs visual clustering review and final panel judgment. The endpoint test
+checks reachability and exact model IDs. For OpenRouter it also reads advertised
+input modalities and reports whether image support is confirmed. Generic
+OpenAI-compatible servers and Ollama do not expose one consistent capability
+schema, so their vision status remains explicitly unverified until a live
+multimodal request succeeds.
+
+Provider JSON contains names, endpoint URLs, model IDs, ZDR choice, and an
+optional cost note—but no token. Tokens are write-only in the browser and are
+stored as generic passwords in macOS Keychain under a profile-specific service
+name. Existing tokens are never placed back into an HTML field or returned by
+an API. The Keychain command receives new password bytes through a private
+stdin channel rather than putting the token in its process argument list.
+
+When a provider profile is selected for a queue job, OpenCull generates an
+immutable job bundle under `.opencull-generated/providers/JOB-ID/`:
+
+- `agents.kim` contains backend, model, URL, vision, ZDR, and `key_env`
+  declarations, never a credential value;
+- `opencull.kim` is the original program with absolute, auditable module paths;
+- `manifest.json` records the non-secret profile snapshot and SHA-256 hashes of
+  both generated sources.
+
+The generated program must pass `kimiya check` before the folder enters the
+queue. Queue state records the profile identity, privacy classification,
+agent-configuration hash, program hash, and exact generated path. Editing a
+profile later cannot silently change an already queued job. At process launch,
+the supervisor reads the profile token from Keychain into the declared child
+environment variable; it does not modify the GUI environment, log the value,
+or persist it. Removing a Keychain credential can therefore make a queued
+remote job fail safely at launch without exposing the missing value.
+
+Privacy labels mean:
+
+- `local`: an Ollama endpoint on `127.0.0.1` or `localhost`;
+- `remote-zdr`: OpenRouter with `zdr=true` in every generated agent;
+- `remote-provider-policy`: a remote endpoint whose storage and retention
+  depend on that operator;
+- `declared-in-agents.kim`: the legacy configuration selected by default.
+
+The legacy `agents.kim` route remains available so existing terminal and queue
+workflows keep working. Selecting a Phase 7 profile is explicit and recorded
+per job. Endpoint tests contact the configured provider but do not perform a
+paid generation. Pricing is not inferred: enter a dated cost note from the
+provider, because remote prices and billing units change independently of
+OpenCull.
+
+Use a different non-secret profile file when desired:
+
+```bash
+python gui.py REPORT.json /path/to/photos \
+  --providers /path/to/private/opencull-providers.json
+```
+
+### Phase 8: local private person grouping
+
+Open **People** to build an optional face index for the current report. Face
+detection, alignment, embeddings, anonymous clustering, crops, names, and
+coverage analysis all run on the Mac. The face module contains no network or
+subprocess API and is not imported by the Kimiya program, prompt builder,
+provider layer, or culling queue. Remote agents therefore receive neither
+private names nor persistent face embeddings.
+
+Phase 8 uses OpenCV 4.11 with two OpenCV Zoo ONNX models:
+
+- YuNet face detection, MIT licensed, SHA-256
+  `8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4`;
+- SFace recognition embeddings, Apache-2.0 licensed, SHA-256
+  `0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79`.
+
+Install the headless runtime and then use the audited installer:
+
+```bash
+python -m pip install opencv-python-headless==4.11.0.86
+python install_face_models.py
+```
+
+The installer downloads the declared files from OpenCV's repository into
+`.opencull-models`, verifies the complete hashes before replacing a model, and
+removes partial or mismatched downloads. Face indexing refuses missing or
+hash-mismatched models.
+
+The default private database is `REPORT.faces.sqlite3`. It is bound to the
+exact report SHA, resolved photo root, and model hashes and is created with
+owner-only `0600` permissions. It contains source identities, face boxes,
+landmarks, normalized SFace vectors, anonymous person assignments, and
+optional private names. The HTTP API deliberately omits embeddings; it exposes
+only local JPEG crops, boxes, confidence, anonymous IDs, coverage counts, and
+names entered for this local GUI.
+
+Indexing is a single bounded background worker. It records source size and
+modification time after each photo, skips unchanged completed photos on
+restart, and can be paused between photographs. RAW files use the same local
+preview decoder as OpenCull. Detection is performed on a bounded-resolution
+copy while coordinates are mapped back to the source preview.
+
+Automatic grouping is intentionally conservative. It requires cosine
+similarity of at least `0.55`, a minimum pairwise guard, and never automatically
+puts two faces from one photograph into one identity. This favors extra
+anonymous groups over a harmful false merge. Review every crop before naming:
+
+- **Merge checked groups** combines groups only after an explicit human action;
+- **Split checked faces** creates another anonymous group;
+- a private name and **Identity confirmed** flag are optional;
+- **Forget person and embeddings** deletes that group's detections, vectors,
+  and name, then compacts the database;
+- **Delete all private face data** clears every detection, vector, group, name,
+  and indexed-photo record after an exact typed confirmation.
+
+The SQLite database is permission-restricted but not encrypted at rest.
+Full-disk FileVault protects it when the Mac is powered off. For stronger
+separation, place `--faces` on an encrypted volume. Deleting rows and running
+SQLite `VACUUM` is explicit removal at the application layer, but flash-storage
+wear levelling can retain physical remnants; destroy the encrypted volume or
+its key when cryptographic erasure is required.
+
+The sidebar's private-person filter shows clusters containing an anonymous or
+named group. Coverage compares all photos containing that group with the
+current effective human/AI keeper set, making systematic omission visible
+during manual culling. Names and embeddings are not added to certified reports,
+XMP exports, generated provider files, or Kimiya prompts. Person-aware evidence
+in Phase 8 is therefore a local human-review instrument, not a remote identity
+signal.
+
+OpenCV documents YuNet/SFace thresholds from public face benchmarks, but those
+benchmarks do not guarantee correct grouping for children, relatives, ageing,
+profile views, occlusion, or a particular family. OpenCull presents similarity
+as uncertain evidence and requires human merge/split confirmation; it must not
+be used for security, access control, surveillance, or consequential identity
+decisions.
+
+### Phase 10: native macOS application
+
+Phase 10 provides a Finder-launchable Apple Silicon application. Its native
+launcher exists before any culling report: choose a photo folder, set the
+maximum keep count and photographic profile, select or configure a provider,
+and add the shoot to the persistent sequential queue. Double-click a completed
+job to open its full evidence and human-review interface.
+
+The packaged application contains Python, Kimiya, OpenCull, OpenCV, YuNet,
+SFace, and the audited Kimiya extension source files. Culling runs in a separate
+internal worker process, so a long job does not block the launcher. Only one
+launcher owns the queue, while completed reports open in independent review
+processes. The packaged Kimiya program is compiler-checked during provider
+materialization just as it is in source mode.
+
+macOS state follows platform conventions:
+
+- settings, queue, generated provider programs, and results:
+  `~/Library/Application Support/OpenCull/`;
+- per-job Kimiya trace, certificate, memo, locate cache, and datasheets:
+  `~/Library/Application Support/OpenCull/Kimiya/JOB_ID/`;
+- generated previews: `~/Library/Caches/OpenCull/`;
+- launcher diagnostics: `~/Library/Logs/OpenCull/OpenCull.log`;
+- API credentials: macOS Keychain;
+- review and face sidecars: beside their immutable result report.
+
+Application-support, result, cache, and log directories are created with
+owner-only permissions. Source photographs remain in their original folders
+and are still opened read-only. Generated result reports default to
+`Application Support/OpenCull/Results`.
+
+#### Build the Apple Silicon application
+
+The reproducible recipe requires Homebrew's native Python and Tk. The build
+environment is local to the checkout and is not inherited from Anaconda:
+
+```bash
+brew install python@3.12 python-tk@3.12
+python3.12 -m venv .macos-build-venv-arm64
+.macos-build-venv-arm64/bin/python -m pip install \
+  pyinstaller "numpy>=1.26,<3" "Pillow>=10" \
+  "opencv-python-headless==4.11.0.86" certifi
+scripts/build_macos.sh
+```
+
+This produces:
+
+```text
+dist/OpenCull.app
+dist/OpenCull-0.10.0-arm64.dmg
+```
+
+The local build is ad-hoc signed and verified, but not Apple-notarized. On the
+first launch, macOS may require Control-clicking **OpenCull.app**, choosing
+**Open**, and confirming once. Do not bypass Gatekeeper globally. A public
+release should replace ad-hoc signing with a Developer ID Application
+certificate, submit the archive for notarization, staple the ticket, and
+verify it with `spctl`.
+
+To rebuild the application while intentionally skipping disk-image creation:
+
+```bash
+SKIP_DMG=1 scripts/build_macos.sh
+```
+
+Run the final verification against the frozen application:
+
+```bash
+scripts/verify_macos_release.sh \
+  dist/OpenCull.app \
+  dist/release-receipts
+```
+
+The verifier rejects the release unless the executable is native `arm64`, the
+deep code signature is valid, the bundle identity and required assets match,
+and the Kimiya/static/model/private-path/single-instance smoke test passes from
+inside the frozen application. Its JSON and text receipts are suitable for
+release audit.
+
+If `hdiutil` is unavailable, preserve Finder metadata in a ZIP instead:
+
+```bash
+ditto -c -k --sequesterRsrc --keepParent \
+  dist/OpenCull.app dist/OpenCull-0.10.0-arm64.zip
+```
+
+The `.app` executable and bundled OpenCV library are verified as native
+`arm64`. The frozen Kimiya worker is also checked from a directory outside the
+source tree, proving that it uses the bundled program and audited extensions.
+
+### Phase 11 native SwiftUI development shell
+
+The professional native launcher is being developed alongside the existing
+release application. It already uses the real persistent queue and provider
+state; it does not use demonstration data. With a matching Swift compiler and
+macOS SDK, run it from the source tree with:
+
+```bash
+cd native-macos
+swift run OpenCullNative
+```
+
+For source development, the shell starts `../opencull_desktop.py
+--native-server` through the active `python3`. Set `OPENCULL_SOURCE_ROOT` to the
+OpenCull checkout when launching from another working directory. A packaged
+build will instead set `OPENCULL_BACKEND` to its bundled Python/Kimiya helper.
+
+The bridge binds only to `127.0.0.1`, requires a new random bearer token for
+every launch, and owns the same single-instance lock as the Tk launcher.
+Provider profiles can be created, edited, connection-tested, and deleted from
+the native privacy workspace; credentials remain write-only in macOS Keychain.
+Completed results open in independent native `WKWebView` windows whose local
+review servers remain isolated from the active sequential culling queue.
+Chosen folders and reports receive persistent macOS security-scoped bookmarks;
+recent reviews can be reopened after relaunch, and disconnected sources are
+relinked only after an explicit folder choice. The Tk application remains the
+supported packaged launcher until the native acceptance build passes.
+
+Stopped and finished queue entries provide **Remove from Queue…**. Removing the
+entry alone preserves its checkpoint and log. The separate cleanup choice
+removes those two resumable/diagnostic files as well; neither choice deletes
+source photographs or a completed result JSON.
+
+The isolated native release pipeline is:
+
+```bash
+scripts/build_native_macos.sh
+```
+
+It produces `dist/native/OpenCull.app` and
+`dist/native/OpenCull-0.11.0-arm64.zip`, then verifies the SwiftUI frontend and
+frozen Python/Kimiya backend independently. It never replaces the installed
+application. A matching compiler and SDK are mandatory. The accepted local
+build uses Xcode 26.6 with Swift 6.3.3. If Command Line Tools are selected
+instead, select full Xcode before building:
+
+```bash
+sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
+scripts/build_native_macos.sh
+```
 
 ## Current limitations
 
