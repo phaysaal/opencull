@@ -21,6 +21,12 @@ from .xmp import xmp_zip
 from .jobs import JobError, JobManager
 from .providers import ProviderError, ProviderStore
 from .faces import FaceError, FaceStore
+from .shortlist import ShortlistError, ShortlistIndex, load_shortlist
+from .shortlist_reviews import (
+    ShortlistReviewError,
+    ShortlistReviewStore,
+    default_shortlist_review_path,
+)
 
 
 STATIC_ROOT = Path(__file__).with_name("static")
@@ -41,6 +47,8 @@ class ReviewServer(ThreadingHTTPServer):
         jobs: JobManager | None = None,
         providers: ProviderStore | None = None,
         faces: FaceStore | None = None,
+        shortlist_path: Path | None = None,
+        shutdown_jobs: bool = True,
     ):
         super().__init__(address, ReviewHandler)
         self.report = report
@@ -50,12 +58,40 @@ class ReviewServer(ThreadingHTTPServer):
         self.previews = PreviewManager(photos, workers=preview_workers)
         self.actions = ActionController(report, reviews, photos)
         self.jobs = jobs
+        self.shutdown_jobs = shutdown_jobs
         self.providers = providers
         self.faces = faces
+        self.shortlist: ShortlistIndex | None = None
+        self.shortlist_reviews: ShortlistReviewStore | None = None
+        self.default_shortlist_path = report.path.with_name(
+            f"{report.path.stem}.professional-shortlist.json")
+        if shortlist_path is not None and shortlist_path.is_file():
+            self.load_shortlist(shortlist_path)
         self.payload = {
             **report.public_payload(photos.root),
             "measurements": measurements or {},
             "manifest_path": manifest_path,
+        }
+
+    def load_shortlist(self, path: Path) -> dict:
+        shortlist = load_shortlist(path, self.report, self.photos.root)
+        reviews = ShortlistReviewStore(
+            default_shortlist_review_path(shortlist.path), shortlist)
+        self.shortlist = shortlist
+        self.shortlist_reviews = reviews
+        return self.shortlist_payload()
+
+    def shortlist_payload(self) -> dict:
+        if self.shortlist is None or self.shortlist_reviews is None:
+            return {
+                "available": False,
+                "default_path": str(self.default_shortlist_path),
+            }
+        return {
+            "available": True,
+            "shortlist_path": str(self.shortlist.path),
+            "shortlist": self.shortlist.data,
+            "review": self.shortlist_reviews.public_state(),
         }
 
     def server_close(self) -> None:
@@ -63,7 +99,7 @@ class ReviewServer(ThreadingHTTPServer):
         if previews is not None:
             previews.shutdown()
         jobs = getattr(self, "jobs", None)
-        if jobs is not None:
+        if jobs is not None and self.shutdown_jobs:
             jobs.shutdown()
         faces = getattr(self, "faces", None)
         if faces is not None:
@@ -172,6 +208,21 @@ class ReviewHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/review":
             self._json(self.server.reviews.public_state())
+            return
+        if parsed.path == "/api/shortlist":
+            self._json(self.server.shortlist_payload())
+            return
+        if parsed.path == "/api/shortlist/export":
+            if self.server.shortlist_reviews is None:
+                self._json(
+                    {"error": "professional shortlist is not loaded"},
+                    HTTPStatus.NOT_FOUND)
+            else:
+                self._json(self.server.shortlist_reviews.export())
+            return
+        if parsed.path == "/api/action/recovery":
+            self._json({
+                "journals": self.server.actions.recoverable_journals()})
             return
         if parsed.path == "/api/jobs":
             if self.server.jobs is None:
@@ -324,6 +375,29 @@ class ReviewHandler(BaseHTTPRequestHandler):
                     str(body.get("cluster_id", "")),
                     body.get("revision"),
                 )
+            elif parsed.path == "/api/shortlist/load":
+                result = self.server.load_shortlist(
+                    Path(str(body.get("path", ""))))
+                self._json(result)
+                return
+            elif parsed.path == "/api/shortlist/review":
+                if self.server.shortlist_reviews is None:
+                    raise ShortlistReviewError(
+                        "professional shortlist is not loaded")
+                state = self.server.shortlist_reviews.update(
+                    str(body.get("photo", "")),
+                    body.get("tier"),
+                    body.get("edit_raw"),
+                    body.get("note"),
+                    body.get("reviewed"),
+                    body.get("revision"),
+                )
+            elif parsed.path == "/api/shortlist/undo":
+                if self.server.shortlist_reviews is None:
+                    raise ShortlistReviewError(
+                        "professional shortlist is not loaded")
+                state = self.server.shortlist_reviews.undo(
+                    body.get("revision"))
             elif parsed.path == "/api/previews/focus":
                 visible = body.get("visible", [])
                 prefetch = body.get("prefetch", [])
@@ -373,6 +447,20 @@ class ReviewHandler(BaseHTTPRequestHandler):
                 )
                 self._json(result)
                 return
+            elif parsed.path == "/api/jobs/add-professional":
+                if self.server.jobs is None:
+                    raise JobError("job manager is disabled")
+                result = self.server.jobs.add_professional(
+                    str(body.get("report", "")),
+                    str(body.get("photos", "")),
+                    str(body.get("output", "")),
+                    str(body.get("review", "")),
+                    str(body.get("policy", "effective")),
+                    str(body.get("profile", "family")),
+                    str(body.get("provider_profile_id", "")),
+                )
+                self._json(result)
+                return
             elif parsed.path == "/api/jobs/open-review":
                 if self.server.jobs is None:
                     raise JobError("job manager is disabled")
@@ -397,6 +485,26 @@ class ReviewHandler(BaseHTTPRequestHandler):
                     raise JobError(
                         f"folder chooser failed: {result.stderr.strip()}")
                 self._json({"photos": result.stdout.strip().rstrip("/")})
+                return
+            elif parsed.path == "/api/action/pick-destination":
+                if sys.platform != "darwin":
+                    raise ActionError(
+                        "native folder selection is available only on macOS")
+                result = subprocess.run(
+                    [
+                        "osascript", "-e",
+                        'POSIX path of (choose folder with prompt '
+                        '"Choose a destination for selected photographs")',
+                    ],
+                    capture_output=True, text=True, timeout=300, check=False,
+                )
+                if result.returncode != 0:
+                    if "-128" in result.stderr:
+                        raise ActionError("folder selection was cancelled")
+                    raise ActionError(
+                        f"folder chooser failed: {result.stderr.strip()}")
+                self._json({
+                    "destination": result.stdout.strip().rstrip("/")})
                 return
             elif parsed.path == "/api/providers/save":
                 if self.server.providers is None:
@@ -523,6 +631,8 @@ class ReviewHandler(BaseHTTPRequestHandler):
             ReviewError, PhotoError, ActionError, JobError,
             ProviderError,
             FaceError,
+            ShortlistError,
+            ShortlistReviewError,
             TypeError, ValueError,
         ) as exc:
             status = (

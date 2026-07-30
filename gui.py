@@ -16,6 +16,7 @@ from opencull_gui.server import ReviewServer
 from opencull_gui.jobs import JobError, JobManager
 from opencull_gui.providers import ProviderError, ProviderStore
 from opencull_gui.faces import FaceError, FaceStore, default_face_db
+from opencull_gui.shortlist import ShortlistError
 
 
 def parse_args() -> argparse.Namespace:
@@ -47,6 +48,11 @@ def parse_args() -> argparse.Namespace:
         "--manifest",
         type=Path,
         help="optional scanner manifest providing technical measurements",
+    )
+    parser.add_argument(
+        "--shortlist",
+        type=Path,
+        help="optional professional-shortlist JSON bound to REPORT",
     )
     parser.add_argument(
         "--preview-workers",
@@ -113,18 +119,22 @@ def main() -> int:
         FaceError,
     ) as exc:
         raise SystemExit(f"error: {exc}") from exc
-    server = ReviewServer(
-        (args.host, args.port),
-        report,
-        photos,
-        reviews,
-        measurements=measurements,
-        manifest_path=manifest_path,
-        preview_workers=args.preview_workers,
-        jobs=jobs,
-        providers=providers,
-        faces=faces,
-    )
+    try:
+        server = ReviewServer(
+            (args.host, args.port),
+            report,
+            photos,
+            reviews,
+            measurements=measurements,
+            manifest_path=manifest_path,
+            preview_workers=args.preview_workers,
+            jobs=jobs,
+            providers=providers,
+            faces=faces,
+            shortlist_path=args.shortlist,
+        )
+    except ShortlistError as exc:
+        raise SystemExit(f"error: {exc}") from exc
     url = f"http://{args.host}:{server.server_port}/"
     print("OpenCull review GUI")
     print(f"Report: {report.path}")

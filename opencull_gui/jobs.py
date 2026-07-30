@@ -157,6 +157,19 @@ class JobManager:
             self._save()
 
     def _command(self, job: dict[str, Any]) -> list[str]:
+        if job.get("kind") == "professional_shortlist":
+            return [
+                self.python, "-m", "kimiya", "run",
+                job.get("program_path") or str(
+                    self.project_root / "professional_shortlist.kim"),
+                f"report={job['report']}",
+                f"photos={job['photos']}",
+                f"review={job.get('review', '')}",
+                f"output={job['output']}",
+                f"policy={job['policy']}",
+                f"profile={job['profile']}",
+                "resume=true",
+            ]
         return [
             self.python, "-m", "kimiya", "run",
             job.get("program_path") or str(self.project_root / "opencull.kim"),
@@ -232,6 +245,7 @@ class JobManager:
             checkpoint = Path(str(chosen_output) + ".checkpoint.json")
             job = {
                 "id": job_id,
+                "kind": "culling",
                 "photos": str(source),
                 "output": str(chosen_output),
                 "checkpoint": str(checkpoint),
@@ -280,6 +294,114 @@ class JobManager:
                     provider_bundle["credential_env"]
                     if provider_bundle else ""
                 ),
+            }
+            self._state["jobs"].append(job)
+            self._save()
+        self._wake.set()
+        return self.public()
+
+    def add_professional(
+        self,
+        report: str,
+        photos: str,
+        output: str = "",
+        review: str = "",
+        policy: str = "effective",
+        profile: str = "family",
+        provider_profile_id: str = "",
+    ) -> dict[str, Any]:
+        """Queue a professional shortlist derived from an existing report."""
+        report_path = Path(str(report)).expanduser().resolve()
+        source = Path(str(photos)).expanduser().resolve()
+        review_path = (
+            Path(str(review)).expanduser().resolve()
+            if str(review).strip() else None)
+        if not report_path.is_file():
+            raise JobError(f"culling report is missing: {report_path}")
+        if not source.is_dir():
+            raise JobError(f"photo folder is not a directory: {source}")
+        if review_path is not None and not review_path.is_file():
+            raise JobError(f"review file is missing: {review_path}")
+        if policy not in {"human_only", "effective", "ai_only", "all"}:
+            raise JobError(f"unsupported candidate policy: {policy}")
+        if profile not in PROFILES:
+            raise JobError(f"unsupported culling profile: {profile}")
+        chosen_output = (
+            self._validate_output(Path(output))
+            if str(output).strip()
+            else report_path.with_name(
+                f"{report_path.stem}.professional-shortlist.json").resolve()
+        )
+        if chosen_output.exists():
+            raise JobError("professional shortlist output already exists")
+        with self._lock:
+            if any(
+                job.get("kind") == "professional_shortlist"
+                and Path(job.get("report", "")) == report_path
+                and job.get("status") not in TERMINAL
+                for job in self._state["jobs"]
+            ):
+                raise JobError(
+                    "this report already has a queued professional shortlist")
+            job_id = uuid.uuid4().hex[:12]
+            provider_bundle = None
+            if provider_profile_id:
+                if self.providers is None:
+                    raise JobError("provider profiles are disabled")
+                try:
+                    provider_bundle = self.providers.materialize(
+                        job_id, provider_profile_id,
+                        "professional_shortlist.kim")
+                    self.program_checker(Path(provider_bundle["program_path"]))
+                except (ProviderError, JobError) as exc:
+                    raise JobError(str(exc)) from exc
+            profile_data = (
+                provider_bundle["profile"] if provider_bundle else {})
+            log = chosen_output.with_suffix(chosen_output.suffix + ".log")
+            checkpoint = Path(str(chosen_output) + ".checkpoint.json")
+            job = {
+                "id": job_id,
+                "kind": "professional_shortlist",
+                "report": str(report_path),
+                "photos": str(source),
+                "review": str(review_path) if review_path else "",
+                "output": str(chosen_output),
+                "checkpoint": str(checkpoint),
+                "log": str(log),
+                "policy": policy,
+                "profile": profile,
+                "status": "queued",
+                "message": "Waiting for the professional-shortlist worker.",
+                "pid": None,
+                "created_at": _now(),
+                "started_at": None,
+                "finished_at": None,
+                "exit_code": None,
+                "provider_profile_id": provider_profile_id or None,
+                "provider_profile_name": (
+                    profile_data.get("name") if provider_bundle
+                    else "Legacy agents.kim"),
+                "provider_kind": (
+                    profile_data.get("kind") if provider_bundle else "legacy"),
+                "provider_privacy": (
+                    "local" if profile_data.get("kind") == "ollama"
+                    else "remote-zdr"
+                    if profile_data.get("kind") == "openrouter"
+                    and profile_data.get("zdr")
+                    else "declared-in-agents.kim"
+                    if not provider_bundle else "remote-provider-policy"),
+                "provider_config_sha256": (
+                    provider_bundle["agents_sha256"]
+                    if provider_bundle else None),
+                "program_sha256": (
+                    provider_bundle["program_sha256"]
+                    if provider_bundle else None),
+                "program_path": (
+                    provider_bundle["program_path"]
+                    if provider_bundle else None),
+                "credential_env": (
+                    provider_bundle["credential_env"]
+                    if provider_bundle else ""),
             }
             self._state["jobs"].append(job)
             self._save()
@@ -423,15 +545,22 @@ class JobManager:
         review_log = Path(job["output"] + ".gui.log")
         handle = review_log.open("a", encoding="utf-8")
         try:
-            process = subprocess.Popen(
-                [
+            command = [
                     self.python,
                     str(self.project_root / "gui.py"),
-                    job["output"],
+                    (
+                        job["report"]
+                        if job.get("kind") == "professional_shortlist"
+                        else job["output"]
+                    ),
                     job["photos"],
                     "--port", "0",
                     "--no-job-manager",
-                ],
+                ]
+            if job.get("kind") == "professional_shortlist":
+                command.extend(["--shortlist", job["output"]])
+            process = subprocess.Popen(
+                command,
                 cwd=self.project_root,
                 stdout=handle,
                 stderr=subprocess.STDOUT,
@@ -481,8 +610,14 @@ class JobManager:
         if checkpoint.is_file():
             try:
                 data = json.loads(checkpoint.read_text(encoding="utf-8"))
-                completed = len(data.get("decisions", []))
-                total = len(data.get("signature", {}).get("cluster_ids", []))
+                if job.get("kind") == "professional_shortlist":
+                    completed = len(data.get("assessments", []))
+                    total = int(
+                        data.get("signature", {}).get("candidate_count", 0))
+                else:
+                    completed = len(data.get("decisions", []))
+                    total = len(
+                        data.get("signature", {}).get("cluster_ids", []))
                 checkpoint_complete = bool(data.get("completed"))
             except (OSError, json.JSONDecodeError, TypeError):
                 pass
@@ -491,6 +626,8 @@ class JobManager:
             "total_clusters": total,
             "fraction": completed / total if total else 0,
             "checkpoint_complete": checkpoint_complete,
+            "completed_items": completed,
+            "total_items": total,
         }
 
     @staticmethod
@@ -581,9 +718,13 @@ class JobManager:
                 return
             self._process = process
             self._active_job_id = job_id
+            kind_label = (
+                "Professional shortlist"
+                if job.get("kind") == "professional_shortlist"
+                else "Kimiya culling")
             job.update(
                 status="running", pid=process.pid, started_at=_now(),
-                finished_at=None, message="Kimiya culling is running.")
+                finished_at=None, message=f"{kind_label} is running.")
             self._save()
         exit_code = process.wait()
         log_handle.close()
@@ -591,7 +732,12 @@ class JobManager:
             job = self._job(job_id)
             requested = job.pop("_stop_as", None)
             if Path(job["output"]).is_file() and exit_code == 0:
-                status, message = "completed", "Culling report is ready for review."
+                status, message = (
+                    "completed",
+                    "Professional shortlist is ready for review."
+                    if job.get("kind") == "professional_shortlist"
+                    else "Culling report is ready for review.",
+                )
             elif requested == "cancelled":
                 status, message = "cancelled", "Cancelled; checkpoint retained."
             elif job["status"] == "stopping":

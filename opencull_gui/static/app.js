@@ -17,9 +17,11 @@ const state = {
   saveQueue: Promise.resolve(),
   noteTimer: null,
   previewPoll: {},
+  previewGeneration: {},
   operationPlan: null,
   operationId: null,
   operationPoll: null,
+  recoverableOperations: [],
   viewer: {zoom: 1, x: 0, y: 0, crop: "fit"},
   viewDensity: "comfortable",
   jobs: null,
@@ -34,6 +36,15 @@ const state = {
   mergeSelection: new Set(),
   faceSelection: new Set(),
   toastTimer: null,
+  workspaceMode: "review",
+  shortlist: null,
+  shortlistReview: null,
+  shortlistVisible: [],
+  activeShortlistPhoto: null,
+  shortlistQuery: "",
+  shortlistDefaultPath: "",
+  shortlistJobPoll: null,
+  shortlistLoadedJobId: null,
 };
 
 const productStatusLanguage = {
@@ -57,6 +68,19 @@ const assessmentLabels = {
   distinctive_variations: "Distinctive variations",
   family_value: "Family value",
   uncertainty: "Uncertainty",
+};
+
+const professionalAssessmentLabels = {
+  composition: "Composition",
+  angle_and_perspective: "Angle and perspective",
+  subject_presentation: "Subject presentation",
+  pose_and_expression: "Pose and expression",
+  moment_and_emotion: "Moment and emotion",
+  light_and_tonality: "Light and tonality",
+  surroundings: "Surroundings",
+  irrecoverable_defects: "Irrecoverable defects",
+  raw_editing_opportunities: "RAW editing opportunities",
+  distinctiveness: "Distinctiveness",
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -137,36 +161,47 @@ function applyPreviewStates(result) {
   }
 }
 
-async function pollPreviews(names, size) {
+async function pollPreviews(names, size, generation) {
+  if (!names.length || state.previewGeneration[size] !== generation) return;
   clearTimeout(state.previewPoll[size]);
-  if (!names.length) return;
   const query = names.map((name) => `name=${encodeURIComponent(name)}`).join("&");
   try {
     const response = await fetch(
       `/api/previews/status?size=${encodeURIComponent(size)}&${query}`);
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || "preview status failed");
+    if (state.previewGeneration[size] !== generation) return;
     applyPreviewStates(result);
     const pending = Object.values(result.previews).some(
       (item) => ["queued", "generating", "deferred", "cancelled"].includes(item.status));
     if (pending) {
       state.previewPoll[size] = setTimeout(
-        () => pollPreviews(names, size), 350);
+        () => pollPreviews(names, size, generation), 350);
     }
   } catch (error) {
+    if (state.previewGeneration[size] !== generation) return;
     $("#preview-status").textContent = error.message;
+    state.previewPoll[size] = setTimeout(
+      () => pollPreviews(names, size, generation), 1000);
   }
 }
 
 async function focusPreviews(visible, prefetch = [], size = "thumb") {
+  const generation = Number(state.previewGeneration[size] || 0) + 1;
+  state.previewGeneration[size] = generation;
+  clearTimeout(state.previewPoll[size]);
   try {
     const result = await operationalPost("/api/previews/focus", {
       visible, prefetch, size,
     });
+    if (state.previewGeneration[size] !== generation) return;
     applyPreviewStates(result);
-    pollPreviews(visible, size);
+    pollPreviews(visible, size, generation);
   } catch (error) {
+    if (state.previewGeneration[size] !== generation) return;
     $("#preview-status").textContent = error.message;
+    state.previewPoll[size] = setTimeout(
+      () => focusPreviews(visible, prefetch, size), 1000);
   }
 }
 
@@ -174,7 +209,7 @@ async function retryPreview(name, size) {
   try {
     const result = await operationalPost("/api/previews/retry", {name, size});
     applyPreviewStates({previews: {[name]: result}});
-    pollPreviews([name], size);
+    pollPreviews([name], size, state.previewGeneration[size]);
   } catch (error) {
     $("#preview-status").textContent = error.message;
   }
@@ -926,7 +961,8 @@ function draftFor(cluster) {
 
 function flags(cluster) {
   const decision = decisionFor(cluster);
-  const human = humanReview(cluster.cluster_id);
+  const human = state.drafts.get(cluster.cluster_id)
+    || humanReview(cluster.cluster_id);
   const reviewed = Boolean(human && human.reviewed);
   const annotations = Object.values(human?.photo_annotations || {});
   return {
@@ -1841,7 +1877,8 @@ function saveCluster(cluster, draft, message = "Human review saved", action = "r
     reviewed: draft.reviewed,
     photo_annotations: structuredClone(draft.photo_annotations || {}),
   });
-  return enqueueSave("/api/review/cluster", () => {
+  renderClusterList();
+  const saved = enqueueSave("/api/review/cluster", () => {
     const current = state.drafts.get(cluster.cluster_id);
     return {
       cluster_id: cluster.cluster_id,
@@ -1852,6 +1889,18 @@ function saveCluster(cluster, draft, message = "Human review saved", action = "r
       action,
     };
   }, message);
+  saved.then((success) => {
+    if (success) return;
+    const stored = humanReview(cluster.cluster_id);
+    state.drafts.set(cluster.cluster_id, {
+      keepers: stored ? [...stored.keepers] : [...decisionFor(cluster).photos],
+      note: stored ? stored.note : "",
+      reviewed: stored ? stored.reviewed : false,
+      photo_annotations: structuredClone(stored?.photo_annotations || {}),
+    });
+    renderClusterList();
+  });
+  return saved;
 }
 
 function persistPosition(clusterId) {
@@ -2031,13 +2080,26 @@ function renderSelectionPolicy() {
 }
 
 function renderOperationRisk() {
-  const move = $("#operation-action").value === "move";
+  const action = $("#operation-action").value;
+  const move = action === "move";
+  const trash = action === "trash";
   const badge = $("#operation-risk-badge");
-  badge.textContent = move ? "Source files will move" : "Verified copy";
-  badge.className = `operation-risk-badge ${move ? "move" : "copy"}`;
-  $("#operation-risk-message").textContent = move
-    ? "Move removes each source only after its destination copy passes SHA-256 verification. A rollback journal is retained."
-    : "Copy creates SHA-256 verified duplicates and leaves every source photograph in place.";
+  badge.textContent = trash
+    ? "Unselected files go to Trash"
+    : move ? "Source files will move" : "Verified copy";
+  badge.className = `operation-risk-badge ${move || trash ? "move" : "copy"}`;
+  $("#operation-risk-message").textContent = trash
+    ? "Only unselected photographs are moved to the macOS Trash after verification. OpenCull retains a journal so the operation can be resumed or rolled back."
+    : move
+      ? "Move removes each source only after its destination copy passes SHA-256 verification. A rollback journal is retained."
+      : "Copy creates SHA-256 verified duplicates and leaves every source photograph in place.";
+  const scope = $("#operation-scope");
+  const destination = $("#operation-destination");
+  const picker = $("#pick-operation-destination");
+  if (trash) scope.value = "unselected";
+  scope.disabled = trash;
+  destination.disabled = trash;
+  picker.disabled = trash;
   state.operationPlan = null;
   $("#preflight-result").hidden = true;
 }
@@ -2054,6 +2116,7 @@ function renderPlan(plan) {
   $("#plan-summary").replaceChildren(
     planStat("Files", plan.summary.files),
     planStat("Selected", plan.summary.selected_files),
+    planStat("Unselected", plan.summary.unselected_files),
     planStat("Companions", plan.summary.companion_files),
     planStat("Required", formatBytes(plan.summary.bytes)),
     planStat("Free", formatBytes(plan.summary.free_bytes)),
@@ -2081,9 +2144,10 @@ function renderPlan(plan) {
     }
     rows.append(row);
   }
-  const expected = `${plan.action === "move" ? "MOVE" : "COPY"} ${plan.plan_id}`;
+  const expected = plan.confirmation_code;
   $("#confirmation-help").textContent =
-    `Type exactly “${expected}” after reviewing every operation.`;
+    `Type the four-digit code “${expected}” to authorize this verified ${
+      plan.action}.`;
   $("#operation-confirmation").value = "";
   $("#execute-operation").disabled = true;
   $("#execute-operation").dataset.expected = expected;
@@ -2094,7 +2158,8 @@ function renderPlan(plan) {
 async function runPreflight() {
   try {
     const destination = $("#operation-destination").value.trim();
-    if (!destination) {
+    const action = $("#operation-action").value;
+    if (action !== "trash" && !destination) {
       throw new Error("Choose a destination folder before verifying the plan.");
     }
     $("#run-preflight").disabled = true;
@@ -2102,7 +2167,8 @@ async function runPreflight() {
     const plan = await operationalPost("/api/action/preflight", {
       destination,
       policy: $("#export-policy").value,
-      action: $("#operation-action").value,
+      action,
+      selection_scope: $("#operation-scope").value,
       layout: $("#operation-layout").value,
       preserve_relative: $("#preserve-relative").checked,
       include_companions: $("#include-companions").checked,
@@ -2113,6 +2179,19 @@ async function runPreflight() {
   } finally {
     $("#run-preflight").disabled = false;
     $("#run-preflight").textContent = "Verify exact plan";
+  }
+}
+
+async function pickOperationDestination() {
+  try {
+    const result = await operationalPost(
+      "/api/action/pick-destination", {});
+    $("#operation-destination").value = result.destination;
+    state.operationPlan = null;
+    $("#preflight-result").hidden = true;
+    setSaveStatus("Destination folder selected");
+  } catch (error) {
+    setSaveStatus(error.message, "error");
   }
 }
 
@@ -2158,7 +2237,7 @@ function renderOperation(operation) {
   const running = ["planned", "running", "paused"].includes(operation.status);
   $("#cancel-operation").hidden = !running;
   $("#rollback-operation").hidden =
-    operation.action !== "move" ||
+    !["move", "trash"].includes(operation.action) ||
     !["completed", "failed", "paused"].includes(operation.status);
   $("#operation-progress").scrollIntoView({behavior: "smooth", block: "start"});
 }
@@ -2176,7 +2255,12 @@ async function monitorOperation(operationId) {
         () => monitorOperation(operationId), 500);
     }
   } catch (error) {
-    setSaveStatus(error.message, "error");
+    setSaveStatus(
+      `${error.message} · progress refresh will retry`, "error");
+    if (state.operationId === operationId) {
+      state.operationPoll = setTimeout(
+        () => monitorOperation(operationId), 1500);
+    }
   }
 }
 
@@ -2270,7 +2354,81 @@ async function resumeOperation() {
   }
 }
 
-function openViewer(names) {
+async function resumeDetectedOperation(journal) {
+  const confirmation = `RESUME ${journal.plan_id}`;
+  if (!window.confirm(
+    `Resume the verified ${journal.action} operation?\n\n` +
+    `${journal.remaining_files} files remain.\n` +
+    `Destination: ${journal.destination}`)) return;
+  try {
+    const operation = await operationalPost("/api/action/resume", {
+      journal_path: journal.journal_path,
+      confirmation,
+    });
+    state.operationId = operation.plan_id;
+    renderOperation(operation);
+    monitorOperation(operation.plan_id);
+    renderRecoverableOperations([]);
+  } catch (error) {
+    setSaveStatus(error.message, "error");
+  }
+}
+
+function renderRecoverableOperations(journals) {
+  state.recoverableOperations = journals;
+  const target = $("#recoverable-operations");
+  target.replaceChildren();
+  $("#recovery-operation-status").textContent = journals.length
+    ? `${journals.length} interrupted operation${
+      journals.length === 1 ? "" : "s"} found for this report.`
+    : "No interrupted operation was found for this report.";
+  for (const journal of journals) {
+    const card = document.createElement("article");
+    card.className = "recoverable-operation";
+    const summary = document.createElement("div");
+    const title = document.createElement("strong");
+    title.textContent =
+      `${String(journal.action).toUpperCase()} · ${journal.status}`;
+    const progress = document.createElement("span");
+    progress.textContent =
+      `${journal.completed_files} of ${journal.total_files} verified · ` +
+      `${journal.remaining_files} remaining`;
+    const destination = document.createElement("code");
+    destination.textContent = journal.destination;
+    summary.append(title, progress, destination);
+    const resume = document.createElement("button");
+    resume.type = "button";
+    resume.className = "primary-button";
+    resume.textContent = "Resume remaining files";
+    resume.addEventListener(
+      "click", () => resumeDetectedOperation(journal));
+    card.append(summary, resume);
+    target.append(card);
+  }
+}
+
+async function refreshRecoverableOperations(showBanner = false) {
+  try {
+    const response = await fetch("/api/action/recovery");
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error || "Could not inspect operation journals");
+    }
+    const journals = payload.journals || [];
+    renderRecoverableOperations(journals);
+    if (showBanner && journals.length) {
+      setRecoveryBanner(
+        "Interrupted file operation found",
+        `${journals[0].remaining_files} verified file operations can resume ` +
+        "from the Delivery window.",
+        "attention");
+    }
+  } catch (error) {
+    $("#recovery-operation-status").textContent = error.message;
+  }
+}
+
+function openViewer(names, filmstripNames = null) {
   const viewer = $("#viewer");
   $("#viewer-title").textContent = names.length > 1
     ? `${names.length} frames · ${names.join(" ↔ ")}`
@@ -2282,7 +2440,7 @@ function openViewer(names) {
     (item) => item.cluster_id === state.activeClusterId);
   const filmstrip = $("#viewer-filmstrip");
   filmstrip.replaceChildren();
-  for (const candidate of cluster?.photos || names) {
+  for (const candidate of filmstripNames || cluster?.photos || names) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "filmstrip-frame";
@@ -2293,7 +2451,8 @@ function openViewer(names) {
     const label = document.createElement("span");
     label.textContent = candidate;
     button.append(thumb, label);
-    button.addEventListener("click", () => openViewer([candidate]));
+    button.addEventListener(
+      "click", () => openViewer([candidate], filmstripNames));
     filmstrip.append(button);
   }
   resetViewerTransform();
@@ -2500,7 +2659,514 @@ function openRecoveryCenter(loadError = "") {
   if (!dialog.open) dialog.showModal();
 }
 
+function switchWorkspace(mode) {
+  state.workspaceMode = mode === "professional" ? "professional" : "review";
+  const professional = state.workspaceMode === "professional";
+  $("#review-workspace").hidden = professional;
+  $("#professional-workspace").hidden = !professional;
+  $("#summary").hidden = professional;
+  $("#review-nav-button").classList.toggle("active", !professional);
+  $("#review-nav-button").toggleAttribute("aria-current", !professional);
+  $("#shortlist-nav-button").classList.toggle("active", professional);
+  $("#shortlist-nav-button").toggleAttribute("aria-current", professional);
+  if (professional) {
+    renderShortlistWorkspace();
+    const entry = activeShortlistEntry();
+    if (entry) focusPreviews([entry.photo], [], "detail");
+  }
+}
+
+function shortlistHumanEntry(photo) {
+  return state.shortlistReview?.entries?.[photo] || null;
+}
+
+function effectiveShortlistEntry(entry) {
+  const human = shortlistHumanEntry(entry.photo);
+  const reviewed = Boolean(human?.reviewed);
+  return {
+    ...entry,
+    effectiveTier: reviewed ? human.tier : entry.tier,
+    editRaw: reviewed
+      ? human.edit_raw : ["exceptional", "strong"].includes(entry.tier),
+    humanReviewed: reviewed,
+    humanNote: human?.note || "",
+  };
+}
+
+function filteredShortlistEntries() {
+  if (!state.shortlist) return [];
+  const tier = $("#shortlist-tier-filter").value;
+  const raw = $("#shortlist-raw-filter").value;
+  const review = $("#shortlist-review-filter").value;
+  const query = state.shortlistQuery.toLowerCase();
+  return state.shortlist.entries.map(effectiveShortlistEntry).filter((entry) => {
+    if (tier !== "all" && entry.effectiveTier !== tier) return false;
+    if (raw === "available" && !entry.raw_files.length) return false;
+    if (raw === "missing" && entry.raw_files.length) return false;
+    if (review === "reviewed" && !entry.humanReviewed) return false;
+    if (review === "unreviewed" && entry.humanReviewed) return false;
+    if (review === "edit" && !entry.editRaw) return false;
+    if (query && ![
+      entry.photo, entry.effectiveTier, entry.rationale, entry.cluster_id,
+      ...entry.raw_files,
+    ].join(" ").toLowerCase().includes(query)) return false;
+    return true;
+  });
+}
+
+function renderShortlistList() {
+  state.shortlistVisible = filteredShortlistEntries();
+  const target = $("#shortlist-list");
+  target.replaceChildren();
+  $("#shortlist-visible-count").textContent =
+    `${state.shortlistVisible.length} of ${state.shortlist?.entries.length || 0} photographs`;
+  for (const entry of state.shortlistVisible) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "shortlist-item";
+    button.dataset.photo = entry.photo;
+    if (entry.photo === state.activeShortlistPhoto) button.classList.add("active");
+    const image = document.createElement("img");
+    image.className = "shortlist-thumb";
+    image.alt = "";
+    image.loading = "lazy";
+    image.src = imageUrl(entry.photo, "thumb");
+    const copy = document.createElement("span");
+    copy.className = "shortlist-item-copy";
+    const name = document.createElement("strong");
+    name.textContent = entry.photo.split("/").at(-1);
+    const detail = document.createElement("span");
+    detail.textContent = `${entry.effectiveTier} · ${Math.round(entry.score)} · ${
+      entry.raw_files.length ? "RAW" : "JPEG only"}${
+      entry.humanReviewed ? " · reviewed" : ""}`;
+    copy.append(name, detail);
+    const marker = document.createElement("span");
+    marker.className = `tier-dot ${entry.effectiveTier}`;
+    marker.title = entry.effectiveTier;
+    const rank = document.createElement("span");
+    rank.className = "shortlist-rank";
+    rank.textContent = `#${entry.rank}`;
+    const end = document.createElement("span");
+    end.style.display = "grid";
+    end.style.justifyItems = "center";
+    end.style.gap = "7px";
+    end.append(rank, marker);
+    button.append(image, copy, end);
+    button.addEventListener("click", () => showShortlistEntry(entry.photo));
+    target.append(button);
+  }
+}
+
+function activeShortlistEntry() {
+  return state.shortlist?.entries.find(
+    (entry) => entry.photo === state.activeShortlistPhoto) || null;
+}
+
+function renderShortlistDetail() {
+  const source = activeShortlistEntry();
+  $("#shortlist-empty").hidden = Boolean(source);
+  $("#shortlist-detail").hidden = !source;
+  if (!source) return;
+  const entry = effectiveShortlistEntry(source);
+  const position = state.shortlistVisible.findIndex(
+    (item) => item.photo === entry.photo);
+  $("#shortlist-position").textContent =
+    `RANK ${entry.rank} · ${position + 1} OF ${state.shortlistVisible.length} IN CURRENT VIEW`;
+  $("#shortlist-title").textContent = entry.photo;
+  $("#shortlist-tier").textContent = entry.effectiveTier;
+  $("#shortlist-tier").className = `tier-badge ${entry.effectiveTier}`;
+  $("#shortlist-score").textContent = `${Math.round(entry.score)}/100`;
+  $("#shortlist-raw-status").textContent = entry.raw_files.length
+    ? `${entry.raw_files.length} RAW companion${entry.raw_files.length === 1 ? "" : "s"}`
+    : "No RAW companion";
+  $("#shortlist-human-status").textContent = entry.humanReviewed
+    ? "Human reviewed" : "AI recommendation";
+  const image = $("#shortlist-image");
+  image.alt = entry.photo;
+  image.dataset.previewName = entry.photo;
+  image.dataset.previewSize = "detail";
+  image.removeAttribute("src");
+  $("#shortlist-open-viewer .image-loading").hidden = false;
+  $("#shortlist-open-viewer .image-error").hidden = true;
+  $("#shortlist-rationale").textContent = entry.rationale;
+  $("#shortlist-cluster").textContent = entry.cluster_id;
+  $("#shortlist-raw-files").textContent =
+    entry.raw_files.join(", ") || "No associated RAW file";
+  $("#shortlist-confidence").textContent =
+    `${Math.round(Number(entry.confidence || 0) * 100)}%`;
+  $("#shortlist-human-tier").value = entry.effectiveTier;
+  $("#shortlist-edit-raw").checked = entry.editRaw;
+  $("#shortlist-reviewed").checked = entry.humanReviewed;
+  $("#shortlist-note").value = entry.humanNote;
+  const compatible = !state.shortlistReview?.stale;
+  for (const control of [
+    $("#shortlist-human-tier"), $("#shortlist-edit-raw"),
+    $("#shortlist-reviewed"), $("#shortlist-note"),
+    $("#save-shortlist-review"), $("#save-shortlist-next"),
+  ]) control.disabled = !compatible;
+  $("#undo-shortlist-review").disabled =
+    !compatible || !state.shortlistReview?.history?.length;
+  $("#previous-shortlist").disabled = position <= 0;
+  $("#next-shortlist").disabled =
+    position < 0 || position >= state.shortlistVisible.length - 1;
+  const assessment = $("#shortlist-assessment");
+  assessment.replaceChildren();
+  for (const [field, label] of Object.entries(professionalAssessmentLabels)) {
+    const card = document.createElement("article");
+    card.className = "professional-assessment-card";
+    const heading = document.createElement("h4");
+    heading.textContent = label;
+    const text = document.createElement("p");
+    text.textContent = entry.assessment?.[field] || "Not assessed.";
+    card.append(heading, text);
+    assessment.append(card);
+  }
+  const warnings = $("#shortlist-warnings");
+  warnings.replaceChildren();
+  for (const message of entry.warnings || []) {
+    const item = document.createElement("div");
+    item.className = "alert";
+    item.textContent = message;
+    warnings.append(item);
+  }
+  $("#shortlist-raw-json").textContent = JSON.stringify(source, null, 2);
+  focusPreviews([entry.photo], [], "detail");
+}
+
+function showShortlistEntry(photo) {
+  if (!state.shortlistVisible.some((entry) => entry.photo === photo)) return;
+  state.activeShortlistPhoto = photo;
+  renderShortlistList();
+  renderShortlistDetail();
+  requestAnimationFrame(() => {
+    document.querySelector(
+      `.shortlist-item[data-photo="${CSS.escape(photo)}"]`)
+      ?.scrollIntoView({block: "nearest"});
+  });
+}
+
+function renderShortlistWorkspace() {
+  if (!state.shortlist) {
+    $("#shortlist-empty").hidden = false;
+    $("#shortlist-detail").hidden = true;
+    $("#shortlist-list").replaceChildren();
+    return;
+  }
+  const statistics = state.shortlist.statistics || {};
+  $("#shortlist-summary").textContent =
+    `${state.shortlist.entries.length} assessed · ${
+      statistics.raw_available || 0} with RAW · ${
+      state.shortlistReview?.summary?.reviewed || 0} human reviewed`;
+  renderShortlistList();
+  if (!state.shortlistVisible.some(
+    (entry) => entry.photo === state.activeShortlistPhoto
+  )) {
+    state.activeShortlistPhoto = state.shortlistVisible[0]?.photo || null;
+  }
+  if (!state.shortlistVisible.length) {
+    $("#shortlist-empty").hidden = false;
+    $("#shortlist-empty-message").textContent =
+      "No photographs match the current professional-shortlist filters.";
+    $("#shortlist-detail").hidden = true;
+  } else {
+    renderShortlistDetail();
+  }
+}
+
+async function loadProfessionalShortlist() {
+  try {
+    const response = await fetch("/api/shortlist");
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Could not load shortlist");
+    if (!payload.available) {
+      state.shortlist = null;
+      state.shortlistReview = null;
+      state.shortlistDefaultPath = payload.default_path || "";
+      $("#shortlist-nav-count").hidden = true;
+      $("#shortlist-summary").textContent = "No shortlist artifact is loaded.";
+      $("#shortlist-empty-message").textContent =
+        `Expected location: ${payload.default_path}`;
+      return;
+    }
+    state.shortlist = payload.shortlist;
+    state.shortlistReview = payload.review;
+    state.shortlistDefaultPath = payload.shortlist_path;
+    const count = $("#shortlist-nav-count");
+    count.textContent = String(payload.shortlist.entries.length);
+    count.hidden = false;
+    state.activeShortlistPhoto ||= payload.shortlist.entries[0]?.photo || null;
+    renderShortlistWorkspace();
+  } catch (error) {
+    $("#shortlist-summary").textContent = error.message;
+    $("#shortlist-empty-message").textContent = error.message;
+  }
+}
+
+function navigateShortlist(delta) {
+  const index = state.shortlistVisible.findIndex(
+    (entry) => entry.photo === state.activeShortlistPhoto);
+  const target = state.shortlistVisible[index + delta];
+  if (target) showShortlistEntry(target.photo);
+}
+
+async function saveShortlistReview(advance = false) {
+  const entry = activeShortlistEntry();
+  if (!entry || !state.shortlistReview) return;
+  try {
+    const payload = await operationalPost("/api/shortlist/review", {
+      photo: entry.photo,
+      tier: $("#shortlist-human-tier").value,
+      edit_raw: $("#shortlist-edit-raw").checked,
+      reviewed: $("#shortlist-reviewed").checked,
+      note: $("#shortlist-note").value,
+      revision: state.shortlistReview.revision,
+    });
+    state.shortlistReview = payload;
+    setSaveStatus("Professional shortlist decision saved");
+    renderShortlistWorkspace();
+    if (advance) navigateShortlist(1);
+  } catch (error) {
+    setSaveStatus(error.message, "error");
+    if (error.message.toLowerCase().includes("reload")) {
+      await loadProfessionalShortlist();
+    }
+  }
+}
+
+async function undoShortlistReview() {
+  if (!state.shortlistReview) return;
+  try {
+    state.shortlistReview = await operationalPost("/api/shortlist/undo", {
+      revision: state.shortlistReview.revision,
+    });
+    setSaveStatus("Professional shortlist change undone");
+    renderShortlistWorkspace();
+  } catch (error) {
+    setSaveStatus(error.message, "error");
+  }
+}
+
+function professionalJobForCurrentReport(jobs) {
+  const reportPath = state.payload?.report_path;
+  return [...(jobs || [])].reverse().find(
+    (job) => job.kind === "professional_shortlist"
+      && job.report === reportPath) || null;
+}
+
+function renderShortlistJob(job) {
+  const panel = $("#shortlist-job-status");
+  if (!job) {
+    panel.hidden = true;
+    return;
+  }
+  panel.hidden = false;
+  const presentation = jobStatusPresentation[job.status] || {
+    label: job.status, stage: job.message || "", tone: "",
+  };
+  $("#shortlist-job-title").textContent =
+    `Assessment · ${presentation.label}`;
+  $("#shortlist-job-message").textContent =
+    job.message || presentation.stage;
+  const progress = job.progress || {};
+  const total = Number(progress.total_items || progress.total_clusters || 0);
+  const completed = Number(
+    progress.completed_items || progress.completed_clusters || 0);
+  $("#shortlist-job-progress").max = Math.max(1, total);
+  $("#shortlist-job-progress").value = completed;
+  $("#shortlist-job-progress-text").textContent = total
+    ? `${completed} of ${total} photographs assessed · ${
+      Math.round(completed / total * 100)}%`
+    : job.status === "queued"
+      ? "Preparing selected photographs…"
+      : "Discovering assessment candidates…";
+  $("#start-shortlist-assessment").disabled =
+    ["queued", "running", "stopping", "detached"].includes(job.status);
+}
+
+async function monitorShortlistJob() {
+  clearTimeout(state.shortlistJobPoll);
+  try {
+    const response = await fetch("/api/jobs");
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Queue is unavailable");
+    const job = professionalJobForCurrentReport(payload.jobs);
+    renderShortlistJob(job);
+    if (!job) return;
+    if (job.status === "completed" && state.shortlistLoadedJobId !== job.id) {
+      const loaded = await operationalPost("/api/shortlist/load", {
+        path: job.output,
+      });
+      state.shortlist = loaded.shortlist;
+      state.shortlistReview = loaded.review;
+      state.shortlistLoadedJobId = job.id;
+      state.activeShortlistPhoto =
+        loaded.shortlist.entries[0]?.photo || null;
+      const count = $("#shortlist-nav-count");
+      count.textContent = String(loaded.shortlist.entries.length);
+      count.hidden = false;
+      renderShortlistWorkspace();
+      setSaveStatus("Professional shortlist is ready");
+    }
+    if (["queued", "running", "stopping", "detached"].includes(job.status)) {
+      state.shortlistJobPoll = setTimeout(monitorShortlistJob, 1000);
+    }
+  } catch (error) {
+    renderShortlistJob(null);
+    $("#start-shortlist-assessment").disabled = true;
+    $("#start-shortlist-assessment").title = error.message;
+  }
+}
+
+function providerTrustText(profile) {
+  if (!profile) return "Choose a configured provider profile.";
+  if (profile.privacy === "local") {
+    return "Local provider: observed previews remain on this Mac or your configured local endpoint.";
+  }
+  if (profile.privacy === "remote-zdr") {
+    return "Remote Zero Data Retention profile: generated previews leave this Mac for the configured vision models.";
+  }
+  return "Remote provider: review its retention, privacy, and cost policy before starting.";
+}
+
+async function openShortlistGenerator() {
+  const dialog = $("#shortlist-generate-dialog");
+  $("#shortlist-source-report").textContent = state.payload.report_path;
+  $("#shortlist-source-photos").textContent = state.payload.photos_root;
+  const savedReviewPath = Number(state.review?.revision || 0) > 0
+    ? state.review.path : "";
+  $("#shortlist-source-review").textContent =
+    savedReviewPath || "No saved human review; AI selections will be used";
+  const defaultOutput = state.shortlistDefaultPath || `${state.payload.report_path
+    .replace(/\.json$/i, "")}.professional-shortlist.json`;
+  const timestamp = new Date().toISOString()
+    .replace(/[-:]/g, "").replace(/\..+$/, "").replace("T", "-");
+  $("#shortlist-generate-output").value = state.shortlist
+    ? defaultOutput.replace(
+      /\.json$/i, `.reassessment-${timestamp}.json`)
+    : defaultOutput;
+  $("#shortlist-generate-error").replaceChildren();
+  const select = $("#shortlist-generate-provider");
+  select.replaceChildren();
+  $("#submit-shortlist-generate").disabled = true;
+  try {
+    const response = await fetch("/api/providers");
+    const payload = await response.json();
+    if (!response.ok) throw new Error(
+      payload.error || "Provider profiles are unavailable");
+    state.providers = payload;
+    for (const profile of payload.profiles || []) {
+      const option = document.createElement("option");
+      option.value = profile.id;
+      option.textContent = `${profile.name} · ${profile.kind}`;
+      select.append(option);
+    }
+    if (!select.options.length) {
+      const option = document.createElement("option");
+      option.value = "";
+      option.textContent = "Configure a provider in Queue first";
+      select.append(option);
+      throw new Error(
+        "No AI provider profile exists. Open Queue → Provider profiles and configure OpenRouter, Ollama, or another endpoint.");
+    }
+    $("#submit-shortlist-generate").disabled = false;
+    $("#shortlist-generate-trust").textContent =
+      providerTrustText(payload.profiles.find(
+        (profile) => profile.id === select.value));
+  } catch (error) {
+    const message = document.createElement("div");
+    message.className = "alert fallback";
+    message.textContent = error.message;
+    $("#shortlist-generate-error").append(message);
+  }
+  dialog.showModal();
+}
+
+async function submitShortlistAssessment() {
+  const button = $("#submit-shortlist-generate");
+  try {
+    button.disabled = true;
+    button.textContent = "Adding to Queue…";
+    const payload = await operationalPost("/api/jobs/add-professional", {
+      report: state.payload.report_path,
+      photos: state.payload.photos_root,
+      review: Number(state.review?.revision || 0) > 0
+        ? state.review.path : "",
+      output: $("#shortlist-generate-output").value,
+      policy: $("#shortlist-generate-policy").value,
+      profile: $("#shortlist-generate-profile").value,
+      provider_profile_id: $("#shortlist-generate-provider").value,
+    });
+    $("#shortlist-generate-dialog").close();
+    renderShortlistJob(professionalJobForCurrentReport(payload.jobs));
+    setSaveStatus("Professional assessment added to Queue");
+    monitorShortlistJob();
+  } catch (error) {
+    const alerts = $("#shortlist-generate-error");
+    alerts.replaceChildren();
+    const message = document.createElement("div");
+    message.className = "alert fallback";
+    message.textContent = error.message;
+    alerts.append(message);
+  } finally {
+    button.disabled = false;
+    button.textContent = "Add to Queue";
+  }
+}
+
 function bindEvents() {
+  $("#review-nav-button").addEventListener(
+    "click", () => switchWorkspace("review"));
+  $("#shortlist-nav-button").addEventListener(
+    "click", () => switchWorkspace("professional"));
+  $("#start-shortlist-assessment").addEventListener(
+    "click", openShortlistGenerator);
+  $("#empty-start-shortlist-assessment").addEventListener(
+    "click", openShortlistGenerator);
+  $("#close-shortlist-generate").addEventListener(
+    "click", () => $("#shortlist-generate-dialog").close());
+  $("#cancel-shortlist-generate").addEventListener(
+    "click", () => $("#shortlist-generate-dialog").close());
+  $("#submit-shortlist-generate").addEventListener(
+    "click", submitShortlistAssessment);
+  $("#shortlist-generate-provider").addEventListener("change", (event) => {
+    const profile = state.providers?.profiles?.find(
+      (item) => item.id === event.target.value);
+    $("#shortlist-generate-trust").textContent = providerTrustText(profile);
+  });
+  $("#open-shortlist-queue").addEventListener("click", () => {
+    $("#jobs-dialog").showModal();
+    refreshJobs();
+  });
+  $("#shortlist-search").addEventListener("input", (event) => {
+    state.shortlistQuery = event.target.value.trim();
+    renderShortlistWorkspace();
+  });
+  for (const id of [
+    "#shortlist-tier-filter", "#shortlist-raw-filter",
+    "#shortlist-review-filter",
+  ]) {
+    $(id).addEventListener("change", renderShortlistWorkspace);
+  }
+  $("#previous-shortlist").addEventListener(
+    "click", () => navigateShortlist(-1));
+  $("#next-shortlist").addEventListener(
+    "click", () => navigateShortlist(1));
+  $("#shortlist-open-viewer").addEventListener("click", () => {
+    const entry = activeShortlistEntry();
+    if (entry) openViewer([entry.photo], [entry.photo]);
+  });
+  $("#open-origin-cluster").addEventListener("click", () => {
+    const entry = activeShortlistEntry();
+    if (!entry) return;
+    switchWorkspace("review");
+    showCluster(entry.cluster_id);
+  });
+  $("#save-shortlist-review").addEventListener(
+    "click", () => saveShortlistReview(false));
+  $("#save-shortlist-next").addEventListener(
+    "click", () => saveShortlistReview(true));
+  $("#undo-shortlist-review").addEventListener(
+    "click", undoShortlistReview);
   $("#search").addEventListener("input", (event) => {
     state.query = event.target.value.trim();
     state.clusterWindowStart = 0;
@@ -2653,6 +3319,7 @@ function bindEvents() {
       renderSelectionPolicy();
       renderOperationRisk();
       $("#organize").showModal();
+      refreshRecoverableOperations(false);
     });
   $("#close-organize").addEventListener(
     "click", () => $("#organize").close());
@@ -2662,6 +3329,9 @@ function bindEvents() {
   });
   $("#export-policy").addEventListener("change", renderSelectionPolicy);
   $("#operation-action").addEventListener("change", renderOperationRisk);
+  $("#operation-scope").addEventListener("change", renderOperationRisk);
+  $("#pick-operation-destination").addEventListener(
+    "click", pickOperationDestination);
   $("#download-xmp").addEventListener("click", downloadXmp);
   $("#run-preflight").addEventListener("click", runPreflight);
   $("#operation-confirmation").addEventListener("input", (event) => {
@@ -2756,6 +3426,42 @@ function bindEvents() {
       toggleShortcuts();
       return;
     }
+    if (state.workspaceMode === "professional") {
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        navigateShortlist(-1);
+        return;
+      }
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        navigateShortlist(1);
+        return;
+      }
+      if (event.key.toLowerCase() === "e") {
+        event.preventDefault();
+        $("#shortlist-edit-raw").checked =
+          !$("#shortlist-edit-raw").checked;
+        return;
+      }
+      const tiers = [
+        "exceptional", "strong", "promising", "ordinary", "reject"];
+      const tierIndex = Number(event.key) - 1;
+      if (tierIndex >= 0 && tierIndex < tiers.length) {
+        event.preventDefault();
+        $("#shortlist-human-tier").value = tiers[tierIndex];
+        return;
+      }
+      if (event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        void saveShortlistReview(false);
+        return;
+      }
+      if (event.key.toLowerCase() === "z") {
+        event.preventDefault();
+        void undoShortlistReview();
+      }
+      return;
+    }
     if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
       event.preventDefault();
       navigate(-1);
@@ -2810,6 +3516,16 @@ function bindEvents() {
       $("#undo-review").click();
     }
   });
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && state.operationId) {
+      monitorOperation(state.operationId);
+    }
+    if (!document.hidden && state.activeClusterId) {
+      const cluster = state.clusters.find(
+        (item) => item.cluster_id === state.activeClusterId);
+      if (cluster) focusPreviews(cluster.photos, [], "thumb");
+    }
+  });
 }
 
 async function initialize() {
@@ -2824,6 +3540,8 @@ async function initialize() {
     state.decisions = new Map(
       state.payload.report.keep.map((item) => [item.cluster_id, item]),
     );
+    await loadProfessionalShortlist();
+    monitorShortlistJob();
     renderSummary();
     renderClusterList();
     renderDetails();
@@ -2846,6 +3564,7 @@ async function initialize() {
     const initial = state.clusters.some((item) => item.cluster_id === resumeId)
       ? resumeId : state.clusters[0]?.cluster_id;
     if (initial) showCluster(initial);
+    refreshRecoverableOperations(true);
     refreshPeople(false);
   } catch (error) {
     $("#report-status").textContent = "Could not load report";

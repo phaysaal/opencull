@@ -13,10 +13,12 @@ MODELS = ROOT / ".opencull-models"
 datas = [
     (str(ROOT / "opencull_gui" / "static"), "opencull_gui/static"),
     (str(ROOT / "opencull.kim"), "."),
+    (str(ROOT / "professional_shortlist.kim"), "."),
     (str(ROOT / "agents.kim"), "."),
     # Kimiya hashes and loads these as explicit audited source extensions.
     (str(ROOT / "scan.py"), "."),
     (str(ROOT / "opencull_kernel.py"), "."),
+    (str(ROOT / "shortlist_kernel.py"), "."),
     (str(ROOT / "README.md"), "."),
     (str(ROOT / "LICENSE"), "."),
 ]
@@ -25,7 +27,10 @@ if MODELS.is_dir():
 
 hiddenimports = (
     collect_submodules("kimiya")
-    + ["scan", "opencull_kernel", "cv2", "PIL._tkinter_finder"]
+    + [
+        "scan", "opencull_kernel", "shortlist_kernel",
+        "cv2", "PIL._tkinter_finder",
+    ]
 )
 
 a = Analysis(

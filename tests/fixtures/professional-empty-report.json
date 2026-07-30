@@ -1,0 +1,20 @@
+{
+  "format": "opencull-report-v2",
+  "manifest_sha256": "empty-professional-runtime-fixture",
+  "clusters": [
+    {
+      "cluster_id": "group-0001",
+      "photos": [
+        "not-present.JPG"
+      ]
+    }
+  ],
+  "keep": [
+    {
+      "cluster_id": "group-0001",
+      "photos": [],
+      "rationale": "No selected candidates in runtime fixture."
+    }
+  ],
+  "warnings": []
+}

@@ -32,7 +32,8 @@ POLICIES = {
     "human_only", "effective", "require_all", "ai_only", "modified_only",
 }
 LAYOUTS = {"opensull", "selected_by_cluster", "cluster_inspection"}
-ACTIONS = {"copy", "move"}
+ACTIONS = {"copy", "move", "trash"}
+SELECTION_SCOPES = {"selected", "unselected", "all"}
 
 
 class ActionError(ValueError):
@@ -177,29 +178,53 @@ def _destination_for(
         return root / relative
     cluster = root / f"cluster-{cluster_number:04d}"
     if layout == "selected_by_cluster":
-        return cluster / "selected" / relative
+        category = "selected" if selected else "not-selected"
+        return cluster / category / relative
     category = "selected" if selected else "not-selected"
     return cluster / category / relative
+
+
+def _trash_root_for(source: Path, batch_name: str) -> Path:
+    """Return the recoverable macOS Trash directory on the source volume."""
+    resolved = source.resolve()
+    parts = resolved.parts
+    if len(parts) >= 3 and parts[1] == "Volumes":
+        return Path("/Volumes") / parts[2] / ".Trashes" / str(os.getuid()) / batch_name
+    return Path.home() / ".Trash" / batch_name
 
 
 def build_plan(
     report: ReportIndex,
     reviews: ReviewStore,
     photos: PhotoStore,
-    destination: Path,
+    destination: Path | None,
     policy: str,
     action: str,
     layout: str,
     preserve_relative: bool = False,
     include_companions: bool = False,
+    selection_scope: str | None = None,
 ) -> dict[str, Any]:
     if action not in ACTIONS:
         raise ActionError(f"unsupported action: {action}")
     if layout not in LAYOUTS:
         raise ActionError(f"unsupported layout: {layout}")
-    destination = destination.expanduser().resolve()
-    if destination == photos.root:
-        raise ActionError("destination cannot be the photo root itself")
+    if selection_scope is None:
+        selection_scope = "all" if layout == "cluster_inspection" else "selected"
+    if selection_scope not in SELECTION_SCOPES:
+        raise ActionError(f"unsupported selection scope: {selection_scope}")
+    if action == "trash" and selection_scope != "unselected":
+        raise ActionError("Trash operations are limited to unselected photographs")
+    if action != "trash":
+        if destination is None:
+            raise ActionError("destination is required")
+        destination = destination.expanduser().resolve()
+        if destination == photos.root:
+            raise ActionError("destination cannot be the photo root itself")
+    review_revision = reviews.public_state()["revision"]
+    trash_token = hashlib.sha256(
+        f"{report.path}:{review_revision}".encode()).hexdigest()[:8]
+    trash_batch = f"OpenCull-{report.path.stem}-{trash_token}"
     selected_clusters = policy_clusters(reviews, policy)
     items = []
     destination_names: set[str] = set()
@@ -225,9 +250,14 @@ def build_plan(
         except PhotoError:
             missing.append(name)
             return
-        target = _destination_for(
-            destination, layout, cluster_number, name, selected,
-            preserve_relative)
+        relative = Path(name) if preserve_relative else Path(name).name
+        target = (
+            _trash_root_for(source, trash_batch) / relative
+            if action == "trash"
+            else _destination_for(
+                destination, layout, cluster_number, name, selected,
+                preserve_relative)
+        )
         target_key = os.path.normcase(str(target))
         if target_key in destination_names or target.exists():
             collisions.append(str(target))
@@ -248,10 +278,13 @@ def build_plan(
 
     for number, cluster in enumerate(selected_clusters, start=1):
         selected = set(cluster["keepers"])
-        names = (
-            cluster["photos"] if layout == "cluster_inspection"
-            else cluster["keepers"]
-        )
+        if selection_scope == "selected":
+            names = cluster["keepers"]
+        elif selection_scope == "unselected":
+            names = [
+                name for name in cluster["photos"] if name not in selected]
+        else:
+            names = cluster["photos"]
         for name in names:
             add_item(number, cluster["cluster_id"], name, name in selected)
             if include_companions and Path(name).suffix.lower() in PAIR_EXTENSIONS:
@@ -272,7 +305,11 @@ def build_plan(
                                 number, cluster["cluster_id"], companion_name,
                                 name in selected, True)
 
-    free_bytes = shutil.disk_usage(_nearest_existing(destination)).free
+    free_bytes = min(
+        (shutil.disk_usage(_nearest_existing(Path(item["destination"]))).free
+         for item in items),
+        default=0,
+    )
     errors = []
     if missing:
         errors.append(f"{len(missing)} source photographs are missing")
@@ -285,18 +322,22 @@ def build_plan(
     plan_core = {
         "format": PLAN_FORMAT,
         "report_sha256": report.sha256,
-        "review_revision": reviews.public_state()["revision"],
+        "review_revision": review_revision,
         "created_at": _now(),
         "policy": policy,
         "action": action,
         "layout": layout,
-        "destination": str(destination),
+        "destination": (
+            "macOS Trash" if action == "trash" else str(destination)),
+        "selection_scope": selection_scope,
         "preserve_relative": bool(preserve_relative),
         "include_companions": bool(include_companions),
         "items": items,
         "summary": {
             "files": len(items),
             "selected_files": sum(item["selected"] for item in items),
+            "unselected_files": sum(
+                not item["selected"] for item in items),
             "companion_files": sum(item["companion"] for item in items),
             "bytes": total_bytes,
             "free_bytes": free_bytes,
@@ -310,7 +351,12 @@ def build_plan(
     }
     signature = hashlib.sha256(json.dumps(
         plan_core, sort_keys=True).encode()).hexdigest()
-    return {**plan_core, "plan_id": signature[:20], "signature": signature}
+    return {
+        **plan_core,
+        "plan_id": signature[:20],
+        "signature": signature,
+        "confirmation_code": f"{int(signature[:8], 16) % 10000:04d}",
+    }
 
 
 def default_journal_path(report: ReportIndex, plan: dict[str, Any]) -> Path:
@@ -432,7 +478,7 @@ class Operation:
             if source_hash != destination_hash:
                 raise ActionError(f"hash verification failed: {source.name}")
             os.replace(temporary, destination)
-            if self.plan["action"] == "move":
+            if self.plan["action"] in {"move", "trash"}:
                 source.unlink()
         except Exception:
             temporary.unlink(missing_ok=True)
@@ -449,8 +495,9 @@ class Operation:
 
     def rollback_move(self) -> None:
         with self._lock:
-            if self.plan["action"] != "move":
-                raise ActionError("rollback is available only for move operations")
+            if self.plan["action"] not in {"move", "trash"}:
+                raise ActionError(
+                    "rollback is available only for move or Trash operations")
             if self._thread and self._thread.is_alive():
                 raise ActionError("cannot rollback while operation is running")
             self.journal["rollback"] = {
@@ -702,20 +749,81 @@ class ActionController:
         self.plans: dict[str, dict[str, Any]] = {}
         self.operations: dict[str, Operation | ContactSheetOperation] = {}
 
+    def recoverable_journals(self) -> list[dict[str, Any]]:
+        """Return validated incomplete journals belonging to this report."""
+        journals = []
+        pattern = f"{self.report.path.stem}.*.operation.json"
+        for path in sorted(
+            self.report.path.parent.glob(pattern),
+            key=lambda candidate: candidate.stat().st_mtime,
+            reverse=True,
+        ):
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                plan = data.get("plan")
+                if (
+                    data.get("format") != JOURNAL_FORMAT
+                    or not isinstance(plan, dict)
+                    or data.get("plan_signature") != plan.get("signature")
+                    or data.get("plan_id") != plan.get("plan_id")
+                    or data.get("status") not in {
+                        "planned", "running", "paused", "failed"}
+                ):
+                    continue
+                plan_core = {
+                    key: value for key, value in plan.items()
+                    if key not in {
+                        "plan_id", "signature", "confirmation_code"}
+                }
+                signature = hashlib.sha256(json.dumps(
+                    plan_core, sort_keys=True).encode()).hexdigest()
+                if (
+                    signature != plan.get("signature")
+                    or signature[:20] != plan.get("plan_id")
+                ):
+                    continue
+                total = len(data.get("items", []))
+                completed = sum(
+                    item.get("status") == "completed"
+                    for item in data.get("items", [])
+                    if isinstance(item, dict)
+                )
+                journals.append({
+                    "plan_id": plan["plan_id"],
+                    "journal_path": str(path.resolve()),
+                    "status": (
+                        "interrupted"
+                        if data.get("status") == "running"
+                        else data.get("status")
+                    ),
+                    "action": plan.get("action"),
+                    "destination": plan.get("destination"),
+                    "completed_files": completed,
+                    "total_files": total,
+                    "remaining_files": max(0, total - completed),
+                    "error": str(data.get("error", "")),
+                    "updated_at": data.get("updated_at"),
+                })
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                continue
+        return journals
+
     def preflight(self, **options: Any) -> dict[str, Any]:
+        action = str(options.get("action", "copy"))
         destination_text = str(options.get("destination", "")).strip()
-        if not destination_text:
+        if action != "trash" and not destination_text:
             raise ActionError("destination is required")
         plan = build_plan(
             self.report,
             self.reviews,
             self.photos,
-            destination=Path(destination_text),
+            destination=Path(destination_text) if destination_text else None,
             policy=str(options.get("policy", "human_only")),
-            action=str(options.get("action", "copy")),
+            action=action,
             layout=str(options.get("layout", "opensull")),
             preserve_relative=bool(options.get("preserve_relative", False)),
             include_companions=bool(options.get("include_companions", False)),
+            selection_scope=str(options.get("selection_scope", "selected")),
         )
         with self._lock:
             self.plans[plan["plan_id"]] = plan
@@ -732,12 +840,10 @@ class ActionController:
             if current_revision != plan["review_revision"]:
                 raise ActionError(
                     "human review changed after preflight; create a new plan")
-            expected = (
-                f"MOVE {plan_id}" if plan["action"] == "move"
-                else f"COPY {plan_id}"
-            )
+            expected = str(plan.get("confirmation_code", ""))
             if confirmation != expected:
-                raise ActionError(f"confirmation must exactly equal: {expected}")
+                raise ActionError(
+                    f"confirmation must be the four-digit code: {expected}")
             operation = self.operations.get(plan_id)
             if operation is None:
                 operation = Operation(

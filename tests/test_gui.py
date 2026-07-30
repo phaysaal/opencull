@@ -5,6 +5,7 @@ import threading
 import time
 import unittest
 import zipfile
+from unittest.mock import patch
 from io import BytesIO
 import sys
 import os
@@ -16,10 +17,12 @@ from PIL import Image
 import numpy as np
 
 from opencull_gui.actions import (
+    ActionController,
     ActionError,
     Operation,
     build_plan,
     create_contact_sheets,
+    default_journal_path,
     export_bytes,
     policy_clusters,
 )
@@ -482,6 +485,7 @@ class GuiActionTests(unittest.TestCase):
                 "human_only", "copy", "opensull")
             self.assertTrue(plan["summary"]["errors"])
             self.assertEqual(len(plan["summary"]["collisions"]), 1)
+            self.assertRegex(plan["confirmation_code"], r"^\d{4}$")
 
     def test_verified_copy_and_move_rollback(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -519,6 +523,68 @@ class GuiActionTests(unittest.TestCase):
             self.assertEqual(
                 move_op.public()["rollback"]["status"], "completed")
 
+    def test_move_unselected_only(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            report, photos, reviews = self.make_context(root)
+            reviews.update_cluster(
+                "group-0001", ["A.JPG"], "", True, 0)
+            plan = build_plan(
+                report, reviews, photos, root / "unselected",
+                "human_only", "move", "opensull",
+                selection_scope="unselected")
+            self.assertEqual(
+                [item["source_name"] for item in plan["items"]], ["B.JPG"])
+            self.assertEqual(plan["summary"]["selected_files"], 0)
+            self.assertEqual(plan["summary"]["unselected_files"], 1)
+            operation = Operation(plan, root / "unselected.operation.json")
+            operation.start()
+            self.assertEqual(
+                self.wait_operation(operation)["status"], "completed")
+            self.assertTrue((photos.root / "A.JPG").exists())
+            self.assertFalse((photos.root / "B.JPG").exists())
+            self.assertTrue((root / "unselected" / "B.JPG").exists())
+
+    def test_trash_unselected_is_verified_and_rollbackable(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            report, photos, reviews = self.make_context(root)
+            reviews.update_cluster(
+                "group-0001", ["A.JPG"], "", True, 0)
+            fake_trash = root / "Trash"
+            with patch(
+                "opencull_gui.actions._trash_root_for",
+                side_effect=lambda _source, batch: fake_trash / batch,
+            ):
+                plan = build_plan(
+                    report, reviews, photos, None,
+                    "human_only", "trash", "opensull",
+                    selection_scope="unselected")
+            self.assertEqual(plan["destination"], "macOS Trash")
+            self.assertEqual(
+                [item["source_name"] for item in plan["items"]], ["B.JPG"])
+            operation = Operation(plan, root / "trash.operation.json")
+            operation.start()
+            self.assertEqual(
+                self.wait_operation(operation)["status"], "completed")
+            trashed = Path(plan["items"][0]["destination"])
+            self.assertFalse((photos.root / "B.JPG").exists())
+            self.assertTrue(trashed.exists())
+            operation.rollback_move()
+            self.assertTrue((photos.root / "B.JPG").exists())
+            self.assertFalse(trashed.exists())
+
+    def test_trash_refuses_selected_scope(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            report, photos, reviews = self.make_context(root)
+            with self.assertRaisesRegex(
+                    ActionError, "limited to unselected"):
+                build_plan(
+                    report, reviews, photos, None,
+                    "effective", "trash", "opensull",
+                    selection_scope="selected")
+
     def test_resume_finishes_pending_journal_items(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -538,6 +604,28 @@ class GuiActionTests(unittest.TestCase):
             state = self.wait_operation(resumed)
             self.assertEqual(state["status"], "completed")
             self.assertEqual(state["completed_files"], 2)
+
+    def test_controller_discovers_only_valid_incomplete_report_journals(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            report, photos, reviews = self.make_context(root)
+            reviews.update_cluster(
+                "group-0001", ["A.JPG", "B.JPG"], "", True, 0)
+            plan = build_plan(
+                report, reviews, photos, root / "resume",
+                "human_only", "move", "opensull")
+            journal = default_journal_path(report, plan)
+            operation = Operation(plan, journal)
+            operation._execute_item(operation.journal["items"][0])
+            operation.journal["status"] = "running"
+            operation._save()
+            controller = ActionController(report, reviews, photos)
+            found = controller.recoverable_journals()
+            self.assertEqual(len(found), 1)
+            self.assertEqual(found[0]["plan_id"], plan["plan_id"])
+            self.assertEqual(found[0]["status"], "interrupted")
+            self.assertEqual(found[0]["completed_files"], 1)
+            self.assertEqual(found[0]["remaining_files"], 1)
 
     def test_companion_and_cluster_inspection_layout(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -832,7 +920,10 @@ class GuiProviderTests(unittest.TestCase):
         project = root / "opencull"
         project.mkdir(parents=True)
         source = Path(__file__).resolve().parents[1]
-        for name in ("opencull.kim", "scan.py", "opencull_kernel.py"):
+        for name in (
+            "opencull.kim", "scan.py", "opencull_kernel.py",
+            "professional_shortlist.kim", "shortlist_kernel.py",
+        ):
             (project / name).write_bytes((source / name).read_bytes())
         keychain = FakeKeychain()
         return ProviderStore(root / "providers.json", project, keychain), keychain
@@ -856,6 +947,23 @@ class GuiProviderTests(unittest.TestCase):
             agents = Path(manifest["agents_path"]).read_text()
             self.assertIn("key_env", agents)
             self.assertIn("zdr      = true", agents)
+
+    def test_materializes_professional_program_without_credentials(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            store, _ = self.make_store(root)
+            saved = store.save(provider_data(), 0, "private-token")
+            profile = saved["profiles"][0]
+            manifest = store.materialize(
+                "professional1", profile["id"],
+                "professional_shortlist.kim")
+            self.assertEqual(
+                manifest["program_name"], "professional_shortlist.kim")
+            program = Path(manifest["program_path"]).read_text(encoding="utf-8")
+            self.assertIn(
+                str((root / "opencull" / "shortlist_kernel.py").resolve()),
+                program)
+            self.assertNotIn("private-token", program)
 
     def test_validates_endpoint_and_revision_conflicts(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1008,6 +1116,38 @@ class GuiDesignFoundationTests(unittest.TestCase):
         self.assertIn('id="review-workspace"', self.html)
         self.assertIn('aria-label="Review status and actions"', self.html)
 
+    def test_professional_shortlist_workspace_contract(self):
+        for identifier in (
+            "shortlist-nav-button", "professional-workspace",
+            "shortlist-list", "shortlist-tier-filter",
+            "shortlist-raw-filter", "shortlist-review-filter",
+            "shortlist-human-tier", "shortlist-edit-raw",
+            "save-shortlist-review", "save-shortlist-next",
+            "shortlist-assessment", "open-origin-cluster",
+            "start-shortlist-assessment", "shortlist-generate-dialog",
+            "shortlist-generate-policy", "shortlist-generate-provider",
+            "submit-shortlist-generate", "shortlist-job-progress",
+        ):
+            self.assertIn(f'id="{identifier}"', self.html)
+        for contract in (
+            'fetch("/api/shortlist")',
+            '"/api/shortlist/review"',
+            '"/api/shortlist/undo"',
+            "function renderShortlistWorkspace()",
+            "function navigateShortlist(delta)",
+            'state.workspaceMode === "professional"',
+            'event.key.toLowerCase() === "e"',
+            '"/api/jobs/add-professional"',
+            "async function monitorShortlistJob()",
+            'operationalPost("/api/shortlist/load"',
+        ):
+            self.assertIn(contract, self.javascript)
+        self.assertIn(".professional-workspace", self.css)
+        self.assertIn("#professional-workspace[hidden]", self.css)
+        self.assertIn("display: none !important", self.css)
+        self.assertIn(".professional-assessment-grid", self.css)
+        self.assertIn("Keep RAW for professional editing", self.html)
+
     def test_dom_ids_are_unique_and_javascript_contract_is_present(self):
         html_ids = re.findall(r'\bid="([^"]+)"', self.html)
         self.assertEqual(len(html_ids), len(set(html_ids)))
@@ -1023,6 +1163,20 @@ class GuiDesignFoundationTests(unittest.TestCase):
         self.assertIn(":focus-visible", self.css)
         self.assertIn("@media (prefers-reduced-motion: reduce)", self.css)
         self.assertIn("dialog::backdrop", self.css)
+
+    def test_custom_close_glyph_is_centered_inside_its_circle(self):
+        close_rule = re.search(
+            r"\.close-button \{(?P<body>.*?)\}",
+            self.css,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(close_rule)
+        rules = self.css[self.css.rfind(".close-button {"):]
+        for declaration in (
+            "display: inline-flex", "align-items: center",
+            "justify-content: center", "line-height: 1", "padding: 0",
+        ):
+            self.assertIn(declaration, rules)
 
     def test_phase2_review_workspace_exposes_progress_density_and_comparison(self):
         for identifier in (
@@ -1071,6 +1225,56 @@ class GuiDesignFoundationTests(unittest.TestCase):
             "cluster.photos[number - 1] && !event.repeat", self.javascript)
         self.assertIn(
             "A accepts the AI recommendation and advances", self.html)
+
+    def test_delivery_destination_has_native_folder_chooser(self):
+        self.assertIn('id="pick-operation-destination"', self.html)
+        self.assertIn("async function pickOperationDestination()", self.javascript)
+        self.assertIn('"/api/action/pick-destination"', self.javascript)
+        self.assertIn(
+            '"click", pickOperationDestination', self.javascript)
+
+    def test_delivery_auto_detects_interrupted_operation_journals(self):
+        for identifier in (
+            "recovery-operation-status", "recoverable-operations",
+        ):
+            self.assertIn(f'id="{identifier}"', self.html)
+        self.assertIn(
+            "async function refreshRecoverableOperations(", self.javascript)
+        self.assertIn('fetch("/api/action/recovery")', self.javascript)
+        self.assertIn(
+            "async function resumeDetectedOperation(", self.javascript)
+        self.assertIn("Resume remaining files", self.javascript)
+
+    def test_file_operation_progress_recovers_from_polling_interruptions(self):
+        self.assertIn(
+            "progress refresh will retry", self.javascript)
+        self.assertIn(
+            "() => monitorOperation(operationId), 1500", self.javascript)
+        self.assertIn(
+            'document.addEventListener("visibilitychange"', self.javascript)
+        self.assertIn(
+            "if (!document.hidden && state.operationId)", self.javascript)
+
+    def test_preview_polling_discards_stale_groups_and_recovers(self):
+        self.assertIn("previewGeneration: {}", self.javascript)
+        self.assertIn(
+            "state.previewGeneration[size] !== generation", self.javascript)
+        self.assertIn(
+            "() => pollPreviews(names, size, generation), 1000",
+            self.javascript,
+        )
+        self.assertIn(
+            "() => focusPreviews(visible, prefetch, size), 1000",
+            self.javascript,
+        )
+
+    def test_group_markers_use_optimistic_drafts_and_revert_failed_saves(self):
+        self.assertIn(
+            "const human = state.drafts.get(cluster.cluster_id)",
+            self.javascript,
+        )
+        self.assertIn("saved.then((success) => {", self.javascript)
+        self.assertIn("if (success) return;", self.javascript)
 
     def test_active_group_stays_visible_during_keyboard_navigation(self):
         self.assertIn(
@@ -1192,6 +1396,10 @@ class GuiDesignFoundationTests(unittest.TestCase):
             self.html,
             r'id="execute-operation" class="danger-button" type="button" disabled',
         )
+        self.assertIn('inputmode="numeric"', self.html)
+        self.assertIn('maxlength="4"', self.html)
+        self.assertIn("plan.confirmation_code", self.javascript)
+        self.assertIn("Type the four-digit code", self.javascript)
         for identifier in (
             "operation-state-title", "operation-state-badge",
             "operation-progress-percent", "operation-receipt",
@@ -1857,7 +2065,7 @@ class GuiHttpTests(unittest.TestCase):
 
                 execute_body = json.dumps({
                     "plan_id": plan["plan_id"],
-                    "confirmation": f"COPY {plan['plan_id']}",
+                    "confirmation": plan["confirmation_code"],
                 })
                 connection.request(
                     "POST",

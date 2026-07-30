@@ -379,7 +379,12 @@ class ProviderStore:
             ),
         }
 
-    def materialize(self, job_id: str, profile_id: str) -> dict[str, Any]:
+    def materialize(
+        self,
+        job_id: str,
+        profile_id: str,
+        program_name: str = "opencull.kim",
+    ) -> dict[str, Any]:
         with self._lock:
             profile = deepcopy(self._profile(profile_id))
         env_name = f"OPENCULL_PROVIDER_TOKEN_{profile_id.upper()}"
@@ -405,17 +410,23 @@ class ProviderStore:
                 lines.append("    vision   = true")
             lines.append("")
         agents_text = "\n".join(lines)
-        source = (self.project_root / "opencull.kim").read_text(encoding="utf-8")
+        if program_name not in {"opencull.kim", "professional_shortlist.kim"}:
+            raise ProviderError(f"unsupported Kimiya program: {program_name}")
+        source = (self.project_root / program_name).read_text(encoding="utf-8")
         bundle = (self.generated_root / job_id).resolve()
         agents_path = bundle / "agents.kim"
-        program_path = bundle / "opencull.kim"
-        replacements = {
-            'use "agents.kim"': f'use "{agents_path}"',
-            'use python "scan.py"': (
-                f'use python "{self.project_root / "scan.py"}"'),
-            'use python "opencull_kernel.py"': (
-                f'use python "{self.project_root / "opencull_kernel.py"}"'),
-        }
+        program_path = bundle / program_name
+        replacements = {'use "agents.kim"': f'use "{agents_path}"'}
+        if program_name == "opencull.kim":
+            replacements.update({
+                'use python "scan.py"': (
+                    f'use python "{self.project_root / "scan.py"}"'),
+                'use python "opencull_kernel.py"': (
+                    f'use python "{self.project_root / "opencull_kernel.py"}"'),
+            })
+        else:
+            replacements['use python "shortlist_kernel.py"'] = (
+                f'use python "{self.project_root / "shortlist_kernel.py"}"')
         for original, generated in replacements.items():
             if original not in source:
                 raise ProviderError(
@@ -433,6 +444,7 @@ class ProviderStore:
             "program_sha256": program_sha,
             "agents_path": str(agents_path),
             "program_path": str(program_path),
+            "program_name": program_name,
             "credential_env": env_name if profile["credential_required"] else "",
             "contains_secret": False,
             "generated_at": _now(),

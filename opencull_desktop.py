@@ -67,6 +67,9 @@ def run_review(
 
 def make_review_server(
     report_path: Path, photos_path: Path, paths: MacOSPaths,
+    shortlist_path: Path | None = None,
+    jobs: JobManager | None = None,
+    providers: ProviderStore | None = None,
 ) -> ReviewServer:
     """Construct an isolated review server for a browser or native window."""
     report = load_report(report_path)
@@ -74,15 +77,20 @@ def make_review_server(
     photos = PhotoStore(photos_path, cache)
     reviews = ReviewStore(default_review_path(report.path), report, photos.root)
     measurements, manifest_path = load_measurements(None, report)
-    providers = ProviderStore(
+    providers = providers or ProviderStore(
         paths.providers, resource_root(),
         generated_root=paths.generated / "providers")
     faces = FaceStore(
         default_face_db(report.path), report, photos, reviews, paths.face_models)
+    detected_shortlist = shortlist_path or report.path.with_name(
+        f"{report.path.stem}.professional-shortlist.json")
     server = ReviewServer(
         ("127.0.0.1", 0), report, photos, reviews,
         measurements=measurements, manifest_path=manifest_path,
-        jobs=None, providers=providers, faces=faces)
+        jobs=jobs, providers=providers, faces=faces,
+        shortlist_path=(
+            detected_shortlist if detected_shortlist.is_file() else None),
+        shutdown_jobs=jobs is None)
     return server
 
 
@@ -91,9 +99,11 @@ def run_release_smoke_test(output_path: Path) -> int:
     root = resource_root()
     required = [
         root / "opencull.kim",
+        root / "professional_shortlist.kim",
         root / "agents.kim",
         root / "scan.py",
         root / "opencull_kernel.py",
+        root / "shortlist_kernel.py",
         root / "opencull_gui" / "static" / "index.html",
         root / "opencull_gui" / "static" / "styles.css",
         root / "opencull_gui" / "static" / "app.js",
@@ -146,6 +156,8 @@ def run_release_smoke_test(output_path: Path) -> int:
             checks["queue_store"] = queue_empty
         checks["kimiya_check_status"] = run_kimiya(
             ["check", str(root / "opencull.kim")])
+        checks["professional_kimiya_check_status"] = run_kimiya(
+            ["check", str(root / "professional_shortlist.kim")])
     except Exception as exc:
         checks["error"] = f"{type(exc).__name__}: {exc}"
     checks["passed"] = (
@@ -155,6 +167,7 @@ def run_release_smoke_test(output_path: Path) -> int:
         and checks.get("provider_store") is True
         and checks.get("queue_store") is True
         and checks.get("kimiya_check_status") == 0
+        and checks.get("professional_kimiya_check_status") == 0
         and "error" not in checks
     )
     output_path = output_path.expanduser().resolve()
@@ -172,23 +185,38 @@ def run_native_server(paths: MacOSPaths) -> int:
     providers = ProviderStore(
         paths.providers, resource_root(),
         generated_root=paths.generated / "providers")
-    jobs = JobManager(
-        paths.jobs, resource_root(), providers=providers,
-        command_builder=lambda job: executable_command(
+    def build_job_command(job: dict) -> list[str]:
+        if job.get("kind") == "professional_shortlist":
+            return executable_command(
+                "--kimiya-worker", "run",
+                job.get("program_path")
+                or str(resource_root() / "professional_shortlist.kim"),
+                f"report={job['report']}", f"photos={job['photos']}",
+                f"review={job.get('review', '')}", f"output={job['output']}",
+                f"policy={job['policy']}", f"profile={job['profile']}",
+                "resume=true")
+        return executable_command(
             "--kimiya-worker", "run",
             job.get("program_path") or str(resource_root() / "opencull.kim"),
             f"photos={job['photos']}", f"output={job['output']}",
             f"keep_per_group={job['keep_per_group']}",
             f"recursive={'true' if job['recursive'] else 'false'}",
-            f"profile={job['profile']}", "resume=true"),
+            f"profile={job['profile']}", "resume=true")
+
+    jobs = JobManager(
+        paths.jobs, resource_root(), providers=providers,
+        command_builder=build_job_command,
         program_checker=lambda program: _check_native_program(program),
         kimiya_workspace_root=paths.kimiya,
         output_root=paths.results)
 
     review_servers: list[ReviewServer] = []
 
-    def open_review(report: Path, photos: Path) -> dict[str, object]:
-        server = make_review_server(report, photos, paths)
+    def open_review(
+        report: Path, photos: Path, shortlist: Path | None = None
+    ) -> dict[str, object]:
+        server = make_review_server(
+            report, photos, paths, shortlist, jobs, providers)
         thread = threading.Thread(
             target=server.serve_forever,
             kwargs={"poll_interval": 0.25},
@@ -198,7 +226,10 @@ def run_native_server(paths: MacOSPaths) -> int:
         review_servers.append(server)
         return {
             "url": f"http://127.0.0.1:{server.server_port}/",
-            "title": report.stem.removesuffix("-results") or photos.name,
+            "title": (
+                f"{report.stem.removesuffix('-results')} · Professional"
+                if shortlist else
+                report.stem.removesuffix("-results") or photos.name),
         }
 
     try:

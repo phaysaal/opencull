@@ -292,5 +292,24 @@ class JobRelinkTests(unittest.TestCase):
                 manager.shutdown()
 
 
+class NativeReviewWindowTests(unittest.TestCase):
+    def test_webkit_javascript_dialogs_have_a_native_ui_delegate(self):
+        source = (
+            Path(__file__).parents[1]
+            / "native-macos/Sources/OpenCullNative/ReviewWindow.swift"
+        ).read_text(encoding="utf-8")
+        self.assertIn("webView.uiDelegate = context.coordinator", source)
+        self.assertIn("WKUIDelegate", source)
+        self.assertIn("runJavaScriptConfirmPanelWithMessage", source)
+        self.assertIn("runJavaScriptTextInputPanelWithPrompt", source)
+
+    def test_native_overflow_menus_hide_the_automatic_chevron(self):
+        source = (
+            Path(__file__).parents[1]
+            / "native-macos/Sources/OpenCullNative/ContentView.swift"
+        ).read_text(encoding="utf-8")
+        self.assertGreaterEqual(source.count(".menuIndicator(.hidden)"), 3)
+
+
 if __name__ == "__main__":
     unittest.main()

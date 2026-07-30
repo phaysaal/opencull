@@ -32,6 +32,7 @@ private struct EmbeddedReview: NSViewRepresentable {
         configuration.preferences.isElementFullscreenEnabled = true
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
+        webView.uiDelegate = context.coordinator
         webView.allowsMagnification = true
         webView.underPageBackgroundColor = .windowBackgroundColor
         webView.load(URLRequest(url: url))
@@ -44,7 +45,61 @@ private struct EmbeddedReview: NSViewRepresentable {
     }
 
     @MainActor
-    final class Coordinator: NSObject, WKNavigationDelegate, WKDownloadDelegate {
+    final class Coordinator: NSObject, WKNavigationDelegate, WKDownloadDelegate,
+        WKUIDelegate {
+        func webView(
+            _ webView: WKWebView,
+            runJavaScriptAlertPanelWithMessage message: String,
+            initiatedByFrame frame: WKFrameInfo,
+            completionHandler: @escaping @MainActor @Sendable () -> Void
+        ) {
+            let alert = NSAlert()
+            alert.messageText = "OpenCull"
+            alert.informativeText = message
+            alert.alertStyle = .informational
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+            completionHandler()
+        }
+
+        func webView(
+            _ webView: WKWebView,
+            runJavaScriptConfirmPanelWithMessage message: String,
+            initiatedByFrame frame: WKFrameInfo,
+            completionHandler: @escaping @MainActor @Sendable (Bool) -> Void
+        ) {
+            let alert = NSAlert()
+            alert.messageText = "Confirm OpenCull action"
+            alert.informativeText = message
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "Continue")
+            alert.addButton(withTitle: "Cancel")
+            completionHandler(alert.runModal() == .alertFirstButtonReturn)
+        }
+
+        func webView(
+            _ webView: WKWebView,
+            runJavaScriptTextInputPanelWithPrompt prompt: String,
+            defaultText: String?,
+            initiatedByFrame frame: WKFrameInfo,
+            completionHandler: @escaping @MainActor @Sendable (String?) -> Void
+        ) {
+            let alert = NSAlert()
+            alert.messageText = "OpenCull confirmation"
+            alert.informativeText = prompt
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "Continue")
+            alert.addButton(withTitle: "Cancel")
+            let field = NSTextField(
+                frame: NSRect(x: 0, y: 0, width: 420, height: 24))
+            field.stringValue = defaultText ?? ""
+            field.placeholderString = "Enter the requested confirmation"
+            alert.accessoryView = field
+            let response = alert.runModal()
+            completionHandler(
+                response == .alertFirstButtonReturn ? field.stringValue : nil)
+        }
+
         func webView(
             _ webView: WKWebView,
             decidePolicyFor navigationAction: WKNavigationAction

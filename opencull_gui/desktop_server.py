@@ -28,7 +28,7 @@ class DesktopBridgeServer(ThreadingHTTPServer):
         address: tuple[str, int],
         jobs: JobManager,
         providers: ProviderStore,
-        open_review: Callable[[Path, Path], dict[str, object]],
+        open_review: Callable[..., dict[str, object]],
         diagnostics: dict[str, object] | None = None,
     ):
         super().__init__(address, DesktopBridgeHandler)
@@ -116,6 +116,16 @@ class DesktopBridgeHandler(BaseHTTPRequestHandler):
                     str(body.get("profile", "family")),
                     str(body.get("provider_profile_id", "")),
                 )
+            elif path == "/jobs/professional":
+                result = self.server.jobs.add_professional(
+                    str(body.get("report", "")),
+                    str(body.get("photos", "")),
+                    str(body.get("output", "")),
+                    str(body.get("review", "")),
+                    str(body.get("policy", "effective")),
+                    str(body.get("profile", "family")),
+                    str(body.get("provider_profile_id", "")),
+                )
             elif path == "/jobs/action":
                 result = self.server.jobs.action(
                     str(body.get("job_id", "")),
@@ -142,8 +152,13 @@ class DesktopBridgeHandler(BaseHTTPRequestHandler):
                     raise JobError("unknown culling job")
                 if job["status"] != "completed" or not Path(job["output"]).is_file():
                     raise JobError("only a completed job can be opened for review")
-                result = self.server.open_review(
-                    Path(job["output"]), Path(job["photos"]))
+                if job.get("kind") == "professional_shortlist":
+                    result = self.server.open_review(
+                        Path(job["report"]), Path(job["photos"]),
+                        Path(job["output"]))
+                else:
+                    result = self.server.open_review(
+                        Path(job["output"]), Path(job["photos"]))
             elif path == "/reviews/open":
                 result = self.server.open_review(
                     Path(str(body.get("report", ""))).expanduser().resolve(),
@@ -181,7 +196,7 @@ class DesktopBridgeHandler(BaseHTTPRequestHandler):
 def serve_desktop_bridge(
     jobs: JobManager,
     providers: ProviderStore,
-    open_review: Callable[[Path, Path], dict[str, object]],
+    open_review: Callable[..., dict[str, object]],
     diagnostics: dict[str, object] | None = None,
 ) -> int:
     server = DesktopBridgeServer(

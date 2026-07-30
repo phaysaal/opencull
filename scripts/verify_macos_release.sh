@@ -33,9 +33,11 @@ fi
 
 required=(
   "$resources/opencull.kim"
+  "$resources/professional_shortlist.kim"
   "$resources/agents.kim"
   "$resources/scan.py"
   "$resources/opencull_kernel.py"
+  "$resources/shortlist_kernel.py"
   "$resources/opencull_gui/static/index.html"
   "$resources/opencull_gui/static/styles.css"
   "$resources/opencull_gui/static/app.js"

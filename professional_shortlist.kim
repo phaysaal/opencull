@@ -1,0 +1,110 @@
+-- OpenCull Professional Shortlist
+--
+-- Begins with an existing culling report, optionally applies human review
+-- decisions, pairs selected visual files with RAW companions locally, and
+-- performs a stricter professional-editing assessment. No source file is
+-- modified; the only writes are the checkpoint and final JSON artifact.
+
+param report: text = "opencull-results.json"
+param photos: text = "."
+param review: text = ""
+param output: text = "opencull-professional-shortlist.json"
+param policy: text = "effective"
+param profile: text = "family"
+param minimum_dimension: num = 640
+param resume: bool = true
+param checkpoint: text = ""
+
+use "agents.kim"
+use python "shortlist_kernel.py"
+
+context k_professional:
+    domain = "professional photographic editing-potential assessment and ranking"
+    preserve = [candidate_identity, visible_evidence, raw_recoverability, uncertainty, no_quota]
+    allow_loss = [wording, minor_score_precision]
+
+schema ProfessionalAssessment:
+    composition: text
+    angle_and_perspective: text
+    subject_presentation: text
+    pose_and_expression: text
+    moment_and_emotion: text
+    light_and_tonality: text
+    surroundings: text
+    irrecoverable_defects: text
+    raw_editing_opportunities: text
+    distinctiveness: text
+    tier: text
+    score: num
+    confidence: num
+    rationale: text
+
+schema ProfessionalCalibration:
+    ranking: text
+    exceptional: text
+    strong: text
+    promising: text
+    ordinary: text
+    reject: text
+    rationale: text
+    confidence: num
+
+bundle := build_professional_candidates(report, photos, review, policy, minimum_dimension)
+candidates := parse_professional_candidates(bundle)
+checkpoint_file := professional_checkpoint_path(output, checkpoint)
+checkpoint_state := load_professional_checkpoint(checkpoint_file, bundle, candidates, profile, resume)
+assessments := checkpoint_professional_assessments(checkpoint_state, candidates)
+pending := remaining_professional_candidates(candidates, assessments)
+
+-- Each completed frame is checkpointed independently. Local measurements are
+-- warnings and secondary evidence; the vision agent must inspect the frame.
+forall candidate in pending:
+    photo := observe image(professional_candidate_path(bundle, candidate))
+    check photo.exists
+    raw_assessment := memo gen<ProfessionalAssessment>(professional_assessment_prompt(candidate, profile), images=[photo]) by A
+    assessment := normalize_professional_assessment(raw_assessment)
+    check valid_professional_assessment(assessment)
+    assessments := assessments + [professional_assessment_json(assessment, candidate)]
+    checkpoint_state := build_professional_checkpoint(bundle, candidates, assessments, profile, false)
+    check len(checkpoint_state) > 0
+    act file.overwrite(checkpoint_file, checkpoint_state)
+    settle until check file_exists(checkpoint_file) within 5
+
+-- Bounded comparative passes impose a consistent absolute tier bar and
+-- prevent near-identical weaker alternatives from inheriting high scores.
+calibrations := []
+forall batch in professional_batches(candidates, 8):
+    batch_photos := []
+    forall candidate in batch:
+        batch_photo := observe image(professional_candidate_path(bundle, candidate))
+        check batch_photo.exists
+        batch_photos := batch_photos + [batch_photo]
+    batch_assessments := assessments_for_candidates(assessments, batch)
+    raw_calibration := memo gen<ProfessionalCalibration>(professional_calibration_prompt(batch, batch_assessments, profile), images=batch_photos) by B
+    check valid_professional_calibration(raw_calibration, batch)
+    calibrations := calibrations + [professional_calibration_json(raw_calibration, batch)]
+
+shortlist := build_professional_shortlist(bundle, assessments, calibrations, profile)
+check professional_report_valid(shortlist, bundle, candidates)
+evidence := professional_report_evidence(shortlist)
+
+-- An empty candidate set is a valid, explicit result and needs no remote
+-- warrant. Otherwise two independent model families warrant the bounded,
+-- deterministically validated report before it is written.
+if check len(candidates) == 0:
+    act file.overwrite(output, shortlist)
+    settle until check file_exists(output) within 5
+    final_checkpoint := build_professional_checkpoint(bundle, candidates, assessments, profile, true)
+    check len(final_checkpoint) > 0
+    act file.overwrite(checkpoint_file, final_checkpoint)
+    commit(shortlist)
+else:
+    if memo judge<5,4/5> (evidence |= professional_report_policy()) under k_professional panel [C, D]:
+        act file.overwrite(output, shortlist)
+        settle until check file_exists(output) within 5
+        final_checkpoint := build_professional_checkpoint(bundle, candidates, assessments, profile, true)
+        check len(final_checkpoint) > 0
+        act file.overwrite(checkpoint_file, final_checkpoint)
+        commit(shortlist)
+    else:
+        abstain

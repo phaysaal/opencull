@@ -350,6 +350,7 @@ private struct JobRow: View {
                 Image(systemName: "ellipsis.circle")
             }
             .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
             .frame(width: 28)
         }
         .padding(.vertical, 9)
@@ -651,6 +652,7 @@ private struct RecentReviewRow: View {
                 Image(systemName: "ellipsis.circle")
             }
             .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
             .frame(width: 28)
         }
         .padding(.vertical, 7)
@@ -839,6 +841,7 @@ private struct ProviderRow: View {
                 Image(systemName: "ellipsis.circle")
             }
             .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
             .frame(width: 28)
         }
         .padding(.vertical, 10)
