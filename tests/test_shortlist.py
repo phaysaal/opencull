@@ -1,4 +1,5 @@
 import json
+import hashlib
 import tempfile
 import threading
 import http.client
@@ -54,6 +55,17 @@ def report_payload():
 
 
 class AssetFamilyTests(unittest.TestCase):
+    def test_project_artifacts_are_not_indexed_as_source_assets(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "A.JPG").write_bytes(b"jpeg")
+            managed = root / "Darkimiya" / "Developments"
+            managed.mkdir(parents=True)
+            (managed / "A.RAF").write_bytes(b"derived")
+            assets = index_asset_families(root)
+            self.assertEqual(assets.raw_companions("A.JPG"), ())
+            self.assertIsNone(assets.family_for("Darkimiya/Developments/A.RAF"))
+
     def test_pairs_jpeg_and_raf_in_same_directory(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -361,6 +373,60 @@ class ProfessionalBackendTests(unittest.TestCase):
         shortlist = load_shortlist(shortlist_path, report, photos)
         return photos, report_path, report, shortlist_path, shortlist
 
+    def test_edit_directions_fall_back_and_allocate_versioned_retry(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            photos_root, _, report, shortlist_path, _ = self.make_context(root)
+            photos = PhotoStore(photos_root, root / "cache")
+            reviews = ReviewStore(root / "review.json", report, photos_root)
+            server = ReviewServer(
+                ("127.0.0.1", 0), report, photos, reviews,
+                shortlist_path=shortlist_path)
+            try:
+                server.shortlist_reviews.update(
+                    "shoot/DSCF0001.JPG", "strong", True,
+                    "Develop this.", True, 0, interesting=True)
+                shortlist_sha = hashlib.sha256(
+                    shortlist_path.read_bytes()).hexdigest()
+                first = shortlist_path.with_name(
+                    f"{shortlist_path.stem}.edit-directions-r1.json")
+                first.write_text(json.dumps({
+                    "format": "opencull-edit-directions-v1",
+                    "shortlist_sha256": shortlist_sha,
+                    "review_revision": 1,
+                    "entries": [{"photo": "shoot/DSCF0001.JPG",
+                                 "standard_title": "Natural"}],
+                }), encoding="utf-8")
+
+                server.shortlist_reviews.update(
+                    "shoot/DSCF0001.JPG", "strong", True,
+                    "Updated note.", True, 1, interesting=True)
+                fallback = server.edit_directions_payload()
+                self.assertTrue(fallback["available"])
+                self.assertTrue(fallback["partial"])
+                self.assertEqual(len(fallback["directions"]["entries"]), 1)
+                effective = json.loads(Path(fallback["path"]).read_text())
+                self.assertEqual(
+                    effective["entries"], fallback["directions"]["entries"])
+                self.assertIn("effective-edit-directions", fallback["path"])
+                self.assertTrue(fallback["default_path"].endswith(
+                    ".edit-directions-r2.json"))
+
+                second = Path(fallback["default_path"])
+                value = json.loads(first.read_text())
+                value["review_revision"] = 2
+                second.write_text(json.dumps(value), encoding="utf-8")
+                exact = server.edit_directions_payload()
+                self.assertFalse(exact["partial"])
+                self.assertTrue(exact["regeneration_required"])
+                self.assertEqual(exact["processed_count"], 1)
+                self.assertEqual(
+                    exact["processed_photos"], ["shoot/DSCF0001.JPG"])
+                self.assertTrue(exact["default_path"].endswith(
+                    ".edit-directions-r2-v2.json"))
+            finally:
+                server.server_close()
+
     def test_human_review_is_separate_revision_protected_and_exportable(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -369,9 +435,10 @@ class ProfessionalBackendTests(unittest.TestCase):
             store = ShortlistReviewStore(review_path, shortlist)
             state = store.update(
                 "shoot/DSCF0001.JPG", "exceptional", True,
-                "Prepare this RAF.", True, 0)
+                "Prepare this RAF.", True, 0, interesting=True)
             self.assertEqual(state["revision"], 1)
             self.assertEqual(state["summary"]["edit_raw"], 1)
+            self.assertEqual(state["summary"]["interesting"], 1)
             with self.assertRaisesRegex(
                     ShortlistReviewError, "reload"):
                 store.update(
@@ -382,11 +449,42 @@ class ProfessionalBackendTests(unittest.TestCase):
                 exported["edit_raw_files"], ["shoot/DSCF0001.RAF"])
             self.assertEqual(
                 exported["entries"][0]["effective_tier"], "exceptional")
+            self.assertTrue(exported["entries"][0]["interesting"])
             undone = store.undo(1)
             self.assertEqual(undone["summary"]["reviewed"], 0)
             self.assertEqual(
                 shortlist.entries[0]["tier"], "strong",
                 "immutable AI evidence must not be overwritten")
+
+    def test_legacy_review_merge_preserves_newer_project_decisions(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _, _, _, shortlist_path, shortlist = self.make_context(root)
+            legacy_path = shortlist_path.with_suffix(".review.json")
+            legacy = ShortlistReviewStore(legacy_path, shortlist)
+            legacy.update(
+                "shoot/DSCF0001.JPG", "exceptional", True,
+                "Legacy choice", True, 0, interesting=True)
+            legacy_value = json.loads(legacy_path.read_text())
+            legacy_value["entries"]["shoot/DSCF0001.JPG"]["updated_at"] = (
+                "2026-01-01T00:00:00+00:00")
+            legacy_path.write_text(json.dumps(legacy_value), encoding="utf-8")
+            local_path = root / "Darkimiya" / "Reviews" / "review.json"
+            local = ShortlistReviewStore(local_path, shortlist)
+            local.update(
+                "shoot/DSCF0001.JPG", "reject", False,
+                "New project choice", False, 0, interesting=False)
+
+            result = local.merge_legacy(legacy_path)
+            state = local.public_state()
+
+            self.assertTrue(result["merged"])
+            self.assertEqual(result["preserved"], 1)
+            self.assertTrue(Path(result["backup_path"]).is_file())
+            self.assertEqual(
+                state["entries"]["shoot/DSCF0001.JPG"]["tier"], "reject")
+            self.assertEqual(len(state["migrations"]), 1)
+            self.assertFalse(local.merge_legacy(legacy_path)["merged"])
 
     def test_review_server_shortlist_api_and_conflict(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -396,7 +494,8 @@ class ProfessionalBackendTests(unittest.TestCase):
             reviews = ReviewStore(root / "review.json", report, photos_root)
             server = ReviewServer(
                 ("127.0.0.1", 0), report, photos, reviews,
-                shortlist_path=shortlist_path)
+                shortlist_path=shortlist_path,
+                shortlist_default_path=root / "persistent" / "shortlist.json")
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             try:
@@ -409,6 +508,9 @@ class ProfessionalBackendTests(unittest.TestCase):
                 payload = json.loads(response.read())
                 self.assertEqual(response.status, 200)
                 self.assertTrue(payload["available"])
+                self.assertEqual(
+                    Path(server.default_shortlist_path),
+                    (root / "persistent" / "shortlist.json").resolve())
                 body = json.dumps({
                     "photo": "shoot/DSCF0001.JPG",
                     "tier": "exceptional",

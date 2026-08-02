@@ -8,6 +8,8 @@ from pathlib import Path
 
 from scan import BITMAP_EXTENSIONS, RAW_EXTENSIONS, SUPPORTED_EXTENSIONS
 
+from .project import is_managed_project_path
+
 
 class AssetError(ValueError):
     """A photo library cannot be indexed safely."""
@@ -71,6 +73,7 @@ def index_asset_families(root: Path, recursive: bool = True) -> AssetIndex:
         if (
             not path.is_file()
             or path.suffix.lower() not in SUPPORTED_EXTENSIONS
+            or is_managed_project_path(resolved, path)
         ):
             continue
         relative = _safe_relative(resolved, path)

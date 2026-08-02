@@ -19,7 +19,17 @@ struct ReviewWindow: View {
     }
 }
 
-private struct EmbeddedReview: NSViewRepresentable {
+struct ProjectWorkspaceView: View {
+    let target: ReviewTarget
+
+    var body: some View {
+        ReviewWindow(target: target)
+        .frame(minWidth: 1040, minHeight: 680)
+        .navigationTitle(target.title)
+    }
+}
+
+struct EmbeddedReview: NSViewRepresentable {
     let url: URL
 
     func makeCoordinator() -> Coordinator {
@@ -30,6 +40,8 @@ private struct EmbeddedReview: NSViewRepresentable {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .default()
         configuration.preferences.isElementFullscreenEnabled = true
+        configuration.userContentController.add(
+            context.coordinator, name: "openCullNative")
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
         webView.uiDelegate = context.coordinator
@@ -46,7 +58,38 @@ private struct EmbeddedReview: NSViewRepresentable {
 
     @MainActor
     final class Coordinator: NSObject, WKNavigationDelegate, WKDownloadDelegate,
-        WKUIDelegate {
+        WKUIDelegate, WKScriptMessageHandler {
+        private var contentProcessRecoveryAttempts = 0
+
+        func userContentController(
+            _ userContentController: WKUserContentController,
+            didReceive message: WKScriptMessage
+        ) {
+            guard message.name == "openCullNative",
+                  let value = message.body as? [String: Any],
+                  value["action"] as? String == "chooseRawFolder",
+                  let webView = message.webView
+            else { return }
+            let panel = NSOpenPanel()
+            panel.title = "Choose the folder containing RAW originals"
+            panel.prompt = "Link RAW Folder"
+            panel.canChooseFiles = false
+            panel.canChooseDirectories = true
+            panel.allowsMultipleSelection = false
+            let path = panel.runModal() == .OK ? panel.url?.path : nil
+            let encoded: String
+            if let path,
+               let data = try? JSONSerialization.data(
+                   withJSONObject: path, options: [.fragmentsAllowed]),
+               let json = String(data: data, encoding: .utf8)
+            {
+                encoded = json
+            } else {
+                encoded = "null"
+            }
+            webView.evaluateJavaScript(
+                "window.openCullRawFolderSelected(\(encoded))")
+        }
         func webView(
             _ webView: WKWebView,
             runJavaScriptAlertPanelWithMessage message: String,
@@ -54,7 +97,7 @@ private struct EmbeddedReview: NSViewRepresentable {
             completionHandler: @escaping @MainActor @Sendable () -> Void
         ) {
             let alert = NSAlert()
-            alert.messageText = "OpenCull"
+            alert.messageText = "Darkimiya"
             alert.informativeText = message
             alert.alertStyle = .informational
             alert.addButton(withTitle: "OK")
@@ -69,7 +112,7 @@ private struct EmbeddedReview: NSViewRepresentable {
             completionHandler: @escaping @MainActor @Sendable (Bool) -> Void
         ) {
             let alert = NSAlert()
-            alert.messageText = "Confirm OpenCull action"
+            alert.messageText = "Confirm Darkimiya action"
             alert.informativeText = message
             alert.alertStyle = .warning
             alert.addButton(withTitle: "Continue")
@@ -85,7 +128,7 @@ private struct EmbeddedReview: NSViewRepresentable {
             completionHandler: @escaping @MainActor @Sendable (String?) -> Void
         ) {
             let alert = NSAlert()
-            alert.messageText = "OpenCull confirmation"
+            alert.messageText = "Darkimiya confirmation"
             alert.informativeText = prompt
             alert.alertStyle = .warning
             alert.addButton(withTitle: "Continue")
@@ -149,6 +192,32 @@ private struct EmbeddedReview: NSViewRepresentable {
             withError error: Error
         ) {
             presentFailure(error, in: webView)
+        }
+
+        func webView(
+            _ webView: WKWebView,
+            didFinish navigation: WKNavigation!
+        ) {
+            contentProcessRecoveryAttempts = 0
+        }
+
+        func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+            guard contentProcessRecoveryAttempts < 2 else {
+                presentFailure(
+                    NSError(
+                        domain: "org.darkimiya.review",
+                        code: 1,
+                        userInfo: [NSLocalizedDescriptionKey:
+                            "The macOS web rendering process stopped repeatedly."]),
+                    in: webView)
+                return
+            }
+            contentProcessRecoveryAttempts += 1
+            // Review decisions are committed by the local server, so reloading
+            // restores the workspace without risking source photographs.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                webView.reload()
+            }
         }
 
         private func isTrustedLocalURL(_ url: URL) -> Bool {

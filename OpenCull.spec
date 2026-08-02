@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""Reproducible Apple Silicon OpenCull application bundle."""
+"""Reproducible Apple Silicon Darkimiya application bundle."""
 
 from pathlib import Path
 
@@ -14,11 +14,17 @@ datas = [
     (str(ROOT / "opencull_gui" / "static"), "opencull_gui/static"),
     (str(ROOT / "opencull.kim"), "."),
     (str(ROOT / "professional_shortlist.kim"), "."),
+    (str(ROOT / "edit_suggestions.kim"), "."),
+    (str(ROOT / "style_profile.kim"), "."),
+    (str(ROOT / "semantic_verification.kim"), "."),
     (str(ROOT / "agents.kim"), "."),
     # Kimiya hashes and loads these as explicit audited source extensions.
     (str(ROOT / "scan.py"), "."),
     (str(ROOT / "opencull_kernel.py"), "."),
     (str(ROOT / "shortlist_kernel.py"), "."),
+    (str(ROOT / "edit_suggestion_kernel.py"), "."),
+    (str(ROOT / "style_profile_kernel.py"), "."),
+    (str(ROOT / "semantic_verification_kernel.py"), "."),
     (str(ROOT / "README.md"), "."),
     (str(ROOT / "LICENSE"), "."),
 ]
@@ -29,6 +35,13 @@ hiddenimports = (
     collect_submodules("kimiya")
     + [
         "scan", "opencull_kernel", "shortlist_kernel",
+        "edit_suggestion_kernel", "style_profile_kernel",
+        "semantic_verification_kernel",
+        "development_pipeline", "development_engine", "raw_developer",
+        "comparison_pipeline", "renderer_export_pipeline", "delivery_export_pipeline",
+        "renderer_comparison",
+        "darktable_engine",
+        "recipe_compiler",
         "cv2", "PIL._tkinter_finder",
     ]
 )
@@ -52,7 +65,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="OpenCull",
+    name="Darkimiya",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -70,20 +83,20 @@ coll = COLLECT(
     a.datas,
     strip=False,
     upx=False,
-    name="OpenCull",
+    name="Darkimiya",
 )
 
 app = BUNDLE(
     coll,
-    name="OpenCull.app",
+    name="Darkimiya.app",
     icon=str(ROOT / "assets" / "OpenCull.icns"),
-    bundle_identifier="org.opencull.OpenCull",
-    version="0.10.0",
+    bundle_identifier="org.darkimiya.Darkimiya",
+    version="0.13.0",
     info_plist={
-        "CFBundleDisplayName": "OpenCull",
-        "CFBundleName": "OpenCull",
-        "CFBundleShortVersionString": "0.10.0",
-        "CFBundleVersion": "10",
+        "CFBundleDisplayName": "Darkimiya",
+        "CFBundleName": "Darkimiya",
+        "CFBundleShortVersionString": "0.13.0",
+        "CFBundleVersion": "12",
         "LSMinimumSystemVersion": "13.0",
         "NSHighResolutionCapable": True,
         "NSRequiresAquaSystemAppearance": False,

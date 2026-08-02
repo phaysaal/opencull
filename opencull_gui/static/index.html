@@ -3,7 +3,10 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>OpenCull Review</title>
+  <meta name="color-scheme" content="dark light">
+  <meta name="theme-color" content="#111722" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#f5f5f7" media="(prefers-color-scheme: light)">
+  <title>Darkimiya</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
@@ -15,62 +18,86 @@
         <span class="brand-check">✓</span>
       </span>
       <div>
-        <h1>OpenCull</h1>
-        <p>Professional photo review</p>
+        <h1>Darkimiya</h1>
+        <p id="project-name">Professional photo review</p>
       </div>
     </div>
-    <nav class="app-navigation" aria-label="OpenCull sections">
-      <button id="review-nav-button" class="nav-item active" type="button"
-        aria-current="page">
-        <span class="nav-icon review-icon" aria-hidden="true"></span>
-        Review
-      </button>
-      <button id="shortlist-nav-button" class="nav-item" type="button">
-        <span class="nav-icon shortlist-icon" aria-hidden="true"></span>
-        Professional
-        <span id="shortlist-nav-count" class="nav-count" hidden></span>
-      </button>
-      <button id="jobs-button" class="nav-item" type="button">
-        <span class="nav-icon queue-icon" aria-hidden="true"></span>
-        Queue
-      </button>
-      <button id="people-button" class="nav-item" type="button">
-        <span class="nav-icon people-icon" aria-hidden="true"></span>
-        People
-      </button>
-    </nav>
+    <div class="toolbar-context">
+      <strong id="project-stage-note">Cull</strong>
+      <span class="toolbar-context-separator" aria-hidden="true"></span>
+      <span id="report-status" class="status" role="status"
+        aria-live="polite">Loading report…</span>
+      <span id="preview-status" class="status" role="status"
+        aria-live="polite" hidden>Preview queue idle</span>
+    </div>
     <div class="header-actions">
       <span id="save-status" class="save-status" role="status"
         aria-live="polite">No human changes</span>
-      <button id="export-button" class="primary-button" type="button">
-        Export result
-      </button>
+      <button id="inspector-toggle" class="toolbar-icon-button" type="button"
+        aria-pressed="true" aria-keyshortcuts="I"
+        title="Show or hide the review inspector (I)">Inspector</button>
+      <details class="toolbar-menu">
+        <summary aria-label="Project actions">•••</summary>
+        <div class="toolbar-menu-popover">
+          <button id="recovery-button" type="button">Help &amp; recovery</button>
+          <button id="raw-source-button" type="button">Link RAW folder</button>
+          <button id="undo-review" type="button" disabled>Undo review</button>
+          <button id="organize-button" type="button">Export &amp; organize</button>
+          <button id="export-button" type="button">Export review data</button>
+          <button id="shortcuts-button" type="button"
+            aria-keyshortcuts="?">Keyboard shortcuts</button>
+          <button id="about-button" type="button">Report details</button>
+        </div>
+      </details>
     </div>
   </header>
 
-  <section class="command-bar" aria-label="Review status and actions">
-    <div class="command-status">
-      <span id="report-status" class="status" role="status"
-        aria-live="polite">Loading report…</span>
-      <span class="status-separator" aria-hidden="true"></span>
-      <span id="preview-status" class="status" role="status"
-        aria-live="polite">Preview queue idle</span>
+  <aside class="app-sidebar" aria-label="Darkimiya project navigation">
+    <div class="app-sidebar-project">
+      <span>Project</span>
+      <strong id="sidebar-project-name">Professional photo review</strong>
     </div>
+    <nav class="app-sidebar-navigation" aria-label="Project workflow">
+      <button id="review-nav-button" class="project-stage app-sidebar-item active"
+        data-stage="cull" type="button" aria-current="page">
+        <span class="nav-icon review-icon" aria-hidden="true">▣</span><span>Cull</span>
+      </button>
+      <button id="shortlist-nav-button" class="project-stage app-sidebar-item"
+        data-stage="shortlist" type="button">
+        <span class="sidebar-symbol" aria-hidden="true">◇</span><span>Shortlist</span>
+        <span id="shortlist-nav-count" class="nav-count" hidden></span>
+      </button>
+      <div class="app-sidebar-group">
+        <span class="app-sidebar-group-label">Develop</span>
+        <button class="project-stage app-sidebar-item sidebar-subitem"
+          data-stage="style" type="button">
+          <span class="sidebar-symbol" aria-hidden="true">◐</span><span>Personal style</span>
+        </button>
+        <button class="project-stage app-sidebar-item sidebar-subitem"
+          data-stage="develop" type="button">
+          <span class="sidebar-symbol" aria-hidden="true">◒</span><span>Develop images</span>
+        </button>
+      </div>
+      <button class="project-stage app-sidebar-item" data-stage="verify" type="button">
+        <span class="sidebar-symbol" aria-hidden="true">✓</span><span>Verify</span>
+      </button>
+    </nav>
+    <div class="app-sidebar-divider"></div>
+    <nav class="app-sidebar-navigation app-sidebar-utilities" aria-label="Application tools">
+      <button id="jobs-button" class="app-sidebar-item" type="button">
+        <span class="nav-icon queue-icon" aria-hidden="true">☷</span><span>Activity</span>
+      </button>
+      <button id="people-button" class="app-sidebar-item" type="button">
+        <span class="nav-icon people-icon" aria-hidden="true">♙</span><span>People</span>
+      </button>
+    </nav>
     <div class="background-activity" aria-label="Concurrent activity">
       <span><small>Review</small><strong id="review-activity">Ready</strong></span>
       <span><small>Culling</small><strong id="culling-activity">Idle</strong></span>
       <span><small>Previews</small><strong id="preview-activity">Idle</strong></span>
       <span><small>People</small><strong id="people-activity">Idle</strong></span>
     </div>
-    <div class="command-actions">
-      <button id="recovery-button" class="quiet-button" type="button">Help &amp; recovery</button>
-      <button id="undo-review" class="quiet-button" type="button" disabled>Undo review</button>
-      <button id="organize-button" class="quiet-button" type="button">Export &amp; organize</button>
-      <button id="shortcuts-button" class="quiet-button" type="button"
-        aria-keyshortcuts="?">Shortcuts</button>
-      <button id="about-button" class="quiet-button" type="button">Report details</button>
-    </div>
-  </section>
+  </aside>
 
   <section id="recovery-banner" class="recovery-banner" role="alert" hidden>
     <div>
@@ -78,7 +105,7 @@
       <p id="recovery-banner-message"></p>
     </div>
     <button id="open-recovery-from-banner" class="quiet-button" type="button">
-      Review recovery options
+      Open recovery
     </button>
   </section>
 
@@ -88,33 +115,42 @@
     <aside class="sidebar">
       <div class="sidebar-tools">
         <label class="search">
-          <span>Search</span>
+          <span class="visually-hidden">Search groups</span>
           <input id="search" type="search" placeholder="Cluster or filename">
         </label>
-        <div id="filters" class="filters" aria-label="Cluster filters">
-          <button class="filter active" data-filter="all" type="button">All</button>
-          <button class="filter" data-filter="selected" type="button">Selected</button>
-          <button class="filter" data-filter="warning" type="button">Warnings</button>
-          <button class="filter" data-filter="fallback" type="button">Fallback</button>
-          <button class="filter" data-filter="empty" type="button">No keeper</button>
-          <button class="filter" data-filter="oversized" type="button">Tournament</button>
-          <button class="filter" data-filter="unreviewed" type="button">Unreviewed</button>
-          <button class="filter" data-filter="reviewed" type="button">Human reviewed</button>
-          <button class="filter" data-filter="modified" type="button">Human modified</button>
-          <button class="filter" data-filter="maybe" type="button">Has maybe</button>
-          <button class="filter" data-filter="rejected" type="button">Has reject</button>
-          <button class="filter" data-filter="lowconfidence" type="button">Low confidence</button>
+        <div class="cluster-browser-summary">
+          <span id="cluster-count" class="muted"></span>
+          <details id="cluster-filter-menu" class="cluster-filter-menu">
+            <summary aria-label="Filter groups">
+              <span>Filter</span><strong id="active-filter-label">All clusters</strong>
+            </summary>
+            <div class="cluster-filter-popover">
+              <div id="filters" class="filters" aria-label="Cluster filters">
+                <button class="filter active" data-filter="all" type="button">All clusters</button>
+                <button class="filter" data-filter="selected" type="button">AI selected</button>
+                <button class="filter" data-filter="warning" type="button">Warnings</button>
+                <button class="filter" data-filter="fallback" type="button">Fallback</button>
+                <button class="filter" data-filter="empty" type="button">No keeper</button>
+                <button class="filter" data-filter="oversized" type="button">Tournament</button>
+                <button class="filter" data-filter="unreviewed" type="button">Unreviewed</button>
+                <button class="filter" data-filter="reviewed" type="button">Human reviewed</button>
+                <button class="filter" data-filter="modified" type="button">Human modified</button>
+                <button class="filter" data-filter="maybe" type="button">Has maybe</button>
+                <button class="filter" data-filter="rejected" type="button">Has reject</button>
+                <button class="filter" data-filter="lowconfidence" type="button">Low confidence</button>
+              </div>
+              <label class="cluster-person-filter">Person
+                <select id="person-filter">
+                  <option value="">All people</option>
+                </select>
+              </label>
+            </div>
+          </details>
         </div>
-        <label class="search">Private person filter
-          <select id="person-filter">
-            <option value="">All people</option>
-          </select>
-        </label>
-        <p id="cluster-count" class="muted"></p>
       </div>
       <nav id="cluster-list" class="cluster-list" aria-label="Clusters"
         aria-busy="false"></nav>
-      <div class="cluster-window-controls" aria-label="Cluster list pages">
+      <div id="cluster-window-controls" class="cluster-window-controls" aria-label="Cluster list pages">
         <button id="previous-cluster-window" class="quiet-button" type="button">Earlier</button>
         <span id="cluster-window-status"></span>
         <button id="next-cluster-window" class="quiet-button" type="button">Later</button>
@@ -181,35 +217,28 @@
         </section>
         <div id="photo-grid" class="photo-grid"></div>
 
-        <section class="human-review">
-          <div class="section-heading">
-            <div>
-              <p class="eyebrow">HUMAN DECISION</p>
-              <h3>Final review</h3>
-            </div>
-            <span id="review-state" class="review-state"></span>
+        <section class="review-action-bar" aria-label="Review decision actions">
+          <div class="review-action-state">
+            <span>Decision</span><strong id="review-state" class="review-state"></strong>
           </div>
-          <p class="muted keyboard-help">
-            Shortcuts: A accepts the AI recommendation and advances, number
-            keys toggle photos, ↑/↓ navigate groups, ← returns to the previous
-            group, N keeps none, U returns the group to unreviewed, and Z
-            undoes.
-          </p>
-          <label class="notes-label">
-            <span>Reviewer note</span>
-            <textarea id="review-note" maxlength="5000" rows="3"
-              placeholder="Why did you agree or change the selection?"></textarea>
-          </label>
-          <div class="review-actions">
-            <button id="accept-ai-next" class="primary-button" type="button"
-              aria-keyshortcuts="A">Accept and Next →</button>
-            <button id="accept-ai" class="quiet-button" type="button"
-              aria-keyshortcuts="ArrowRight">Accept AI recommendation</button>
+          <div class="review-action-buttons">
             <button id="keep-none" class="quiet-button" type="button"
               aria-keyshortcuts="N">Keep none</button>
-            <button id="mark-reviewed" class="quiet-button" type="button">Mark reviewed</button>
-            <button id="reset-review" class="quiet-button" type="button"
-              aria-keyshortcuts="U">Return to unreviewed</button>
+            <button id="skip-group" class="quiet-button" type="button">Skip</button>
+            <details id="review-more-actions" class="review-more-actions">
+              <summary aria-label="More review actions">•••</summary>
+              <div>
+                <button id="accept-ai" type="button"
+                  aria-keyshortcuts="ArrowRight">Restore AI recommendation</button>
+                <button id="mark-reviewed" type="button">Mark current selection reviewed</button>
+                <button id="reset-review" type="button"
+                  aria-keyshortcuts="U">Return to unreviewed</button>
+                <button id="actionbar-undo" type="button"
+                  aria-keyshortcuts="Z">Undo previous review</button>
+              </div>
+            </details>
+            <button id="accept-ai-next" class="primary-button" type="button"
+              aria-keyshortcuts="A">Accept selection &amp; Next →</button>
           </div>
         </section>
 
@@ -235,6 +264,124 @@
         </section>
       </div>
     </section>
+    <aside id="review-inspector" class="review-inspector" aria-label="Review inspector">
+      <header class="review-inspector-header">
+        <div><span>Inspector</span><strong id="inspector-context-title">Group</strong></div>
+        <button id="close-review-inspector" type="button" aria-label="Hide inspector">×</button>
+      </header>
+      <div class="inspector-tabs" role="tablist" aria-label="Inspector sections">
+        <button id="inspector-tab-group" class="inspector-tab active"
+          data-inspector-tab="group" type="button" role="tab" tabindex="0"
+          aria-selected="true" aria-controls="inspector-group-panel">Group</button>
+        <button id="inspector-tab-photo" class="inspector-tab"
+          data-inspector-tab="photo" type="button" role="tab" tabindex="-1"
+          aria-selected="false" aria-controls="inspector-photo-panel">Photo</button>
+        <button id="inspector-tab-recovery" class="inspector-tab"
+          data-inspector-tab="recovery" type="button" role="tab" tabindex="-1"
+          aria-selected="false" aria-controls="inspector-recovery-panel">Recovery</button>
+      </div>
+
+      <section id="inspector-group-panel" class="inspector-panel" role="tabpanel"
+        aria-labelledby="inspector-tab-group">
+        <div class="inspector-section-heading">
+          <div><span>Current group</span><h3 id="inspector-group-title">—</h3></div>
+          <strong id="inspector-group-state"></strong>
+        </div>
+        <p id="inspector-group-summary" class="inspector-muted"></p>
+        <div class="inspector-confidence">
+          <span>Curator confidence</span><strong id="inspector-confidence-value">—</strong>
+          <div><span id="inspector-confidence-bar"></span></div>
+        </div>
+        <section class="inspector-section">
+          <h4>AI recommendation</h4>
+          <div id="inspector-keepers" class="inspector-chips"></div>
+        </section>
+        <section class="inspector-section">
+          <h4>Why this selection</h4>
+          <p id="inspector-rationale" class="inspector-long-copy"></p>
+        </section>
+        <section class="inspector-section">
+          <label class="inspector-review-note">Reviewer note
+            <textarea id="review-note" maxlength="5000" rows="4"
+              placeholder="Why did you agree or change the selection?"></textarea>
+          </label>
+          <span class="inspector-note-help">Saved automatically with this group.</span>
+        </section>
+        <details class="inspector-disclosure">
+          <summary>Frame assessments</summary>
+          <div id="inspector-assessments"></div>
+        </details>
+      </section>
+
+      <section id="inspector-photo-panel" class="inspector-panel" role="tabpanel"
+        aria-labelledby="inspector-tab-photo" hidden>
+        <div id="inspector-photo-empty" class="inspector-empty">
+          Focus a photograph to inspect it.
+        </div>
+        <div id="inspector-photo-content" hidden>
+          <div class="inspector-photo-preview">
+            <img id="inspector-photo-image" alt="">
+          </div>
+          <div class="inspector-section-heading">
+            <div><span>Focused photograph</span><h3 id="inspector-photo-title">—</h3></div>
+            <strong id="inspector-photo-format"></strong>
+          </div>
+          <p id="inspector-photo-status" class="inspector-muted"></p>
+          <div class="inspector-photo-actions">
+            <button id="inspector-toggle-keeper" class="primary-button" type="button">Keep</button>
+            <button id="inspector-compare-photo" class="quiet-button" type="button">Compare</button>
+            <button id="inspector-open-photo" class="quiet-button" type="button">Preview</button>
+          </div>
+          <section class="inspector-section">
+            <h4>RAW relationship</h4>
+            <p id="inspector-raw-status" class="inspector-long-copy"></p>
+          </section>
+          <section class="inspector-section">
+            <h4>Capture and technical information</h4>
+            <dl id="inspector-photo-metadata" class="inspector-metadata"></dl>
+          </section>
+          <section class="inspector-section">
+            <h4>Review annotation</h4>
+            <div class="inspector-annotation-grid">
+              <label>Flag<select id="inspector-photo-flag">
+                <option value="unrated">Unrated</option><option value="keep">Keep</option>
+                <option value="maybe">Maybe</option><option value="reject">Reject</option>
+              </select></label>
+              <label>Rating<select id="inspector-photo-rating">
+                <option value="0">—</option><option value="1">★</option>
+                <option value="2">★★</option><option value="3">★★★</option>
+                <option value="4">★★★★</option><option value="5">★★★★★</option>
+              </select></label>
+              <label>Label<select id="inspector-photo-label">
+                <option value="">None</option><option value="red">Red</option>
+                <option value="yellow">Yellow</option><option value="green">Green</option>
+                <option value="blue">Blue</option><option value="purple">Purple</option>
+              </select></label>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section id="inspector-recovery-panel" class="inspector-panel" role="tabpanel"
+        aria-labelledby="inspector-tab-recovery" hidden>
+        <div class="inspector-section-heading">
+          <div><span>Source health</span><h3 id="inspector-recovery-title">Checking sources…</h3></div>
+        </div>
+        <p id="inspector-recovery-summary" class="inspector-long-copy"></p>
+        <section class="inspector-section">
+          <h4>Current group</h4>
+          <div id="inspector-missing-files" class="inspector-file-list"></div>
+        </section>
+        <section class="inspector-section">
+          <h4>Linked RAW folder</h4>
+          <p id="inspector-raw-root" class="inspector-long-copy"></p>
+        </section>
+        <div class="inspector-recovery-actions">
+          <button id="inspector-open-recovery" class="primary-button" type="button">Recovery options</button>
+          <button id="inspector-link-raw" class="quiet-button" type="button">Link RAW folder</button>
+        </div>
+      </section>
+    </aside>
   </main>
 
   <main id="professional-workspace" class="professional-workspace" hidden>
@@ -243,6 +390,11 @@
         <p class="eyebrow">PROFESSIONAL SHORTLIST</p>
         <h2>Edit-worthy RAWs</h2>
         <p id="shortlist-summary" class="muted">Loading shortlist…</p>
+        <section class="shortlist-readiness" aria-label="Development readiness">
+          <div><span>Selected for development</span><strong id="readiness-selected">—</strong></div>
+          <div><span>RAW companions</span><strong id="readiness-raw">—</strong></div>
+          <div><span>Style profile</span><strong id="readiness-style">Not selected</strong></div>
+        </section>
         <button id="start-shortlist-assessment" class="primary-button"
           type="button">Start assessment</button>
         <section id="shortlist-job-status" class="shortlist-job-status" hidden>
@@ -252,8 +404,6 @@
           </div>
           <progress id="shortlist-job-progress" max="1" value="0"></progress>
           <span id="shortlist-job-progress-text"></span>
-          <button id="open-shortlist-queue" class="quiet-button"
-            type="button">Open Queue</button>
         </section>
         <label class="search">Search
           <input id="shortlist-search" type="search"
@@ -286,8 +436,48 @@
             </select>
           </label>
         </div>
-        <p id="shortlist-visible-count" class="muted"></p>
       </div>
+      <section class="edit-direction-launch" aria-labelledby="edit-direction-launch-title">
+        <div>
+          <strong id="edit-direction-launch-title">Professional edit directions</strong>
+          <span id="edit-direction-selection-count">
+            Select interesting photographs, then generate three treatments.
+          </span>
+        </div>
+        <label class="edit-direction-provider-field">Provider
+          <select id="edit-direction-provider"
+            aria-label="Provider for edit directions"></select>
+        </label>
+        <input id="edit-direction-model" type="text"
+          list="edit-direction-model-options"
+          aria-label="Model override for edit directions"
+          placeholder="Provider default · e.g. openai/gpt-5.6-luna-pro">
+        <div class="style-picker-field edit-direction-style-field">
+          <input id="edit-direction-style-profile" type="text"
+            list="personal-style-profile-options"
+            aria-label="Personal style profile"
+            placeholder="No personal style">
+          <button id="pick-edit-style-profile" class="quiet-button"
+            type="button">Choose style…</button>
+        </div>
+        <datalist id="personal-style-profile-options"></datalist>
+        <datalist id="edit-direction-model-options">
+          <option value="openai/gpt-5.6-luna-pro"></option>
+          <option value="qwen/qwen3.5-122b-a10b"></option>
+          <option value="google/gemini-2.5-flash"></option>
+          <option value="qwen/qwen3.7-flash"></option>
+        </datalist>
+        <p id="personal-style-suggestion" class="personal-style-suggestion">
+          No personal style profile is available. Build one to add a fourth,
+          personalized treatment.
+        </p>
+        <div class="edit-direction-actions">
+          <button id="generate-edit-directions" class="primary-button"
+            type="button">Generate edit ideas</button>
+          <button id="open-style-profile" class="quiet-button" type="button">
+            Build personal style…</button>
+        </div>
+      </section>
       <nav id="shortlist-list" class="shortlist-list"
         aria-label="Ranked professional photographs"></nav>
     </aside>
@@ -367,6 +557,10 @@
               Keep RAW for professional editing
             </label>
             <label class="check-label">
+              <input id="shortlist-interesting" type="checkbox">
+              Select for edit-direction ideas
+            </label>
+            <label class="check-label">
               <input id="shortlist-reviewed" type="checkbox">
               Human reviewed
             </label>
@@ -387,6 +581,37 @@
           </p>
         </section>
 
+        <section id="edit-directions-section" class="professional-evidence" hidden>
+          <div id="edit-direction-validation" class="alert fallback" hidden>
+            <strong>Kimiya validation rejected</strong>
+            <span id="edit-direction-validation-message"></span>
+            <button id="regenerate-edit-direction" class="quiet-button"
+              type="button">Regenerate this photograph</button>
+          </div>
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">AI EDITING DIRECTIONS</p>
+              <h3>Three ways to finish this photograph</h3>
+            </div>
+          </div>
+          <p id="edit-direction-scene" class="rationale"></p>
+          <div id="edit-direction-options"
+            class="professional-assessment-grid"></div>
+          <div class="alert fallback">
+            <strong>Scene guardrails</strong>
+            <span id="edit-direction-guardrails"></span>
+          </div>
+          <div class="semantic-verify-launch">
+            <div>
+              <strong>Semantic verification</strong>
+              <p class="muted">Ask a vision model whether the developed image
+                satisfactorily follows this edit direction.</p>
+            </div>
+            <button id="open-semantic-verification" class="quiet-button"
+              type="button">Verify developed image…</button>
+          </div>
+        </section>
+
         <section class="professional-evidence">
           <div class="section-heading">
             <div>
@@ -396,7 +621,7 @@
           </div>
           <div id="shortlist-assessment" class="professional-assessment-grid"></div>
           <div id="shortlist-warnings" class="alerts"></div>
-          <details>
+          <details class="raw-evidence-disclosure">
             <summary>Raw professional-shortlist evidence</summary>
             <pre id="shortlist-raw-json"></pre>
           </details>
@@ -404,6 +629,275 @@
       </div>
     </section>
   </main>
+
+  <main id="style-workspace" class="style-workspace" hidden>
+    <section class="style-shell">
+      <header class="style-header">
+        <div><p class="eyebrow">PERSONAL STYLE PROFILE</p>
+          <h2>Your editing language</h2>
+          <p id="style-profile-summary" class="muted">No profile selected.</p></div>
+        <div class="style-header-actions">
+          <button id="style-back-to-shortlist" class="quiet-button" type="button">← Shortlist</button>
+          <button id="style-build-profile" class="primary-button" type="button">Build or update profile</button>
+        </div>
+      </header>
+      <div id="style-profile-empty" class="empty-state" hidden>
+        <span class="empty-state-mark" aria-hidden="true">◇</span>
+        <h2>No personal style profile selected</h2>
+        <p>Build a profile from finished photographs, then attach it to this project.</p>
+        <button id="style-empty-build" class="primary-button" type="button">Build personal style</button>
+      </div>
+      <section id="style-profile-detail" class="style-profile-detail" hidden>
+        <div id="style-profile-cards" class="style-profile-cards"></div>
+        <details class="style-history"><summary>Profile revisions and source examples</summary>
+          <pre id="style-profile-history"></pre></details>
+      </section>
+    </section>
+  </main>
+
+  <main id="develop-workspace" class="develop-workspace" hidden>
+    <section class="develop-shell">
+      <header class="develop-header">
+        <div><p class="eyebrow">LOCAL PHOTO DEVELOPMENT</p><h2>Develop images</h2>
+          <p id="develop-summary" class="muted">No development renders linked to this project.</p>
+          <div id="develop-cache-progress" class="develop-cache-progress" hidden>
+            <progress id="develop-cache-meter" max="1" value="0"></progress>
+            <span id="develop-cache-status">Preparing preview cache…</span>
+          </div></div>
+        <div class="develop-header-actions">
+          <label class="develop-engine-choice">Preferred renderer
+            <select id="develop-engine">
+              <option value="darktable">Darktable</option>
+              <option value="default">Darkimiya Default</option>
+            </select>
+          </label>
+          <button id="develop-import-recipe" class="quiet-button" type="button">Import recipe…</button>
+          <button id="develop-back-to-style" class="quiet-button" type="button">← Style</button>
+          <button id="develop-open-verify" class="quiet-button" type="button">Verify →</button>
+        </div>
+      </header>
+      <aside class="develop-browser" aria-label="Photographs selected for development">
+        <div class="develop-browser-heading">
+          <div><p class="eyebrow">DEVELOPMENT SET</p><h3>Selected photographs</h3></div>
+          <strong id="develop-photo-count">0</strong>
+        </div>
+        <label class="develop-search"><span class="visually-hidden">Search selected photographs</span>
+          <input id="develop-search" type="search" placeholder="Search photographs">
+        </label>
+        <nav id="develop-photo-list" class="develop-photo-list"></nav>
+      </aside>
+      <section class="develop-canvas">
+        <div class="develop-ab-controls" role="group" aria-label="Original and treatment comparison">
+          <button class="develop-ab-button" data-develop-view="original" type="button">A · Original</button>
+          <button class="develop-ab-button active" data-develop-view="treatment" type="button">B · Treatment</button>
+          <button class="develop-ab-button" data-develop-view="split" type="button">A/B · Compare</button>
+        </div>
+        <div id="develop-ab-stage" class="develop-ab-stage">
+          <figure id="develop-original-pane" class="develop-ab-pane" hidden>
+            <figcaption>A · Original</figcaption>
+            <img id="develop-original-image" alt="Original photograph">
+          </figure>
+          <figure id="develop-treatment-pane" class="develop-ab-pane">
+            <figcaption>B · Treatment</figcaption>
+            <div id="develop-empty" class="empty-state"><span class="empty-state-mark">◇</span>
+              <h2 id="develop-empty-title">No variant selected</h2>
+              <p id="develop-empty-message">Link a render to the project to compare it here.</p></div>
+            <img id="develop-image" alt="Selected development variant" hidden>
+          </figure>
+        </div>
+      </section>
+      <nav id="develop-rendition-strip" class="develop-rendition-strip"
+           aria-label="Available renditions"></nav>
+      <aside class="develop-inspector">
+        <p class="eyebrow">ACTIVE TREATMENT</p><h3 id="develop-variant-title">Original JPEG</h3>
+        <dl id="develop-metadata" class="develop-metadata"></dl>
+        <section id="develop-guidance" class="develop-guidance"></section>
+        <button id="develop-guided-render" class="primary-button" type="button" disabled hidden>
+          Render selected rendition
+        </button>
+        <div class="develop-primary-actions">
+          <button id="develop-export-active" class="primary-button" type="button" disabled>Export</button>
+          <button id="develop-advanced-edit" class="quiet-button" type="button">Advanced editing</button>
+          <button id="develop-edit-chat" class="quiet-button" type="button" disabled
+                  title="Prompt-guided recipe editing will be implemented next">Edit with Chat · Coming soon</button>
+        </div>
+        <section id="develop-export-status" class="develop-export-status" hidden aria-live="polite">
+          <progress id="develop-export-progress"></progress>
+          <strong id="develop-export-title">Preparing export…</strong>
+          <p id="develop-export-message"></p>
+          <button id="develop-reveal-export" class="quiet-button" type="button" hidden>Show in Finder</button>
+        </section>
+        <div id="develop-guided-status" class="develop-guided-status" aria-live="polite"></div>
+        <section id="develop-advanced-panel" class="develop-advanced-panel" hidden>
+          <h4>Advanced editing</h4>
+          <details><summary>Guided editing recipe</summary><pre id="develop-recipe"></pre></details>
+          <label class="develop-demosaic">Darktable X-Trans demosaicing
+            <select id="develop-demosaic">
+              <option value="markesteijn-1-pass">Markesteijn 1-pass · faster</option>
+              <option value="markesteijn-3-pass">Markesteijn 3-pass · maximum detail</option>
+              <option value="markesteijn-3-pass-vng">Markesteijn 3-pass + VNG · dual</option>
+            </select>
+          </label>
+          <button id="develop-compare-renderers" class="quiet-button" type="button" disabled>
+            Compare Default and Darktable
+          </button>
+          <button id="develop-render-full-darktable" class="quiet-button" type="button" disabled>
+            Render Darktable explicitly
+          </button>
+          <div class="develop-advanced-render">
+          <label>Baseline TIFF<input id="develop-baseline" type="text"></label>
+          <label>Recipe JSON<input id="develop-recipe-path" type="text"></label>
+          <label>Reference JPEG<input id="develop-reference" type="text"></label>
+          <label>Output directory<input id="develop-output-dir" type="text"></label>
+          <button id="develop-render-button" class="primary-button" type="button">Render this treatment</button>
+          <div id="develop-render-error" class="alerts"></div>
+          </div>
+        </section>
+      </aside>
+    </section>
+  </main>
+
+  <main id="verify-workspace" class="verify-workspace" hidden>
+    <section class="verify-shell">
+      <header class="verify-header"><div><p class="eyebrow">SEMANTIC VERIFICATION</p>
+        <h2>Does the result satisfy the edit direction?</h2>
+        <p id="verify-summary" class="muted">No verification certificate linked to this project.</p></div>
+        <div class="verify-header-actions"><button id="verify-back-to-develop" class="quiet-button" type="button">← Develop</button></div>
+      </header>
+      <section id="verify-empty" class="empty-state"><span class="empty-state-mark">◇</span>
+        <h2>No certificate linked</h2><p>Queue semantic verification after linking a developed render and edit suggestion.</p>
+      </section>
+      <section id="verify-detail" class="verify-detail" hidden>
+        <div class="verify-result-card"><span id="verify-result-badge" class="verify-badge"></span>
+          <strong id="verify-result-score"></strong><p id="verify-reasoning"></p>
+          <button id="verify-adjust-button" class="quiet-button" type="button">Adjust and create new recipe revision</button></div>
+        <div id="verify-score-grid" class="verify-score-grid"></div>
+        <section class="verify-concerns"><h3>Concerns</h3><ul id="verify-concerns-list"></ul></section>
+        <details><summary>Evidence and provider certificate</summary><pre id="verify-raw"></pre></details>
+      </section>
+    </section>
+  </main>
+  <dialog id="adjustment-dialog"><div class="dialog-shell shortlist-generate-shell">
+    <header class="dialog-header"><div><p class="eyebrow">BOUNDED RETUNING</p><h2>Create adjustment revision</h2></div>
+      <button id="close-adjustment" class="close-button" type="button">×</button></header>
+    <div class="shortlist-generate-body"><p class="muted">These changes are saved as a new draft. The previous render remains untouched.</p>
+      <label><input id="adjust-midtones" type="checkbox"> Lift midtones slightly</label>
+      <label><input id="adjust-cyan" type="checkbox"> Reduce cyan/blue saturation</label>
+      <label><input id="adjust-shadows" type="checkbox"> Recover shadow detail</label>
+      <label><input id="adjust-skin" type="checkbox"> Protect natural skin tones</label>
+      <label class="wide">Adjustment note<textarea id="adjustment-note" rows="3"></textarea></label>
+      <div id="adjustment-error" class="alerts"></div><div class="dialog-actions">
+        <button id="cancel-adjustment" class="quiet-button" type="button">Cancel</button>
+        <button id="save-adjustment" class="primary-button" type="button">Save revision</button></div>
+    </div></div></dialog>
+
+  <dialog id="semantic-verification-dialog">
+    <div class="dialog-shell shortlist-generate-shell">
+      <header class="dialog-header">
+        <div><p class="eyebrow">SEMANTIC REVIEW</p><h2>Verify developed image</h2></div>
+        <button id="close-semantic-verification" class="close-button" type="button">×</button>
+      </header>
+      <div class="shortlist-generate-body">
+        <label>Developed image path<input id="semantic-developed" type="text" required></label>
+        <label>Original thumbnail path (optional)<input id="semantic-thumbnail" type="text"></label>
+        <label class="wide">Edit suggestion<textarea id="semantic-suggestion" rows="5" required></textarea></label>
+        <label>Provider<select id="semantic-provider"></select></label>
+        <label>OpenRouter model<input id="semantic-model" type="text" list="edit-direction-model-options"></label>
+        <label class="wide checkbox-label"><input id="semantic-consensus" type="checkbox"> Use three-model consensus (A, B, and C)</label>
+        <input id="semantic-output" type="hidden">
+        <div id="semantic-verification-error" class="alerts"></div>
+        <div class="dialog-actions">
+          <button id="cancel-semantic-verification" class="quiet-button" type="button">Cancel</button>
+          <button id="submit-semantic-verification" class="primary-button" type="button">Queue verification</button>
+        </div>
+      </div>
+    </div>
+  </dialog>
+  <dialog id="edit-regeneration-dialog">
+    <div class="dialog-shell shortlist-generate-shell">
+      <header class="dialog-header">
+        <div><p class="eyebrow">EDITING IDEAS</p>
+          <h2>Choose what to generate</h2></div>
+        <button id="close-edit-regeneration" class="close-button"
+          type="button">×</button>
+      </header>
+      <div class="shortlist-generate-body">
+        <p id="edit-regeneration-message" class="muted"></p>
+        <p class="muted">Existing editing ideas are preserved. New results are
+          saved as a revision and merged into the current collection.</p>
+        <div class="dialog-actions">
+          <button id="cancel-edit-regeneration" class="quiet-button"
+            type="button">Cancel</button>
+          <button id="generate-missing-edit-directions" class="quiet-button"
+            type="button">Generate missing only</button>
+          <button id="regenerate-all-edit-directions" class="primary-button"
+            type="button">Regenerate all</button>
+        </div>
+      </div>
+    </div>
+  </dialog>
+  <dialog id="style-profile-dialog">
+    <div class="dialog-shell shortlist-generate-shell">
+      <header class="dialog-header"><div><p class="eyebrow">PERSONAL STYLE</p>
+        <h2>Build or update style profile</h2></div>
+        <button id="close-style-profile" class="close-button" type="button">×</button></header>
+      <div class="shortlist-generate-body">
+        <label>Finished photographs
+          <div class="style-picker-field">
+            <input id="style-photos" type="text" readonly required
+              placeholder="No photographs selected" aria-describedby="style-photos-summary">
+            <button id="pick-style-photos" class="quiet-button" type="button">Add photographs…</button>
+          </div>
+          <small id="style-photos-summary" class="style-picker-summary">You can add files from multiple folders.</small>
+          <div id="style-selection-status" class="style-selection-status" aria-live="polite">
+            Add finished photographs to preview them here.
+          </div>
+          <div id="style-photo-list" class="style-photo-list" role="listbox"
+            aria-label="Selected style photographs"></div>
+        </label>
+        <label>Existing profile (optional)
+          <div class="style-picker-field">
+            <input id="style-existing" type="text" readonly
+              placeholder="No profile selected">
+            <button id="pick-style-existing" class="quiet-button" type="button">Choose profile…</button>
+          </div>
+        </label>
+        <label>Output profile
+          <div class="style-picker-field">
+            <input id="style-output" type="text" readonly
+              placeholder="Choose where to save the JSON profile">
+            <button id="pick-style-output" class="quiet-button"
+              type="button">Choose save location…</button>
+          </div>
+        </label>
+        <label>Mode<select id="style-mode"><option value="update">Update existing preferences</option><option value="replace">Replace profile</option></select></label>
+        <input id="style-provider" type="hidden">
+        <label>AI model
+          <input id="style-model" type="text" list="edit-direction-model-options"
+            value="openai/gpt-5.6-luna-pro" aria-describedby="style-provider-help">
+          <small id="style-provider-help" class="style-picker-summary">
+            Routed through your configured OpenRouter profile.
+          </small>
+        </label>
+        <div id="style-profile-error" class="alerts"></div>
+        <section id="style-extraction-progress" class="style-extraction-progress" hidden
+          aria-live="polite">
+          <div class="style-extraction-heading">
+            <div><span>PROFILE EXTRACTION</span><strong id="style-extraction-stage">Preparing…</strong></div>
+            <strong id="style-extraction-percent">0%</strong>
+          </div>
+          <progress id="style-extraction-progress-bar" max="1" value="0"></progress>
+          <p id="style-extraction-detail">Validating the selected photographs.</p>
+          <div class="style-extraction-actions">
+            <button id="style-use-completed" class="primary-button" type="button" hidden>Use this style profile</button>
+            <button id="style-review-examples" class="quiet-button" type="button" hidden>Review used photographs</button>
+          </div>
+        </section>
+        <div class="dialog-actions"><button id="cancel-style-profile" class="quiet-button" type="button">Close</button>
+          <button id="submit-style-profile" class="primary-button" type="button">Start profile extraction</button></div>
+      </div>
+    </div>
+  </dialog>
 
   <dialog id="shortlist-generate-dialog">
     <div class="dialog-shell shortlist-generate-shell">
@@ -528,7 +1022,7 @@
             </label>
             <label>Output report <span class="optional-label">optional</span>
               <input id="job-output" type="text"
-                placeholder="Generated automatically beside OpenCull data">
+                placeholder="Generated automatically inside Darkimiya project data">
             </label>
             <label class="checkbox-label job-recursive">
               <input id="job-recursive" type="checkbox">
@@ -567,6 +1061,29 @@
             <button id="provider-settings" class="text-button" type="button">
               Configure model providers →
             </button>
+            <details class="judgment-policy-editor">
+              <summary>Advanced judgment policy</summary>
+              <div class="judgment-policy-fields">
+                <fieldset>
+                  <legend>Panel agents</legend>
+                  <div class="judgment-agent-options">
+                    <label><input class="job-judge-agent" type="checkbox" value="A"> A · Observer</label>
+                    <label><input class="job-judge-agent" type="checkbox" value="B"> B · Curator</label>
+                    <label><input class="job-judge-agent" type="checkbox" value="C" checked> C · Report judge</label>
+                    <label><input class="job-judge-agent" type="checkbox" value="D" checked> D · Arbitrator</label>
+                  </div>
+                </fieldset>
+                <div class="judgment-number-fields">
+                  <label>Total votes
+                    <input id="job-judge-votes" type="number" min="1" max="15" value="5">
+                  </label>
+                  <label>Required approvals
+                    <input id="job-judge-required" type="number" min="1" max="15" value="4">
+                  </label>
+                </div>
+                <small>Votes are distributed across the selected agents. Kimiya validates the generated program; cross-family panels are required for certification.</small>
+              </div>
+            </details>
           </section>
         </div>
         <div class="job-submit-row">
@@ -591,6 +1108,10 @@
           <div><strong id="queue-waiting-count">0</strong><span>Waiting</span></div>
           <div><strong id="queue-completed-count">0</strong><span>Completed</span></div>
           <div><strong id="queue-attention-count">0</strong><span>Needs attention</span></div>
+        </div>
+        <div class="queue-preview-diagnostics">
+          <div><strong>Preview processing</strong><span id="queue-preview-status">Waiting for preview activity</span></div>
+          <span id="queue-preview-details"></span>
         </div>
         <div id="job-list" class="job-list"></div>
       </section>
@@ -944,7 +1465,7 @@
       <header>
         <div>
           <p class="eyebrow">REPORT DETAILS</p>
-          <h2>OpenCull evidence</h2>
+          <h2>Culling evidence</h2>
         </div>
         <button id="close-about" class="close-button" type="button" aria-label="Close">×</button>
       </header>
@@ -970,7 +1491,7 @@
       <header>
         <div>
           <p class="eyebrow">GUIDANCE AND RECOVERY</p>
-          <h2>Get OpenCull back to work</h2>
+          <h2>Get Darkimiya back to work</h2>
           <p class="muted dialog-subtitle">
             Diagnose predictable interruptions without changing originals.
           </p>
@@ -1007,6 +1528,23 @@
           </button>
         </section>
       </div>
+      <section id="migration-panel" class="project-migration" hidden>
+        <div>
+          <p class="eyebrow">LEGACY PROJECT</p>
+          <h3>Move this workspace into the folder-local Darkimiya project</h3>
+          <p id="migration-summary" class="muted"></p>
+          <details>
+            <summary>Review migration evidence</summary>
+            <pre id="migration-details"></pre>
+          </details>
+        </div>
+        <div class="project-migration-confirmation">
+          <label for="migration-code">Enter the four-digit code <strong id="migration-code-hint"></strong></label>
+          <input id="migration-code" type="text" inputmode="numeric" maxlength="4" autocomplete="off" placeholder="0000">
+          <button id="migrate-project" class="primary-button" type="button">Create folder-local project</button>
+          <small>The old manifest stays untouched. No photograph is moved.</small>
+        </div>
+      </section>
       <section class="recovery-scenarios">
         <article>
           <strong>External drive unavailable</strong>
@@ -1014,11 +1552,11 @@
         </article>
         <article>
           <strong>Interrupted culling job</strong>
-          <p>Open Queue and choose Retry from checkpoint. OpenCull validates the checkpoint before continuing.</p>
+          <p>Open Activity and choose Retry from checkpoint. Darkimiya validates the checkpoint before continuing.</p>
         </article>
         <article>
           <strong>Stale human review</strong>
-          <p>The report changed after review. Open the matching report or keep this sidecar read-only; OpenCull will not silently remap decisions.</p>
+          <p>The report changed after review. Open the matching report or keep this sidecar read-only; Darkimiya will not silently remap decisions.</p>
         </article>
         <article>
           <strong>Preview cannot decode</strong>
@@ -1118,9 +1656,18 @@
             <div class="operation-form">
               <label>Action
                 <select id="operation-action">
+                  <option value="project_filter">Organize reviewed project (recommended)</option>
+                  <option value="system_cleanup">Final cleanup to macOS Trash…</option>
                   <option value="copy">Copy and verify (recommended)</option>
                   <option value="move">Move with rollback journal</option>
-                  <option value="trash">Move unselected to Trash (recoverable)</option>
+                </select>
+              </label>
+              <label id="cleanup-policy-field" hidden>Cleanup policy
+                <select id="cleanup-policy">
+                  <option value="preserve_useful_raws">Preserve useful RAWs (recommended)</option>
+                  <option value="keep_every_raw">Keep every RAW</option>
+                  <option value="jpeg_only">Move rejected JPEGs only</option>
+                  <option value="inspect">Inspect and choose individual files</option>
                 </select>
               </label>
               <label>Photographs
@@ -1140,7 +1687,7 @@
               <label class="wide">Destination folder
                 <span class="input-action">
                   <input id="operation-destination" type="text"
-                    placeholder="/Volumes/Drive/OpenCull-Export"
+                placeholder="/Volumes/Drive/Darkimiya-Export"
                     autocomplete="off">
                   <button id="pick-operation-destination"
                     class="quiet-button" type="button">Choose…</button>
@@ -1148,9 +1695,16 @@
               </label>
               <label class="check-label"><input id="preserve-relative" type="checkbox"> Preserve relative folder paths</label>
               <label class="check-label"><input id="include-companions" type="checkbox"> Include matching RAW/JPEG companions</label>
+              <div id="cleanup-inspector" class="cleanup-inspector wide" hidden>
+                <div class="cleanup-inspector-heading">
+                  <div><strong>Quarantined files</strong><span id="cleanup-inventory-summary">Loading project quarantine…</span></div>
+                  <div class="button-row"><button id="cleanup-select-all" class="quiet-button" type="button">Select all</button><button id="cleanup-select-none" class="quiet-button" type="button">Select none</button></div>
+                </div>
+                <div id="cleanup-candidate-list" class="cleanup-candidate-list" role="group" aria-label="Choose quarantined files for System Trash"></div>
+              </div>
             </div>
             <div class="preflight-callout">
-              <div><strong>Nothing will change during preflight</strong><span>OpenCull checks every source, destination collision, and available space.</span></div>
+              <div><strong>Nothing will change during preflight</strong><span>Darkimiya checks every source, destination collision, and available space.</span></div>
               <button id="run-preflight" class="primary-button" type="button">Verify exact plan</button>
             </div>
           </section>
@@ -1265,8 +1819,8 @@
           <h3>Decide</h3>
           <dl>
             <div><dt><kbd>1</kbd>–<kbd>9</kbd></dt><dd>Toggle a photograph as keeper</dd></div>
-            <div><dt><kbd>A</kbd></dt><dd>Accept the AI recommendation and move to the next group</dd></div>
-            <div><dt><kbd>→</kbd></dt><dd>Accept without advancing</dd></div>
+            <div><dt><kbd>A</kbd></dt><dd>Accept the current selection and move to the next group</dd></div>
+            <div><dt><kbd>→</kbd></dt><dd>Restore the AI recommendation without advancing</dd></div>
             <div><dt><kbd>N</kbd></dt><dd>Keep no photographs</dd></div>
             <div><dt><kbd>U</kbd></dt><dd>Return cluster to unreviewed</dd></div>
             <div><dt><kbd>Z</kbd></dt><dd>Undo the last review change</dd></div>
@@ -1277,6 +1831,7 @@
           <dl>
             <div><dt><kbd>C</kbd></dt><dd>Open marked comparison</dd></div>
             <div><dt><kbd>X</kbd></dt><dd>Clear comparison</dd></div>
+            <div><dt><kbd>I</kbd></dt><dd>Show or hide the inspector</dd></div>
             <div><dt><kbd>?</kbd></dt><dd>Open or close this reference</dd></div>
             <div><dt><kbd>Esc</kbd></dt><dd>Close the active dialog</dd></div>
           </dl>
@@ -1294,21 +1849,30 @@
 
   <template id="photo-card-template">
     <article class="photo-card">
-      <div class="image-button" role="button" tabindex="0">
-        <img loading="lazy" alt="">
+      <div class="image-button">
+        <div class="photo-image-surface" role="button" tabindex="0">
+          <img loading="lazy" alt="">
+          <span class="image-loading">Preview queued…</span>
+          <button class="image-error" type="button" hidden>Retry preview</button>
+        </div>
         <span class="photo-number" aria-hidden="true"></span>
-        <span class="image-loading">Preview queued…</span>
-        <button class="image-error" type="button" hidden>Retry preview</button>
+        <button class="human-toggle selection-toggle" type="button">
+          <span class="selection-mark" aria-hidden="true"></span>
+        </button>
+        <span class="photo-format-badge"></span>
+        <strong class="filename"></strong>
+        <div class="card-actions">
+          <button class="compare-button" type="button">Compare</button>
+          <button class="photo-details-button" type="button"
+            aria-expanded="false">Info</button>
+        </div>
       </div>
-      <div class="photo-info">
-        <div>
-          <strong class="filename"></strong>
+      <div class="photo-info" hidden>
+        <div class="photo-details-copy">
           <span class="keeper-badge"></span>
           <span class="human-badge"></span>
-        </div>
-        <div class="card-actions">
-          <button class="human-toggle primary-button" type="button">Keep</button>
-          <button class="compare-button quiet-button" type="button">Compare</button>
+          <span class="raw-match-badge"></span>
+          <span class="photo-details-metadata"></span>
         </div>
         <div class="photo-judgment">
           <label>Flag

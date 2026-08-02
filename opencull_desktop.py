@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Native macOS launcher and internal frozen-process entry points for OpenCull."""
+"""Native macOS launcher and internal frozen-process entry points for Darkimiya."""
 
 from __future__ import annotations
 
@@ -22,6 +22,10 @@ from opencull_gui.macos import InstanceLock, MacOSPaths, resource_root
 from opencull_gui.measurements import load_measurements
 from opencull_gui.photos import PhotoStore
 from opencull_gui.providers import ProviderStore
+from opencull_gui.project import (
+    ensure_project_layout, legacy_migration_preview,
+    load_or_create_folder_project, migrate_legacy_project,
+)
 from opencull_gui.report import load_report
 from opencull_gui.reviews import ReviewStore, default_review_path
 from opencull_gui.server import ReviewServer
@@ -46,6 +50,26 @@ def run_kimiya(arguments: Sequence[str]) -> int:
         return int(result or 0)
     finally:
         sys.argv = previous
+
+
+def run_development_pipeline(arguments: Sequence[str]) -> int:
+    from development_pipeline import main as pipeline_main
+    return int(pipeline_main(list(arguments)) or 0)
+
+
+def run_comparison_pipeline(arguments: Sequence[str]) -> int:
+    from comparison_pipeline import main as pipeline_main
+    return int(pipeline_main(list(arguments)) or 0)
+
+
+def run_renderer_export_pipeline(arguments: Sequence[str]) -> int:
+    from renderer_export_pipeline import main as pipeline_main
+    return int(pipeline_main(list(arguments)) or 0)
+
+
+def run_delivery_export_pipeline(arguments: Sequence[str]) -> int:
+    from delivery_export_pipeline import main as pipeline_main
+    return int(pipeline_main(list(arguments)) or 0)
 
 
 def run_review(
@@ -75,21 +99,35 @@ def make_review_server(
     report = load_report(report_path)
     cache = paths.cache / "previews"
     photos = PhotoStore(photos_path, cache)
-    reviews = ReviewStore(default_review_path(report.path), report, photos.root)
+    project_path, _project = load_or_create_folder_project(
+        photos.root, report.path.stem,
+        report.path.with_suffix(".opencull-project.json"))
+    layout = ensure_project_layout(photos.root)
+    review_path = (
+        default_review_path(report.path)
+        if project_path != layout["manifest"]
+        else layout["Reviews"] / f"{report.path.stem}.review.json")
+    reviews = ReviewStore(review_path, report, photos.root)
     measurements, manifest_path = load_measurements(None, report)
     providers = providers or ProviderStore(
         paths.providers, resource_root(),
         generated_root=paths.generated / "providers")
     faces = FaceStore(
         default_face_db(report.path), report, photos, reviews, paths.face_models)
-    detected_shortlist = shortlist_path or report.path.with_name(
+    adjacent_shortlist = report.path.with_name(
         f"{report.path.stem}.professional-shortlist.json")
+    persistent_shortlist = layout["Reports"] / (
+        f"{report.path.stem}.professional-shortlist.json")
+    detected_shortlist = shortlist_path or (
+        persistent_shortlist if persistent_shortlist.is_file()
+        else adjacent_shortlist)
     server = ReviewServer(
         ("127.0.0.1", 0), report, photos, reviews,
         measurements=measurements, manifest_path=manifest_path,
         jobs=jobs, providers=providers, faces=faces,
         shortlist_path=(
             detected_shortlist if detected_shortlist.is_file() else None),
+        shortlist_default_path=persistent_shortlist,
         shutdown_jobs=jobs is None)
     return server
 
@@ -100,10 +138,12 @@ def run_release_smoke_test(output_path: Path) -> int:
     required = [
         root / "opencull.kim",
         root / "professional_shortlist.kim",
+        root / "edit_suggestions.kim",
         root / "agents.kim",
         root / "scan.py",
         root / "opencull_kernel.py",
         root / "shortlist_kernel.py",
+        root / "edit_suggestion_kernel.py",
         root / "opencull_gui" / "static" / "index.html",
         root / "opencull_gui" / "static" / "styles.css",
         root / "opencull_gui" / "static" / "app.js",
@@ -123,6 +163,7 @@ def run_release_smoke_test(output_path: Path) -> int:
         import cv2
         import numpy
         import PIL
+        from PIL import Image
 
         checks["dependencies"] = {
             "opencv": cv2.__version__,
@@ -147,6 +188,39 @@ def run_release_smoke_test(output_path: Path) -> int:
                 kimiya_workspace_root=paths.kimiya)
             queue_empty = jobs.public()["jobs"] == []
             jobs.shutdown()
+            migration_source = Path(temporary) / "legacy-photos"
+            migration_source.mkdir()
+            migration_evidence = Path(temporary) / "legacy-report.json"
+            migration_evidence.write_text('{"report":true}\n', encoding="utf-8")
+            legacy_manifest = Path(temporary) / "legacy.opencull-project.json"
+            legacy_manifest.write_text(json.dumps({
+                "format": "opencull-project-v1", "id": "smoke-legacy",
+                "source_folder": str(migration_source),
+                "artifacts": {"culling_report": {"path": str(migration_evidence)}},
+            }) + "\n", encoding="utf-8")
+            legacy_bytes = legacy_manifest.read_bytes()
+            migration_preview = legacy_migration_preview(
+                legacy_manifest, migration_source)
+            migration_result = migrate_legacy_project(
+                legacy_manifest, migration_source,
+                migration_preview["confirmation_code"])
+            checks["project_migration"] = bool(
+                migration_result["project"].get("format") == "darkimiya-project-v1"
+                and migration_result["journal"].get("status") == "completed"
+                and legacy_manifest.read_bytes() == legacy_bytes
+                and Path(migration_result["path"]).is_file())
+            from opencull_gui.project_catalog import ProjectCatalog
+            catalog_source = Path(temporary) / "catalog-photos"
+            catalog_source.mkdir()
+            Image.new("RGB", (16, 12), "blue").save(
+                catalog_source / "sample.jpg")
+            catalog = ProjectCatalog(paths.support / "projects.json")
+            catalog_project = catalog.add(str(catalog_source))["projects"][0]
+            manual_report = catalog.manual_selection_report(catalog_project["id"])
+            checks["project_catalog"] = bool(
+                len(catalog.public()["projects"]) == 1
+                and manual_report.is_file()
+                and catalog.public()["projects"][0]["report_available"])
             checks["private_paths"] = all(
                 directory.is_dir() and directory.stat().st_mode & 0o077 == 0
                 for directory in (
@@ -158,6 +232,8 @@ def run_release_smoke_test(output_path: Path) -> int:
             ["check", str(root / "opencull.kim")])
         checks["professional_kimiya_check_status"] = run_kimiya(
             ["check", str(root / "professional_shortlist.kim")])
+        checks["edit_suggestions_kimiya_check_status"] = run_kimiya(
+            ["check", str(root / "edit_suggestions.kim")])
     except Exception as exc:
         checks["error"] = f"{type(exc).__name__}: {exc}"
     checks["passed"] = (
@@ -166,8 +242,11 @@ def run_release_smoke_test(output_path: Path) -> int:
         and checks.get("single_instance") is True
         and checks.get("provider_store") is True
         and checks.get("queue_store") is True
+        and checks.get("project_migration") is True
+        and checks.get("project_catalog") is True
         and checks.get("kimiya_check_status") == 0
         and checks.get("professional_kimiya_check_status") == 0
+        and checks.get("edit_suggestions_kimiya_check_status") == 0
         and "error" not in checks
     )
     output_path = output_path.expanduser().resolve()
@@ -181,11 +260,79 @@ def run_release_smoke_test(output_path: Path) -> int:
 def run_native_server(paths: MacOSPaths) -> int:
     """Run the private queue service owned by the SwiftUI desktop shell."""
     from opencull_gui.desktop_server import serve_desktop_bridge
+    from opencull_gui.project_catalog import ProjectCatalog
 
     providers = ProviderStore(
         paths.providers, resource_root(),
         generated_root=paths.generated / "providers")
     def build_job_command(job: dict) -> list[str]:
+        if job.get("kind") == "delivery_export":
+            command = executable_command(
+                "--delivery-export-pipeline-worker",
+                "--source", job["source"], "--reference", job["reference"],
+                "--directions", job["directions"], "--photo", job["photo"],
+                "--style", job["style"], "--engine", job["engine"],
+                "--demosaic", job["demosaic"],
+                "--render-output-dir", job["render_output_dir"],
+                "--project", job["project"], "--destination", job["destination"],
+                "--export-key", job["export_key"], "--receipt", job["output"])
+            if job.get("render"):
+                command.extend(["--render", job["render"]])
+            return command
+        if job.get("kind") == "renderer_export":
+            return executable_command(
+                "--renderer-export-pipeline-worker",
+                "--source", job["source"], "--reference", job["reference"],
+                "--directions", job["directions"], "--photo", job["photo"],
+                "--style", job["style"], "--output-dir", job["output_dir"],
+                "--project", job["project"], "--demosaic", job["demosaic"])
+        if job.get("kind") == "renderer_comparison":
+            return executable_command(
+                "--comparison-pipeline-worker",
+                "--source", job["source"], "--reference", job["reference"],
+                "--directions", job["directions"], "--photo", job["photo"],
+                "--style", job["style"], "--opencull-render", job["opencull_render"],
+                "--output-dir", job["output_dir"], "--project", job["project"],
+                "--demosaic", job["demosaic"])
+        if job.get("kind") == "development_pipeline":
+            return executable_command(
+                "--development-pipeline-worker",
+                "--source", job["source"], "--reference", job["reference"],
+                "--directions", job["directions"], "--photo", job["photo"],
+                "--style", job["style"], "--output-dir", job["output_dir"],
+                "--project", job["project"])
+        if job.get("kind") == "style_profile":
+            return executable_command(
+                "--kimiya-worker", "run",
+                job.get("program_path")
+                or str(resource_root() / "style_profile.kim"),
+                f"photos={job['photos']}", f"output={job['output']}",
+                f"existing={job.get('existing', '')}",
+                f"mode={job.get('mode', 'update')}",
+                f"limit={job.get('limit', 64)}")
+        if job.get("kind") == "semantic_verification":
+            return executable_command(
+                "--kimiya-worker", "run",
+                job.get("program_path")
+                or str(resource_root() / "semantic_verification.kim"),
+                f"original={job['original']}",
+                f"developed={job['developed']}",
+                f"thumbnail={job.get('thumbnail', '')}",
+                f"suggestion={job['suggestion']}",
+                f"consensus={'true' if job.get('consensus') else 'false'}",
+                f"output={job['output']}")
+        if job.get("kind") == "edit_suggestions":
+            return executable_command(
+                "--kimiya-worker", "run",
+                job.get("program_path")
+                or str(resource_root() / "edit_suggestions.kim"),
+                f"shortlist={job['shortlist']}", f"review={job['review']}",
+                f"photos={job['photos']}", f"output={job['output']}",
+                f"profile={job['profile']}",
+                f"style_profile={job.get('style_profile', '')}",
+                f"only_photo={job.get('only_photo', '')}",
+                f"only_photos={json.dumps(job.get('only_photos', []))}",
+                "resume=true")
         if job.get("kind") == "professional_shortlist":
             return executable_command(
                 "--kimiya-worker", "run",
@@ -195,6 +342,8 @@ def run_native_server(paths: MacOSPaths) -> int:
                 f"review={job.get('review', '')}", f"output={job['output']}",
                 f"policy={job['policy']}", f"profile={job['profile']}",
                 "resume=true")
+        if job.get("kind") not in {None, "culling"}:
+            raise ValueError(f"unsupported native job kind: {job.get('kind')}")
         return executable_command(
             "--kimiya-worker", "run",
             job.get("program_path") or str(resource_root() / "opencull.kim"),
@@ -209,6 +358,8 @@ def run_native_server(paths: MacOSPaths) -> int:
         program_checker=lambda program: _check_native_program(program),
         kimiya_workspace_root=paths.kimiya,
         output_root=paths.results)
+    projects = ProjectCatalog(paths.support / "projects.json")
+    projects.import_jobs(jobs.public())
 
     review_servers: list[ReviewServer] = []
 
@@ -242,7 +393,7 @@ def run_native_server(paths: MacOSPaths) -> int:
                 "log_path": str(paths.launcher_log),
                 "results_path": str(paths.results),
                 "frozen": bool(getattr(sys, "frozen", False)),
-            })
+            }, projects=projects)
     finally:
         for server in review_servers:
             server.shutdown()
@@ -270,7 +421,7 @@ class DesktopApp:
         self.ttk = ttk
         self.paths = paths
         self.root = tk.Tk()
-        self.root.title("OpenCull")
+        self.root.title("Darkimiya")
         self.root.geometry("920x620")
         self.root.minsize(760, 480)
         self.status = tk.StringVar(value="Ready")
@@ -318,7 +469,7 @@ class DesktopApp:
         outer = ttk.Frame(self.root, padding=20)
         outer.pack(fill="both", expand=True)
         ttk.Label(
-            outer, text="OpenCull", font=("Helvetica Neue", 26, "bold")
+            outer, text="Darkimiya", font=("Helvetica Neue", 26, "bold")
         ).pack(anchor="w")
         ttk.Label(
             outer,
@@ -341,7 +492,7 @@ class DesktopApp:
             ttk.Label(
                 self.welcome,
                 text=(
-                    "OpenCull never changes source photographs during culling. "
+                    "The OpenCull engine never changes source photographs during culling. "
                     "Provider credentials stay in macOS Keychain."
                 ),
             ).pack(anchor="w", pady=(6, 8))
@@ -420,7 +571,7 @@ class DesktopApp:
     def dismiss_onboarding(self) -> None:
         try:
             self.paths.onboarding_marker.write_text(
-                "OpenCull onboarding completed.\n", encoding="utf-8")
+                "Darkimiya onboarding completed.\n", encoding="utf-8")
             os.chmod(self.paths.onboarding_marker, 0o600)
         except OSError as exc:
             self.status.set(f"Could not save onboarding preference: {exc}")
@@ -462,10 +613,10 @@ class DesktopApp:
         endpoint = tk.StringVar(value="")
         secret = tk.StringVar(value="")
         defaults = {
-            "A": "google/gemini-2.5-flash",
-            "B": "openai/gpt-4.1-mini",
-            "C": "mistralai/mistral-small-3.2-24b-instruct",
-            "D": "qwen/qwen3-vl-30b-a3b-instruct",
+            "A": "openai/gpt-5.6-luna-pro",
+            "B": "openai/gpt-5.6-luna-pro",
+            "C": "openai/gpt-4.1-mini",
+            "D": "openai/gpt-5.6-luna-pro",
         }
         models = {agent: tk.StringVar(value=model) for agent, model in defaults.items()}
         ttk.Label(
@@ -580,8 +731,8 @@ class DesktopApp:
         from tkinter import filedialog
 
         report = initial_report or filedialog.askopenfilename(
-            title="Choose an OpenCull result",
-            filetypes=(("OpenCull JSON", "*.json"),))
+            title="Choose a Darkimiya culling result",
+            filetypes=(("Darkimiya culling JSON", "*.json"),))
         if not report:
             return
         photos = filedialog.askdirectory(
@@ -660,7 +811,7 @@ class DesktopApp:
         from tkinter import messagebox
 
         self.status.set(message)
-        messagebox.showerror("OpenCull", message)
+        messagebox.showerror("Darkimiya", message)
 
     def close(self) -> None:
         self.jobs.shutdown()
@@ -674,6 +825,10 @@ class DesktopApp:
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--kimiya-worker", nargs=argparse.REMAINDER)
+    parser.add_argument("--development-pipeline-worker", nargs=argparse.REMAINDER)
+    parser.add_argument("--comparison-pipeline-worker", nargs=argparse.REMAINDER)
+    parser.add_argument("--renderer-export-pipeline-worker", nargs=argparse.REMAINDER)
+    parser.add_argument("--delivery-export-pipeline-worker", nargs=argparse.REMAINDER)
     parser.add_argument("--review-window", nargs=2, metavar=("REPORT", "PHOTOS"))
     parser.add_argument("--no-browser", action="store_true")
     parser.add_argument("--release-smoke-test", metavar="REPORT_PATH")
@@ -686,6 +841,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     if args.kimiya_worker is not None:
         return run_kimiya(args.kimiya_worker)
+    if args.development_pipeline_worker is not None:
+        return run_development_pipeline(args.development_pipeline_worker)
+    if args.comparison_pipeline_worker is not None:
+        return run_comparison_pipeline(args.comparison_pipeline_worker)
+    if args.renderer_export_pipeline_worker is not None:
+        return run_renderer_export_pipeline(args.renderer_export_pipeline_worker)
+    if args.delivery_export_pipeline_worker is not None:
+        return run_delivery_export_pipeline(args.delivery_export_pipeline_worker)
     if args.release_smoke_test:
         return run_release_smoke_test(Path(args.release_smoke_test))
     paths = MacOSPaths.create()
@@ -699,11 +862,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.native_server:
         lock = InstanceLock(paths.support / "desktop.lock")
         if not lock.acquire():
-            logging.info("OpenCull desktop is already running")
+            logging.info("Darkimiya desktop is already running")
             print(json.dumps({
                 "format": "opencull-native-bootstrap-v1",
                 "error": (
-                    "OpenCull is already running. Quit the existing OpenCull "
+                    "Darkimiya is already running. Quit the existing Darkimiya "
                     "window with Command-Q, then launch it once."
                 ),
             }), flush=True)
@@ -714,7 +877,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             lock.release()
     lock = InstanceLock(paths.support / "desktop.lock")
     if not lock.acquire():
-        logging.info("OpenCull desktop is already running")
+        logging.info("Darkimiya desktop is already running")
         return 0
     try:
         return DesktopApp(paths, args.finder_items).run()

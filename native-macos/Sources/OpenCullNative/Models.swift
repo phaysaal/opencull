@@ -1,8 +1,59 @@
 import Foundation
 
+@MainActor
+final class ProjectSession: ObservableObject {
+    @Published private(set) var activeReview: ReviewTarget?
+
+    var isOpen: Bool { activeReview != nil }
+
+    func open(_ target: ReviewTarget) {
+        activeReview = target
+    }
+
+    func close() {
+        activeReview = nil
+    }
+}
+
 struct DesktopState: Decodable {
     let queue: QueueState
     let providers: ProviderState
+    let projects: ProjectCatalogState
+}
+
+struct ProjectCatalogState: Decodable {
+    let revision: Int
+    let projects: [DarkimiyaProject]
+}
+
+struct DarkimiyaProject: Decodable, Identifiable {
+    let id: String
+    let name: String
+    let photos: String
+    let project: String
+    let stage: String
+    let available: Bool
+    let manifestAvailable: Bool
+    let report: String
+    let reportAvailable: Bool
+    let activityCount: Int
+    let addedAt: String?
+    let importWarning: String?
+    let culling: CullJob?
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, photos, project, stage, available, report, culling
+        case manifestAvailable = "manifest_available"
+        case reportAvailable = "report_available"
+        case activityCount = "activity_count"
+        case addedAt = "added_at"
+        case importWarning = "import_warning"
+    }
+
+    var cullingBlocksWorkflow: Bool {
+        guard let culling else { return false }
+        return ["queued", "running", "stopping", "detached"].contains(culling.status)
+    }
 }
 
 struct QueueState: Decodable {
@@ -117,25 +168,78 @@ struct CullProgress: Decodable {
     }
 }
 
+struct JobJudgmentPolicy: Codable {
+    let panel: [String]
+    let votes: Int
+    let required: Int
+
+    var summary: String {
+        "\(panel.joined(separator: " + ")) · \(required) of \(votes) approvals"
+    }
+}
+
 struct CullJob: Decodable, Identifiable {
     let id: String
+    let kind: String?
     let photos: String
     let output: String
-    let profile: String
+    // Not every queue item is a culling run (style-profile and verification
+    // jobs do not carry a culling intent). Keep the native shell tolerant of
+    // those valid job records.
+    let profile: String?
     let status: String
     let message: String
     let providerProfileName: String?
     let providerPrivacy: String?
+    let createdAt: String?
+    let photoExamples: [String]?
+    let judgmentPolicy: JobJudgmentPolicy?
     let progress: CullProgress
 
     enum CodingKeys: String, CodingKey {
-        case id, photos, output, profile, status, message, progress
+        case id, kind, photos, output, profile, status, message, progress
         case providerProfileName = "provider_profile_name"
         case providerPrivacy = "provider_privacy"
+        case createdAt = "created_at"
+        case photoExamples = "photo_examples"
+        case judgmentPolicy = "judgment_policy"
     }
 
     var folderName: String {
-        URL(fileURLWithPath: photos).lastPathComponent
+        let source: String
+        if kind == "style_profile", let first = photoExamples?.first {
+            source = URL(fileURLWithPath: first).deletingLastPathComponent().path
+        } else {
+            source = photos
+        }
+        return URL(fileURLWithPath: source).lastPathComponent
+    }
+
+    var kindLabel: String {
+        switch kind ?? "culling" {
+        case "culling": "Culling"
+        case "professional_shortlist": "Professional Shortlist"
+        case "edit_suggestions": "Edit Directions"
+        case "semantic_verification": "Semantic Verification"
+        case "style_profile": "Personal Style"
+        case "development_render": "Photo Development"
+        case "development_pipeline": "Guided Development"
+        case "delivery_export": "Image Export"
+        default: "Darkimiya Job"
+        }
+    }
+
+    var displayName: String {
+        "\(kindLabel) — \(folderName.isEmpty ? "Unknown folder" : folderName)"
+    }
+
+    var addedLabel: String {
+        guard let createdAt else { return "Added time unavailable" }
+        let parser = ISO8601DateFormatter()
+        parser.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let date = parser.date(from: createdAt) ?? ISO8601DateFormatter().date(from: createdAt)
+        guard let date else { return "Added \(createdAt)" }
+        return "Added \(date.formatted(date: .abbreviated, time: .shortened))"
     }
 
     var isActive: Bool {
@@ -153,11 +257,55 @@ struct NewJobRequest: Encodable {
     let recursive: Bool
     let profile: String
     let providerProfileID: String
+    let judgePanel: [String]
+    let judgeVotes: Int
+    let judgeRequired: Int
 
     enum CodingKeys: String, CodingKey {
         case photos, recursive, profile
         case keepPerGroup = "keep_per_group"
         case providerProfileID = "provider_profile_id"
+        case judgePanel = "judge_panel"
+        case judgeVotes = "judge_votes"
+        case judgeRequired = "judge_required"
+    }
+}
+
+struct AddProjectRequest: Encodable {
+    let photos: String
+}
+
+struct ImportProjectReportRequest: Encodable {
+    let photos: String
+    let report: String
+}
+
+struct ProjectIDRequest: Encodable {
+    let projectID: String
+
+    enum CodingKeys: String, CodingKey {
+        case projectID = "project_id"
+    }
+}
+
+struct CullProjectRequest: Encodable {
+    let projectID: String
+    let keepPerGroup: Int
+    let recursive: Bool
+    let profile: String
+    let providerProfileID: String
+    let judgePanel: [String]
+    let judgeVotes: Int
+    let judgeRequired: Int
+
+    enum CodingKeys: String, CodingKey {
+        case recursive, profile
+        case projectID = "project_id"
+        case keepPerGroup = "keep_per_group"
+        case providerProfileID = "provider_profile_id"
+        case judgePanel = "judge_panel"
+        case judgeVotes = "judge_votes"
+        case judgeRequired = "judge_required"
     }
 }
 
@@ -232,7 +380,7 @@ struct DiagnosticSnapshot: Decodable {
 
     var text: String {
         [
-            "OpenCull native diagnostics",
+            "Darkimiya diagnostics",
             "Format: \(format)",
             "Architecture: \(architecture)",
             "Python: \(python)",

@@ -212,6 +212,19 @@ class FaceStore:
                 key for key, value in expected.items()
                 if current.get(key) != value
             ]
+            if mismatch == ["report_sha256"]:
+                counts = [
+                    self._db.execute(
+                        f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                    for table in ("photos", "faces", "people")
+                ]
+                if not any(counts):
+                    self._db.execute(
+                        "UPDATE metadata SET value = ? WHERE key = ?",
+                        (self.report.sha256, "report_sha256"),
+                    )
+                    self._db.commit()
+                    mismatch = []
             if mismatch:
                 raise FaceError(
                     "private face database belongs to different evidence: "

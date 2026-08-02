@@ -1,0 +1,56 @@
+-- Build or update a semantic personal editing-style profile.
+
+param photos: text
+param output: text = "personal-style-profile.json"
+param existing: text = ""
+param mode: text = "update"
+param limit: num = 64
+
+use "agents.kim"
+use python "style_profile_kernel.py"
+
+context k_style:
+    domain = "personal photographic editing style extraction"
+    preserve = [authorial_signature, subject_dignity, uncertainty, updateability]
+    allow_loss = [incidental_scene_content, exact_slider_values]
+
+schema StyleProfile:
+    profile_name: text
+    visual_signature: text
+    tonal_preferences: text
+    contrast_preferences: text
+    color_preferences: text
+    white_balance_preferences: text
+    saturation_preferences: text
+    highlight_shadow_preferences: text
+    texture_detail_preferences: text
+    composition_preferences: text
+    subject_and_skin_preferences: text
+    scene_adaptation: text
+    preferred_adjustments: text
+    avoid_or_guardrails: text
+    professional_refinement: text
+    confidence: num
+
+print "STYLE_PROGRESS 8 Validating selected photographs"
+request := build_style_request(photos, existing, limit)
+images := []
+paths := style_example_paths(request)
+print "STYLE_PROGRESS 24 Preparing selected photographs"
+forall path in paths:
+    image := observe image(path)
+    check image.exists
+    images := images + [image]
+print "STYLE_PROGRESS 48 Photographs prepared for the vision model"
+print "STYLE_PROGRESS 60 Asking the profile model to learn your editing style"
+raw := memo gen<StyleProfile>(style_profile_prompt(request, mode), images=images) by A
+print "STYLE_PROGRESS 78 Validating the returned style profile"
+profile := normalize_style_profile(raw)
+check valid_style_profile(profile)
+print "STYLE_PROGRESS 88 Writing the updateable profile and revision history"
+report := style_profile_json(request, profile, mode)
+check len(report) > 0
+act file.overwrite(output, report)
+print "STYLE_PROGRESS 96 Verifying the saved profile"
+settle until check file_exists(output) within 5
+commit(report)

@@ -16,6 +16,8 @@ from PIL import Image, ImageOps
 
 from scan import open_preview
 
+from .branding import PROJECT_DIRECTORY_NAME
+
 
 class PhotoError(ValueError):
     """A photograph cannot be resolved or decoded safely."""
@@ -44,6 +46,16 @@ class PhotoStore:
         if candidate != self.root and self.root not in candidate.parents:
             raise PhotoError(f"photo escapes source directory: {name!r}")
         if not candidate.is_file():
+            managed = self.root / PROJECT_DIRECTORY_NAME
+            relocated = []
+            for category in ("Rejected", "RAW Reserve"):
+                category_root = (managed / category).resolve()
+                path = (category_root / relative).resolve()
+                if path == category_root or category_root in path.parents:
+                    relocated.append(path)
+            candidate = next(
+                (path for path in relocated if path.is_file()), candidate)
+        if not candidate.is_file():
             raise PhotoError(f"photo is missing: {name}")
         return candidate
 
@@ -58,6 +70,12 @@ class PhotoStore:
         ])
         digest = hashlib.sha256(identity.encode()).hexdigest()
         return self.cache / size_name / f"{digest}.jpg"
+
+    def preview_revision(self, name: str, size_name: str) -> str:
+        """Return the immutable identity of a generated preview artifact."""
+        if size_name not in self.SIZES:
+            raise PhotoError(f"unsupported preview size: {size_name}")
+        return self._cache_path(self.resolve(name), size_name).stem
 
     def preview(self, name: str, size_name: str) -> Path:
         """Synchronous compatibility wrapper; GUI requests use PreviewManager."""
@@ -153,26 +171,68 @@ class PreviewManager:
         store: PhotoStore,
         workers: int = 2,
         max_pending: int = 256,
+        stall_timeout: float = 60.0,
     ):
         self.store = store
         self.workers = max(1, min(8, int(workers)))
         self.max_pending = max(16, int(max_pending))
+        self.stall_timeout = max(0.01, float(stall_timeout))
         self._queue: queue.PriorityQueue[PreviewTask] = queue.PriorityQueue()
         self._lock = threading.RLock()
         self._states: dict[str, dict[str, Any]] = {}
         self._sequence = 0
         self._focus_epoch = 0
+        self._worker_sequence = 0
+        self._retired_workers: set[int] = set()
         self._stop = threading.Event()
-        self._threads = [
-            threading.Thread(
-                target=self._worker,
-                name=f"opencull-preview-{number + 1}",
-                daemon=True,
-            )
-            for number in range(self.workers)
-        ]
-        for thread in self._threads:
-            thread.start()
+        self._threads: list[threading.Thread] = []
+        for _ in range(self.workers):
+            self._start_worker()
+
+    def _start_worker(self) -> None:
+        self._worker_sequence += 1
+        worker_id = self._worker_sequence
+        thread = threading.Thread(
+            target=self._worker,
+            args=(worker_id,),
+            name=f"opencull-preview-{worker_id}",
+            daemon=True,
+        )
+        self._threads.append(thread)
+        thread.start()
+
+    def _recover_stalled_locked(self) -> None:
+        """Retire decoder workers that stopped making progress.
+
+        Python cannot safely interrupt a native image decoder in another thread.
+        Invalid RAW files and decoder bugs can therefore leave a call blocked.
+        Retiring that worker lets the preview queue continue; its eventual result
+        is ignored through the bumped task version.
+        """
+        now = time.time()
+        stalled_workers: set[int] = set()
+        for state in self._states.values():
+            worker_id = state.get("worker_id")
+            if (
+                state.get("status") == "generating"
+                and worker_id
+                and now - float(state.get("updated_at", now))
+                >= self.stall_timeout
+            ):
+                state.update({
+                    "status": "failed",
+                    "error": (
+                        "preview decoding stalled; the decoder was restarted. "
+                        "Choose Retry to try this photo again."
+                    ),
+                    "updated_at": now,
+                    "version": int(state.get("version", 0)) + 1,
+                    "worker_id": None,
+                })
+                stalled_workers.add(int(worker_id))
+        for worker_id in stalled_workers - self._retired_workers:
+            self._retired_workers.add(worker_id)
+            self._start_worker()
 
     @staticmethod
     def key(name: str, size: str) -> str:
@@ -180,10 +240,19 @@ class PreviewManager:
 
     def _public(self, key: str) -> dict[str, Any]:
         state = self._states.get(key, {})
-        return {
+        public = {
             field: state.get(field)
             for field in ("name", "size", "status", "error", "updated_at")
         }
+        if state.get("status") == "ready":
+            try:
+                public["revision"] = self.store.preview_revision(
+                    str(state.get("name", "")), str(state.get("size", "")))
+            except PhotoError:
+                public["revision"] = None
+        else:
+            public["revision"] = None
+        return public
 
     def _enqueue(
         self,
@@ -260,6 +329,7 @@ class PreviewManager:
         if size not in self.store.SIZES:
             raise PhotoError(f"unsupported preview size: {size}")
         with self._lock:
+            self._recover_stalled_locked()
             self._focus_epoch += 1
         results = {}
         for name in visible:
@@ -279,6 +349,7 @@ class PreviewManager:
 
     def status(self, names: list[str], size: str) -> dict[str, Any]:
         with self._lock:
+            self._recover_stalled_locked()
             return {
                 "previews": {
                     name: self._public(self.key(name, size))
@@ -289,6 +360,7 @@ class PreviewManager:
 
     def progress(self) -> dict[str, Any]:
         with self._lock:
+            self._recover_stalled_locked()
             counts = {
                 status: sum(
                     item.get("status") == status
@@ -306,8 +378,11 @@ class PreviewManager:
                 "cache": self.store.cache_stats(),
             }
 
-    def _worker(self) -> None:
+    def _worker(self, worker_id: int) -> None:
         while not self._stop.is_set():
+            with self._lock:
+                if worker_id in self._retired_workers:
+                    return
             try:
                 task = self._queue.get(timeout=0.25)
             except queue.Empty:
@@ -327,17 +402,22 @@ class PreviewManager:
                     current.update({
                         "status": "generating", "error": "",
                         "updated_at": time.time(),
+                        "worker_id": worker_id,
                     })
                 try:
                     self.store.generate_preview(task.name, task.size)
-                except PhotoError as exc:
+                except Exception as exc:
                     with self._lock:
                         current = self._states.get(task.key)
                         if current and current.get("version") == task.version:
                             current.update({
                                 "status": "failed",
-                                "error": str(exc),
+                                "error": (
+                                    str(exc) or
+                                    f"{type(exc).__name__} while decoding preview"
+                                ),
                                 "updated_at": time.time(),
+                                "worker_id": None,
                             })
                 else:
                     with self._lock:
@@ -346,9 +426,13 @@ class PreviewManager:
                             current.update({
                                 "status": "ready", "error": "",
                                 "updated_at": time.time(),
+                                "worker_id": None,
                             })
             finally:
                 self._queue.task_done()
+            with self._lock:
+                if worker_id in self._retired_workers:
+                    return
 
     def clear_cache(self) -> dict[str, Any]:
         with self._lock:

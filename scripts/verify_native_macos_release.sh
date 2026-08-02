@@ -2,11 +2,11 @@
 set -euo pipefail
 
 project_dir=${0:A:h:h}
-app_path=${1:-"$project_dir/dist/native/OpenCull.app"}
+app_path=${1:-"$project_dir/dist/native/Darkimiya.app"}
 receipt_dir=${2:-"$project_dir/dist/native/receipts"}
 plist="$app_path/Contents/Info.plist"
-frontend="$app_path/Contents/MacOS/OpenCull"
-backend="$app_path/Contents/MacOS/OpenCullBackend"
+frontend="$app_path/Contents/MacOS/Darkimiya"
+backend="$app_path/Contents/MacOS/DarkimiyaBackend"
 
 [[ -d "$app_path" ]] || { echo "Missing app: $app_path" >&2; exit 2; }
 [[ -x "$frontend" ]] || { echo "Missing SwiftUI frontend" >&2; exit 2; }
@@ -17,8 +17,8 @@ mkdir -p "$receipt_dir"
 identifier=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$plist")
 version=$(/usr/libexec/PlistBuddy -c \
   "Print :CFBundleShortVersionString" "$plist")
-[[ "$identifier" == "org.opencull.OpenCull" ]]
-[[ "$version" == "0.11.0" ]]
+[[ "$identifier" == "org.darkimiya.Darkimiya" ]]
+[[ "$version" == "0.13.0" ]]
 
 file "$frontend" | grep -q "arm64"
 file "$backend" | grep -q "arm64"

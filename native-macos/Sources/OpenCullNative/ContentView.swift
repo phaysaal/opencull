@@ -3,18 +3,16 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 enum Workspace: String, CaseIterable, Identifiable {
-    case overview = "Overview"
-    case queue = "Culling Queue"
-    case results = "Results"
+    case projects = "Projects"
+    case activity = "Activity"
     case providers = "Providers & Privacy"
     case recovery = "Recovery & Diagnostics"
 
     var id: String { rawValue }
     var symbol: String {
         switch self {
-        case .overview: "rectangle.grid.2x2"
-        case .queue: "list.bullet.rectangle"
-        case .results: "photo.stack"
+        case .projects: "square.grid.2x2"
+        case .activity: "list.bullet.rectangle"
         case .providers: "lock.shield"
         case .recovery: "cross.case"
         }
@@ -23,45 +21,42 @@ enum Workspace: String, CaseIterable, Identifiable {
 
 struct ContentView: View {
     @EnvironmentObject private var backend: Backend
-    @State private var selection: Workspace? = .overview
-    @State private var showingNewJob = false
+    @EnvironmentObject private var projectSession: ProjectSession
+    @State private var selection: Workspace? = .projects
+    @State private var showingAddProject = false
 
     var body: some View {
-        NavigationSplitView {
-            List(Workspace.allCases, selection: $selection) { item in
-                Label(item.rawValue, systemImage: item.symbol)
-                    .tag(item)
+        Group {
+            if let target = projectSession.activeReview {
+                ProjectWorkspaceView(target: target)
+            } else {
+                libraryWorkspace
             }
-            .navigationSplitViewColumnWidth(min: 210, ideal: 238)
-            .safeAreaInset(edge: .bottom) {
-                ConnectionBadge(connected: backend.connected)
-                    .padding(12)
-            }
-        } detail: {
-            Group {
-                switch selection ?? .overview {
-                case .overview: OverviewView(showingNewJob: $showingNewJob)
-                case .queue: QueueView()
-                case .results: ResultsView()
-                case .providers: ProvidersView()
-                case .recovery: RecoveryView()
-                }
-            }
-            .background(Color(nsColor: .windowBackgroundColor))
         }
         .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    showingNewJob = true
-                } label: {
-                    Label("New Culling Job", systemImage: "plus")
+            if projectSession.isOpen {
+                ToolbarItem(placement: .navigation) {
+                    Button {
+                        projectSession.close()
+                        selection = .projects
+                    } label: {
+                        Label("Projects", systemImage: "chevron.left")
+                    }
                 }
-                .buttonStyle(.borderedProminent)
+            } else {
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        showingAddProject = true
+                    } label: {
+                        Label("Add Project", systemImage: "folder.badge.plus")
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
             }
         }
-        .sheet(isPresented: $showingNewJob) { NewJobView() }
+        .sheet(isPresented: $showingAddProject) { AddProjectView() }
         .alert(
-            "OpenCull needs attention",
+            "Darkimiya needs attention",
             isPresented: Binding(
                 get: { backend.errorMessage != nil },
                 set: { if !$0 { backend.errorMessage = nil } }
@@ -69,31 +64,63 @@ struct ContentView: View {
             actions: { Button("OK") { backend.errorMessage = nil } },
             message: { Text(backend.errorMessage ?? "") }
         )
-        .onReceive(NotificationCenter.default.publisher(for: .newCullJob)) { _ in
-            showingNewJob = true
+        .onReceive(NotificationCenter.default.publisher(for: .newProject)) { _ in
+            projectSession.close()
+            showingAddProject = true
         }
         .onReceive(NotificationCenter.default.publisher(for: .selectWorkspace)) {
             if
                 let raw = $0.object as? String,
                 let workspace = Workspace(rawValue: raw)
             {
+                projectSession.close()
                 selection = workspace
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .openExistingResult)) { _ in
-            selection = .results
+        .onReceive(NotificationCenter.default.publisher(for: .showProjects)) { _ in
+            projectSession.close()
+            selection = .projects
+        }
+    }
+
+    private var libraryWorkspace: some View {
+        NavigationSplitView {
+            List(Workspace.allCases, selection: $selection) { item in
+                Label(item.rawValue, systemImage: item.symbol)
+                    .tag(item)
+            }
+            .navigationSplitViewColumnWidth(min: 210, ideal: 238)
+            .safeAreaInset(edge: .bottom) {
+                ConnectionBadge(
+                    connected: backend.connected,
+                    detail: backend.connectionDetail)
+                    .padding(12)
+            }
+        } detail: {
+            Group {
+                switch selection ?? .projects {
+                case .projects: ProjectsView(showingAddProject: $showingAddProject)
+                case .activity: QueueView()
+                case .providers: ProvidersView()
+                case .recovery: RecoveryView()
+                }
+            }
+            .background(Color(nsColor: .windowBackgroundColor))
         }
     }
 }
 
 private struct ConnectionBadge: View {
     let connected: Bool
+    let detail: String?
     var body: some View {
         HStack(spacing: 8) {
             Circle()
                 .fill(connected ? Color.green : Color.orange)
                 .frame(width: 8, height: 8)
-            Text(connected ? "Culling engine ready" : "Starting engine…")
+            Text(connected
+                 ? "Culling engine ready"
+                 : detail ?? "Starting engine…")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Spacer()
@@ -119,6 +146,355 @@ struct EmptyState: View {
         }
         .padding(28)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+private struct ProjectsView: View {
+    @EnvironmentObject private var backend: Backend
+    @EnvironmentObject private var projectSession: ProjectSession
+    @Binding var showingAddProject: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("Projects").font(.largeTitle.weight(.semibold))
+                    Text("Each project is a photograph folder. Culling is optional and background activity never defines the project itself.")
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button {
+                    showingAddProject = true
+                } label: {
+                    Label("Add Project", systemImage: "folder.badge.plus")
+                }
+                .buttonStyle(.borderedProminent)
+            }
+            if backend.state.projects.projects.isEmpty {
+                EmptyState(
+                    title: "No projects yet",
+                    symbol: "folder.badge.plus",
+                    detail: "Add a photograph folder. You can then cull it with AI or continue directly to manual selection.")
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(backend.state.projects.projects) { project in
+                        ProjectLibraryRow(project: project)
+                            if project.id != backend.state.projects.projects.last?.id {
+                                Divider().padding(.leading, 48)
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                }
+                .frame(height: min(
+                    CGFloat(backend.state.projects.projects.count) * 94,
+                    560))
+                .background(.background, in: RoundedRectangle(cornerRadius: 12))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(.separator.opacity(0.5), lineWidth: 1)
+                }
+            }
+        }
+        .padding(28)
+        .frame(maxWidth: 1080, maxHeight: .infinity, alignment: .topLeading)
+        .navigationTitle("Darkimiya")
+    }
+}
+
+private struct ProjectLibraryRow: View {
+    @EnvironmentObject private var backend: Backend
+    @EnvironmentObject private var projectSession: ProjectSession
+    let project: DarkimiyaProject
+    @State private var showingCulling = false
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Button {
+                openWorkspace()
+            } label: {
+                HStack(spacing: 14) {
+                    Image(systemName: project.available ? "folder.fill" : "externaldrive.badge.exclamationmark")
+                        .font(.title2)
+                        .foregroundStyle(project.available ? Color.accentColor : Color.orange)
+                        .frame(width: 34)
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text(project.name).font(.headline)
+                            Text(statusLabel)
+                                .font(.caption.weight(.medium))
+                                .padding(.horizontal, 7).padding(.vertical, 3)
+                                .background(statusColor.opacity(0.12), in: Capsule())
+                                .foregroundStyle(statusColor)
+                        }
+                        Text(project.photos)
+                            .font(.caption).foregroundStyle(.secondary)
+                            .lineLimit(1).truncationMode(.middle)
+                        if let warning = project.importWarning {
+                            Label(warning, systemImage: "exclamationmark.triangle.fill")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                                .lineLimit(2)
+                        }
+                    }
+                }
+            }
+            .buttonStyle(.plain)
+            .disabled(!project.available || project.cullingBlocksWorkflow)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            cullingControl
+            Button {
+                openWorkspace()
+            } label: {
+                Image(systemName: "chevron.right")
+                    .foregroundStyle(.tertiary)
+                    .frame(width: 20, height: 28)
+            }
+            .buttonStyle(.plain)
+            .disabled(!project.available || project.cullingBlocksWorkflow)
+        }
+        .padding(.vertical, 12)
+        .contentShape(Rectangle())
+        .sheet(isPresented: $showingCulling) {
+            StartProjectCullingView(project: project)
+        }
+    }
+
+    private func openWorkspace() {
+        guard project.available, !project.cullingBlocksWorkflow else { return }
+        Task {
+            let target: ReviewTarget?
+            if project.reportAvailable {
+                target = await backend.openProject(project.id)
+            } else {
+                target = await backend.openManualSelection(project.id)
+            }
+            if let target {
+                projectSession.open(target)
+                if !project.reportAvailable { try? await backend.refresh() }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var cullingControl: some View {
+        if let culling = project.culling, project.cullingBlocksWorkflow {
+            HStack(spacing: 10) {
+                VStack(alignment: .trailing, spacing: 4) {
+                    ProgressView(value: culling.progress.fraction)
+                        .frame(width: 150)
+                    Text(culling.status == "queued"
+                         ? "Waiting to cull"
+                         : "\(Int(culling.progress.fraction * 100))% complete")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                Button("Cancel", role: .destructive) {
+                    Task { await backend.act(jobID: culling.id, action: "cancel") }
+                }
+                .controlSize(.small)
+                .disabled(backend.busy || culling.status == "stopping")
+            }
+        } else if project.available, project.reportAvailable {
+            Button("Re-Cull") { showingCulling = true }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+        } else if project.available {
+            Button("Cull the Folder") { showingCulling = true }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+        }
+    }
+
+    private var statusLabel: String {
+        guard project.available else { return "Folder unavailable" }
+        if let culling = project.culling, project.cullingBlocksWorkflow {
+            return culling.status == "queued" ? "Culling queued" : "Culling \(Int(culling.progress.fraction * 100))%"
+        }
+        if project.reportAvailable { return "Ready to work" }
+        return "Not culled"
+    }
+
+    private var statusColor: Color {
+        !project.available ? .orange : project.cullingBlocksWorkflow ? .blue :
+            project.reportAvailable ? .green : .secondary
+    }
+}
+
+private struct AddProjectView: View {
+    @EnvironmentObject private var backend: Backend
+    @EnvironmentObject private var library: LibraryStore
+    @Environment(\.dismiss) private var dismiss
+    @State private var folder = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text("Add Project").font(.title.weight(.semibold))
+                Text("A project is a photograph folder. Adding it does not start culling or any model operation.")
+                    .foregroundStyle(.secondary)
+            }
+            GroupBox("Photograph folder") {
+                HStack {
+                    Image(systemName: "folder").foregroundStyle(.tint)
+                    Text(folder.isEmpty ? "No folder selected" : folder)
+                        .lineLimit(1).truncationMode(.middle)
+                    Spacer()
+                    Button("Choose…", action: chooseFolder)
+                }.padding(8)
+            }
+            Label("Darkimiya creates a transparent project.json inside the folder's Darkimiya subfolder.", systemImage: "checkmark.shield")
+                .font(.caption).foregroundStyle(.secondary)
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Add Project") {
+                    Task {
+                        if await backend.addProject(folder) { dismiss() }
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.defaultAction)
+                .disabled(folder.isEmpty || backend.busy)
+            }
+        }
+        .padding(28)
+        .frame(width: 620)
+    }
+
+    private func chooseFolder() {
+        let panel = NSOpenPanel()
+        panel.title = "Choose a photograph folder"
+        panel.prompt = "Add Project"
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        if panel.runModal() == .OK, let url = panel.url {
+            library.rememberAccess(to: url)
+            folder = url.path
+        }
+    }
+}
+
+private struct JudgmentPolicyControls: View {
+    @Binding var panel: Set<String>
+    @Binding var votes: Int
+    @Binding var required: Int
+
+    private let roles = [
+        ("A", "Frame observer"),
+        ("B", "Visual curator"),
+        ("C", "Report judge"),
+        ("D", "Visual arbitrator"),
+    ]
+
+    var body: some View {
+        DisclosureGroup("Advanced judgment policy") {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Panel agents")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                HStack(spacing: 14) {
+                    ForEach(roles, id: \.0) { role in
+                        Toggle(isOn: memberBinding(role.0)) {
+                            Text("\(role.0) · \(role.1)")
+                        }
+                        .toggleStyle(.checkbox)
+                    }
+                }
+                Stepper("Total votes: \(votes)", value: $votes, in: max(1, panel.count)...15)
+                Stepper("Required approvals: \(required)", value: $required, in: 1...votes)
+                Text("Votes are distributed across the selected agents. Kimiya validates the generated program; cross-family panels are required for a certified judgment.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.top, 8)
+        }
+        .onChange(of: votes) { newValue in
+            required = min(required, newValue)
+        }
+    }
+
+    private func memberBinding(_ role: String) -> Binding<Bool> {
+        Binding(
+            get: { panel.contains(role) },
+            set: { selected in
+                if selected {
+                    panel.insert(role)
+                    votes = max(votes, panel.count)
+                } else if panel.count > 1 {
+                    panel.remove(role)
+                    required = min(required, votes)
+                }
+            })
+    }
+}
+
+private struct StartProjectCullingView: View {
+    @EnvironmentObject private var backend: Backend
+    @Environment(\.dismiss) private var dismiss
+    let project: DarkimiyaProject
+    @State private var maximumKeepers = 2
+    @State private var profile = "family"
+    @State private var recursive = true
+    @State private var providerID = ""
+    @State private var judgePanel: Set<String> = ["C", "D"]
+    @State private var judgeVotes = 5
+    @State private var judgeRequired = 4
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            Text("Cull \(project.name)").font(.title.weight(.semibold))
+            Text("This creates a background OpenCull operation attached to the project.")
+                .foregroundStyle(.secondary)
+            Form {
+                Picker("Culling intent", selection: $profile) {
+                    Text("Family").tag("family")
+                    Text("Professional").tag("professional")
+                    Text("Balanced").tag("balanced")
+                }
+                Stepper("At most \(maximumKeepers) keeper\(maximumKeepers == 1 ? "" : "s") per cluster",
+                        value: $maximumKeepers, in: 1...20)
+                Toggle("Include nested folders", isOn: $recursive)
+                Picker("Model provider", selection: $providerID) {
+                    Text("Choose a provider").tag("")
+                    ForEach(backend.state.providers.profiles) { provider in
+                        Text(provider.label).tag(provider.id)
+                    }
+                }
+                JudgmentPolicyControls(
+                    panel: $judgePanel, votes: $judgeVotes,
+                    required: $judgeRequired)
+            }
+            HStack {
+                Label("The project remains in Projects while this runs.", systemImage: "checkmark.shield")
+                    .font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Start Culling") {
+                    Task {
+                        let started = await backend.startCulling(CullProjectRequest(
+                            projectID: project.id, keepPerGroup: maximumKeepers,
+                            recursive: recursive, profile: profile,
+                            providerProfileID: providerID,
+                            judgePanel: judgePanel.sorted(),
+                            judgeVotes: judgeVotes,
+                            judgeRequired: judgeRequired))
+                        if started { dismiss() }
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.defaultAction)
+                .disabled(providerID.isEmpty || backend.busy)
+            }
+        }
+        .padding(28).frame(width: 640)
+        .onAppear {
+            if providerID.isEmpty, backend.state.providers.profiles.count == 1 {
+                providerID = backend.state.providers.profiles[0].id
+            }
+        }
     }
 }
 
@@ -159,7 +535,7 @@ private struct OverviewView: View {
                         VStack(alignment: .leading, spacing: 5) {
                             Text("Start with a folder of photographs")
                                 .font(.headline)
-                            Text("OpenCull groups related frames, evaluates photographic intent, and proposes at most the number of keepers you choose.")
+                            Text("Darkimiya groups related frames, evaluates photographic intent, and proposes at most the number of keepers you choose. Culling decisions are produced by its OpenCull engine.")
                                 .foregroundStyle(.secondary)
                         }
                         Spacer()
@@ -178,7 +554,7 @@ private struct OverviewView: View {
             .padding(32)
             .frame(maxWidth: 1100, alignment: .leading)
         }
-        .navigationTitle("OpenCull")
+        .navigationTitle("Darkimiya")
     }
 
     private var dayPart: String {
@@ -218,7 +594,7 @@ private struct ActiveJobCard: View {
         GroupBox("Culling now") {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
-                    Text(job.folderName).font(.title3.weight(.semibold))
+                    Text(job.displayName).font(.title3.weight(.semibold))
                     Spacer()
                     Text(job.status.capitalized).foregroundStyle(.secondary)
                 }
@@ -260,8 +636,8 @@ private struct QueueView: View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Culling Queue").font(.largeTitle.weight(.semibold))
-                    Text("Jobs run sequentially so model use and checkpoints stay predictable.")
+                    Text("Activity").font(.largeTitle.weight(.semibold))
+                    Text("Background culling and development jobs remain available while a project is open.")
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -271,7 +647,7 @@ private struct QueueView: View {
                 EmptyState(
                     title: "The queue is empty",
                     symbol: "list.bullet.rectangle",
-                    detail: "Add a photo folder to begin.")
+                    detail: "Background operations started from a project will appear here.")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List(backend.state.queue.jobs) { JobRow(job: $0) }
@@ -285,7 +661,7 @@ private struct QueueView: View {
 private struct JobRow: View {
     @EnvironmentObject private var backend: Backend
     @EnvironmentObject private var library: LibraryStore
-    @Environment(\.openWindow) private var openWindow
+    @EnvironmentObject private var projectSession: ProjectSession
     let job: CullJob
     @State private var showingRemoval = false
 
@@ -297,7 +673,7 @@ private struct JobRow: View {
                 .frame(width: 26)
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
-                    Text(job.folderName).font(.headline)
+                    Text(job.displayName).font(.headline)
                     Text(job.status.capitalized)
                         .font(.caption.weight(.medium))
                         .padding(.horizontal, 7).padding(.vertical, 3)
@@ -308,7 +684,13 @@ private struct JobRow: View {
                             .foregroundStyle(.orange)
                     }
                 }
+                Text(job.addedLabel).font(.caption).foregroundStyle(.secondary)
                 Text(job.message).font(.subheadline).foregroundStyle(.secondary)
+                if let policy = job.judgmentPolicy, job.kind == "culling" {
+                    Label(policy.summary, systemImage: "checkmark.seal")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 if job.progress.totalClusters > 0 {
                     ProgressView(value: job.progress.fraction)
                         .frame(maxWidth: 360)
@@ -329,7 +711,7 @@ private struct JobRow: View {
                                 library.record(
                                     report: job.output, photos: job.photos,
                                     title: target.title)
-                                openWindow(value: target)
+                                projectSession.open(target)
                             }
                         }
                     }
@@ -355,7 +737,7 @@ private struct JobRow: View {
         }
         .padding(.vertical, 9)
         .confirmationDialog(
-            "Remove \(job.folderName) from the queue?",
+            "Remove \(job.displayName) from the queue?",
             isPresented: $showingRemoval
         ) {
             Button("Remove Queue Entry", role: .destructive) {
@@ -421,7 +803,7 @@ private struct JobRow: View {
 private struct ResultsView: View {
     @EnvironmentObject private var backend: Backend
     @EnvironmentObject private var library: LibraryStore
-    @Environment(\.openWindow) private var openWindow
+    @EnvironmentObject private var projectSession: ProjectSession
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -468,16 +850,11 @@ private struct ResultsView: View {
             }
         }
         .padding(28)
-        .onReceive(
-            NotificationCenter.default.publisher(for: .openExistingResult)
-        ) { _ in
-            openExisting()
-        }
     }
 
     private func openExisting() {
         let reportPanel = NSOpenPanel()
-        reportPanel.title = "Choose an OpenCull result"
+        reportPanel.title = "Choose a Darkimiya culling result"
         reportPanel.prompt = "Choose Result"
         reportPanel.allowedContentTypes = [.json]
         reportPanel.canChooseDirectories = false
@@ -501,7 +878,7 @@ private struct ResultsView: View {
                 library.record(
                     report: report.path, photos: photos.path,
                     title: target.title)
-                openWindow(value: target)
+                projectSession.open(target)
             }
         }
     }
@@ -520,7 +897,7 @@ private struct ResultsView: View {
                 library.record(
                     report: review.report, photos: review.photos,
                     title: target.title)
-                openWindow(value: target)
+                projectSession.open(target)
             }
         }
     }
@@ -884,10 +1261,10 @@ private struct ProviderEditor: View {
         _name = State(initialValue: provider?.name ?? "OpenRouter")
         _kind = State(initialValue: provider?.kind ?? "openrouter")
         _endpoint = State(initialValue: provider?.endpoint ?? "")
-        _agentA = State(initialValue: provider?.models["A"] ?? "google/gemini-2.5-flash")
-        _agentB = State(initialValue: provider?.models["B"] ?? "openai/gpt-4.1-mini")
-        _agentC = State(initialValue: provider?.models["C"] ?? "mistralai/mistral-small-3.2-24b-instruct")
-        _agentD = State(initialValue: provider?.models["D"] ?? "qwen/qwen3-vl-30b-a3b-instruct")
+        _agentA = State(initialValue: provider?.models["A"] ?? "openai/gpt-5.6-luna-pro")
+        _agentB = State(initialValue: provider?.models["B"] ?? "openai/gpt-5.6-luna-pro")
+        _agentC = State(initialValue: provider?.models["C"] ?? "openai/gpt-4.1-mini")
+        _agentD = State(initialValue: provider?.models["D"] ?? "openai/gpt-5.6-luna-pro")
         _credentialRequired = State(initialValue: provider?.credentialRequired ?? true)
         _zdr = State(initialValue: provider?.zdr ?? true)
         _costNote = State(initialValue: provider?.costNote ?? "")
@@ -1058,6 +1435,9 @@ private struct NewJobView: View {
     @State private var profile = "family"
     @State private var recursive = false
     @State private var providerID = ""
+    @State private var judgePanel: Set<String> = ["C", "D"]
+    @State private var judgeVotes = 5
+    @State private var judgeRequired = 4
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
@@ -1091,6 +1471,9 @@ private struct NewJobView: View {
                         Text(provider.label).tag(provider.id)
                     }
                 }
+                JudgmentPolicyControls(
+                    panel: $judgePanel, votes: $judgeVotes,
+                    required: $judgeRequired)
             }
             HStack {
                 Label("Jobs run one at a time", systemImage: "checkmark.shield")
@@ -1105,7 +1488,10 @@ private struct NewJobView: View {
                             keepPerGroup: maximumKeepers,
                             recursive: recursive,
                             profile: profile,
-                            providerProfileID: providerID
+                            providerProfileID: providerID,
+                            judgePanel: judgePanel.sorted(),
+                            judgeVotes: judgeVotes,
+                            judgeRequired: judgeRequired
                         ))
                         if backend.errorMessage == nil { dismiss() }
                     }

@@ -1,4 +1,4 @@
-"""Private loopback API used by the native macOS OpenCull shell."""
+"""Private loopback API used by the native macOS Darkimiya shell."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from urllib.parse import urlparse
 
 from .jobs import JobError, JobManager
 from .providers import ProviderError, ProviderStore
+from .project_catalog import ProjectCatalog, ProjectCatalogError
 
 
 class DesktopBridgeServer(ThreadingHTTPServer):
@@ -30,12 +31,14 @@ class DesktopBridgeServer(ThreadingHTTPServer):
         providers: ProviderStore,
         open_review: Callable[..., dict[str, object]],
         diagnostics: dict[str, object] | None = None,
+        projects: ProjectCatalog | None = None,
     ):
         super().__init__(address, DesktopBridgeHandler)
         self.jobs = jobs
         self.providers = providers
         self.open_review = open_review
         self.diagnostics = diagnostics or {}
+        self.projects = projects
         self.token = secrets.token_urlsafe(32)
 
 
@@ -88,6 +91,12 @@ class DesktopBridgeHandler(BaseHTTPRequestHandler):
             self._json({
                 "queue": self.server.jobs.public(),
                 "providers": self.server.providers.public(),
+                "projects": (
+                    self.server.projects.public(self.server.jobs.public())
+                    if self.server.projects else {
+                        "format": "darkimiya-project-catalog-v1",
+                        "revision": 0, "projects": [],
+                    }),
             })
         elif path == "/diagnostics":
             self._json({
@@ -115,7 +124,56 @@ class DesktopBridgeHandler(BaseHTTPRequestHandler):
                     body.get("recursive", False),
                     str(body.get("profile", "family")),
                     str(body.get("provider_profile_id", "")),
+                    body.get("judge_panel"),
+                    body.get("judge_votes", 5),
+                    body.get("judge_required", 4),
                 )
+            elif path == "/projects":
+                if self.server.projects is None:
+                    raise ProjectCatalogError("project library is unavailable")
+                result = self.server.projects.add(str(body.get("photos", "")))
+            elif path == "/projects/import-report":
+                if self.server.projects is None:
+                    raise ProjectCatalogError("project library is unavailable")
+                result = self.server.projects.add_existing_report(
+                    str(body.get("photos", "")), str(body.get("report", "")))
+            elif path == "/projects/cull":
+                if self.server.projects is None:
+                    raise ProjectCatalogError("project library is unavailable")
+                record = self.server.projects.record_for(
+                    str(body.get("project_id", "")))
+                result = self.server.jobs.add(
+                    str(record["photos"]), "",
+                    body.get("keep_per_group", 2),
+                    body.get("recursive", True),
+                    str(body.get("profile", "family")),
+                    str(body.get("provider_profile_id", "")),
+                    body.get("judge_panel"),
+                    body.get("judge_votes", 5),
+                    body.get("judge_required", 4),
+                )
+            elif path == "/projects/manual":
+                if self.server.projects is None:
+                    raise ProjectCatalogError("project library is unavailable")
+                project_id = str(body.get("project_id", ""))
+                record = self.server.projects.record_for(project_id)
+                report = self.server.projects.manual_selection_report(project_id)
+                result = self.server.open_review(
+                    report, Path(str(record["photos"])))
+            elif path == "/projects/open":
+                if self.server.projects is None:
+                    raise ProjectCatalogError("project library is unavailable")
+                record = self.server.projects.record_for(
+                    str(body.get("project_id", "")))
+                public = self.server.projects.public(self.server.jobs.public())
+                project = next(
+                    item for item in public["projects"]
+                    if item["id"] == record["id"])
+                if not project.get("report_available"):
+                    raise ProjectCatalogError(
+                        "project has no selection report; start culling or continue without culling")
+                result = self.server.open_review(
+                    Path(str(project["report"])), Path(str(record["photos"])))
             elif path == "/jobs/professional":
                 result = self.server.jobs.add_professional(
                     str(body.get("report", "")),
@@ -160,8 +218,13 @@ class DesktopBridgeHandler(BaseHTTPRequestHandler):
                     result = self.server.open_review(
                         Path(job["output"]), Path(job["photos"]))
             elif path == "/reviews/open":
+                report = Path(str(body.get("report", ""))).expanduser().resolve()
+                resolver = getattr(
+                    self.server.jobs, "resolve_report_path", None)
+                if resolver is not None:
+                    report = resolver(report)
                 result = self.server.open_review(
-                    Path(str(body.get("report", ""))).expanduser().resolve(),
+                    report,
                     Path(str(body.get("photos", ""))).expanduser().resolve(),
                 )
             elif path == "/providers/save":
@@ -189,7 +252,9 @@ class DesktopBridgeHandler(BaseHTTPRequestHandler):
                 self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
                 return
             self._json(result)
-        except (JobError, ProviderError, TypeError, ValueError) as exc:
+        except (
+            JobError, ProviderError, ProjectCatalogError, TypeError, ValueError,
+        ) as exc:
             self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
 
 
@@ -198,9 +263,10 @@ def serve_desktop_bridge(
     providers: ProviderStore,
     open_review: Callable[..., dict[str, object]],
     diagnostics: dict[str, object] | None = None,
+    projects: ProjectCatalog | None = None,
 ) -> int:
     server = DesktopBridgeServer(
-        ("127.0.0.1", 0), jobs, providers, open_review, diagnostics)
+        ("127.0.0.1", 0), jobs, providers, open_review, diagnostics, projects)
     print(json.dumps({
         "format": "opencull-native-bootstrap-v1",
         "url": f"http://127.0.0.1:{server.server_port}",

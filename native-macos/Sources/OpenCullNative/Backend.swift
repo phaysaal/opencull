@@ -8,8 +8,8 @@ enum BackendError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .launch(let detail): return "Could not start OpenCull: \(detail)"
-        case .invalidBootstrap: return "The OpenCull engine returned an invalid startup response."
+        case .launch(let detail): return "Could not start Darkimiya: \(detail)"
+        case .invalidBootstrap: return "The Darkimiya backend returned an invalid startup response."
         case .service(let detail): return detail
         }
     }
@@ -30,9 +30,11 @@ private struct ErrorEnvelope: Decodable {
 final class Backend: ObservableObject {
     @Published private(set) var state = DesktopState(
         queue: QueueState(revision: 0, activeJobID: nil, jobs: []),
-        providers: ProviderState(revision: 0, profiles: [])
+        providers: ProviderState(revision: 0, profiles: []),
+        projects: ProjectCatalogState(revision: 0, projects: [])
     )
     @Published private(set) var connected = false
+    @Published private(set) var connectionDetail: String?
     @Published private(set) var busy = false
     @Published var errorMessage: String?
 
@@ -41,6 +43,8 @@ final class Backend: ObservableObject {
     private var token = ""
     private var pollTask: Task<Void, Never>?
     private var hasLoadedState = false
+    private var consecutivePollFailures = 0
+    private var reportedStoppedEngine = false
 
     func start() async {
         guard process == nil else { return }
@@ -54,7 +58,7 @@ final class Backend: ObservableObject {
                 process.executableURL = URL(fileURLWithPath: explicit)
                 process.arguments = ["--native-server"]
             } else if let bundled = Bundle.main.url(
-                forAuxiliaryExecutable: "OpenCullBackend")
+                forAuxiliaryExecutable: "DarkimiyaBackend")
             {
                 process.executableURL = bundled
                 process.arguments = ["--native-server"]
@@ -89,6 +93,9 @@ final class Backend: ObservableObject {
             baseURL = url
             token = sessionToken
             connected = true
+            connectionDetail = nil
+            consecutivePollFailures = 0
+            reportedStoppedEngine = false
             NativeNotifications.shared.requestAuthorization()
             try await refresh()
             beginPolling()
@@ -106,6 +113,7 @@ final class Backend: ObservableObject {
         if process?.isRunning == true { process?.terminate() }
         process = nil
         connected = false
+        connectionDetail = nil
     }
 
     func refresh() async throws {
@@ -132,6 +140,30 @@ final class Backend: ObservableObject {
 
     func add(_ requestBody: NewJobRequest) async {
         await mutate("/jobs", requestBody)
+    }
+
+    func addProject(_ photos: String) async -> Bool {
+        await mutate("/projects", AddProjectRequest(photos: photos))
+    }
+
+    func importLegacyReview(report: String, photos: String) async -> Bool {
+        await mutate(
+            "/projects/import-report",
+            ImportProjectReportRequest(photos: photos, report: report))
+    }
+
+    func startCulling(_ requestBody: CullProjectRequest) async -> Bool {
+        await mutate("/projects/cull", requestBody)
+    }
+
+    func openProject(_ id: String) async -> ReviewTarget? {
+        await launchReview(
+            "/projects/open", body: ProjectIDRequest(projectID: id))
+    }
+
+    func openManualSelection(_ id: String) async -> ReviewTarget? {
+        await launchReview(
+            "/projects/manual", body: ProjectIDRequest(projectID: id))
     }
 
     func act(jobID: String, action: String) async {
@@ -260,16 +292,36 @@ final class Backend: ObservableObject {
         }
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else {
-            throw BackendError.service("OpenCull returned no response.")
+            throw BackendError.service("Darkimiya returned no response.")
         }
         guard (200..<300).contains(http.statusCode) else {
             let detail = (try? JSONDecoder().decode(ErrorEnvelope.self, from: data).error)
-            throw BackendError.service(detail ?? "OpenCull request failed.")
+            throw BackendError.service(detail ?? "Darkimiya request failed.")
         }
         if T.self == EmptyResponse.self {
             return EmptyResponse() as! T
         }
-        return try JSONDecoder().decode(T.self, from: data)
+        do {
+            return try JSONDecoder().decode(T.self, from: data)
+        } catch let error as DecodingError {
+            throw BackendError.service(
+                "Darkimiya returned incomplete data: \(decodingSummary(error))")
+        }
+    }
+
+    private func decodingSummary(_ error: DecodingError) -> String {
+        switch error {
+        case .keyNotFound(let key, _):
+            return "missing field ‘\(key.stringValue)’"
+        case .typeMismatch(_, let context):
+            return "invalid field ‘\(context.codingPath.last?.stringValue ?? "unknown")’"
+        case .valueNotFound(_, let context):
+            return "empty field ‘\(context.codingPath.last?.stringValue ?? "unknown")’"
+        case .dataCorrupted(let context):
+            return "invalid value at ‘\(context.codingPath.last?.stringValue ?? "unknown")’"
+        @unknown default:
+            return "response schema mismatch"
+        }
     }
 
     private func beginPolling() {
@@ -278,8 +330,33 @@ final class Backend: ObservableObject {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(1))
                 guard let self else { return }
-                do { try await self.refresh() }
-                catch { self.errorMessage = error.localizedDescription }
+                do {
+                    try await self.refresh()
+                    self.consecutivePollFailures = 0
+                    self.reportedStoppedEngine = false
+                    self.connected = true
+                    self.connectionDetail = nil
+                } catch is CancellationError {
+                    return
+                } catch {
+                    self.consecutivePollFailures += 1
+                    guard self.consecutivePollFailures >= 2 else { continue }
+
+                    self.connected = false
+                    let engineStopped = self.process?.isRunning != true
+                    self.connectionDetail = engineStopped
+                        ? "Local engine stopped"
+                        : "Engine connection interrupted — retrying…"
+
+                    // A polling failure is background health information, not
+                    // a new user action failure.  Report an exited backend once
+                    // and never recreate the alert after it is dismissed.
+                    if engineStopped && !self.reportedStoppedEngine {
+                        self.reportedStoppedEngine = true
+                        self.errorMessage = "The local Darkimiya backend stopped. Your saved work is unchanged. Quit and reopen Darkimiya to reconnect."
+                        return
+                    }
+                }
             }
         }
     }

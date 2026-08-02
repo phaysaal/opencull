@@ -2,16 +2,24 @@ import AppKit
 import SwiftUI
 
 @main
-struct OpenCullNativeApp: App {
+struct DarkimiyaApp: App {
     @StateObject private var backend = Backend()
     @StateObject private var library = LibraryStore()
+    @StateObject private var projectSession = ProjectSession()
 
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .environmentObject(backend)
                 .environmentObject(library)
-                .task { await backend.start() }
+                .environmentObject(projectSession)
+                .task {
+                    await backend.start()
+                    for review in library.reviews {
+                        _ = await backend.importLegacyReview(
+                            report: review.report, photos: review.photos)
+                    }
+                }
                 .onReceive(
                     NotificationCenter.default.publisher(
                         for: NSApplication.willTerminateNotification)
@@ -19,41 +27,29 @@ struct OpenCullNativeApp: App {
                 .frame(minWidth: 1040, minHeight: 680)
         }
         .windowStyle(.hiddenTitleBar)
+        .defaultSize(width: 1100, height: 760)
         .commands {
             CommandGroup(replacing: .newItem) {
-                Button("New Culling Job") {
-                    NotificationCenter.default.post(name: .newCullJob, object: nil)
+                Button("Add Project…") {
+                    NotificationCenter.default.post(name: .newProject, object: nil)
                 }
                 .keyboardShortcut("n")
-                Button("Open Existing Result…") {
-                    select(.results)
+                Button("Show Projects") {
+                    select(.projects)
                     DispatchQueue.main.async {
                     NotificationCenter.default.post(
-                        name: .openExistingResult, object: nil)
+                        name: .showProjects, object: nil)
                     }
                 }
                 .keyboardShortcut("o")
             }
             CommandMenu("Workspace") {
-                Button("Overview") { select(.overview) }.keyboardShortcut("1")
-                Button("Culling Queue") { select(.queue) }.keyboardShortcut("2")
-                Button("Results") { select(.results) }.keyboardShortcut("3")
-                Button("Providers & Privacy") { select(.providers) }.keyboardShortcut("4")
-                Button("Recovery & Diagnostics") { select(.recovery) }.keyboardShortcut("5")
+                Button("Projects") { select(.projects) }.keyboardShortcut("1")
+                Button("Activity") { select(.activity) }.keyboardShortcut("2")
+                Button("Providers & Privacy") { select(.providers) }.keyboardShortcut("3")
+                Button("Recovery & Diagnostics") { select(.recovery) }.keyboardShortcut("4")
             }
         }
-        WindowGroup(for: ReviewTarget.self) { $target in
-            if let target {
-                ReviewWindow(target: target)
-            } else {
-                EmptyState(
-                    title: "Review unavailable",
-                    symbol: "exclamationmark.triangle",
-                    detail: "Choose a completed result from the Results workspace.")
-            }
-        }
-        .windowStyle(.hiddenTitleBar)
-        .defaultSize(width: 1380, height: 900)
     }
 
     private func select(_ workspace: Workspace) {
@@ -63,7 +59,7 @@ struct OpenCullNativeApp: App {
 }
 
 extension Notification.Name {
-    static let newCullJob = Notification.Name("OpenCullNewJob")
-    static let openExistingResult = Notification.Name("OpenCullOpenExistingResult")
-    static let selectWorkspace = Notification.Name("OpenCullSelectWorkspace")
+    static let newProject = Notification.Name("DarkimiyaNewProject")
+    static let showProjects = Notification.Name("DarkimiyaShowProjects")
+    static let selectWorkspace = Notification.Name("DarkimiyaSelectWorkspace")
 }

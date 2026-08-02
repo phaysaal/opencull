@@ -41,6 +41,7 @@ RAW_EXTENSIONS = {
 BITMAP_EXTENSIONS = {".avif", ".heic", ".heif", ".jpeg", ".jpg", ".png", ".tif", ".tiff", ".webp"}
 SUPPORTED_EXTENSIONS = RAW_EXTENSIONS | BITMAP_EXTENSIONS
 DATETIME_TAGS = {"DateTimeOriginal", "DateTimeDigitized", "DateTime"}
+MANAGED_PROJECT_DIRECTORY_NAMES = {"darkimiya", ".darkimiya", ".opencull"}
 
 
 @dataclass
@@ -91,7 +92,16 @@ def parse_args() -> argparse.Namespace:
 def image_files(directory: Path, recursive: bool) -> list[Path]:
     iterator = directory.rglob("*") if recursive else directory.iterdir()
     return sorted(
-        (path for path in iterator if path.is_file() and path.suffix.lower() in SUPPORTED_EXTENSIONS),
+        (
+            path for path in iterator
+            if path.is_file()
+            and path.suffix.lower() in SUPPORTED_EXTENSIONS
+            and not (
+                path.relative_to(directory).parts
+                and path.relative_to(directory).parts[0].casefold()
+                in MANAGED_PROJECT_DIRECTORY_NAMES
+            )
+        ),
         key=lambda path: path.name.casefold(),
     )
 

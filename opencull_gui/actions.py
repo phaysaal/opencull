@@ -21,6 +21,10 @@ from PIL import Image, ImageDraw, ImageOps
 from scan import BITMAP_EXTENSIONS, RAW_EXTENSIONS, open_preview
 
 from .photos import PhotoError, PhotoStore
+from .project import (
+    ensure_project_layout, load_project, register_file_artifact, update_project,
+)
+from .raw_sources import RawSourceStore
 from .report import ReportIndex
 from .reviews import ReviewStore
 
@@ -32,8 +36,11 @@ POLICIES = {
     "human_only", "effective", "require_all", "ai_only", "modified_only",
 }
 LAYOUTS = {"opensull", "selected_by_cluster", "cluster_inspection"}
-ACTIONS = {"copy", "move", "trash"}
+ACTIONS = {"copy", "move", "trash", "project_filter", "system_cleanup"}
 SELECTION_SCOPES = {"selected", "unselected", "all"}
+CLEANUP_POLICIES = {
+    "preserve_useful_raws", "keep_every_raw", "jpeg_only", "inspect",
+}
 
 
 class ActionError(ValueError):
@@ -224,7 +231,7 @@ def build_plan(
     review_revision = reviews.public_state()["revision"]
     trash_token = hashlib.sha256(
         f"{report.path}:{review_revision}".encode()).hexdigest()[:8]
-    trash_batch = f"OpenCull-{report.path.stem}-{trash_token}"
+    trash_batch = f"Darkimiya-{report.path.stem}-{trash_token}"
     selected_clusters = policy_clusters(reviews, policy)
     items = []
     destination_names: set[str] = set()
@@ -359,6 +366,346 @@ def build_plan(
     }
 
 
+def build_project_filter_plan(
+    report: ReportIndex,
+    reviews: ReviewStore,
+    photos: PhotoStore,
+    project_path: Path,
+    raw_sources: RawSourceStore | None = None,
+) -> dict[str, Any]:
+    """Plan reversible project quarantine and conservative RAW retention."""
+    project = load_project(project_path)
+    if Path(project["source_folder"]).expanduser().resolve() != photos.root:
+        raise ActionError("project source folder does not match this review")
+    layout = ensure_project_layout(photos.root)
+    clusters = policy_clusters(reviews, "require_all")
+    revision = reviews.public_state()["revision"]
+    keepers = {
+        name for cluster in clusters for name in cluster.get("keepers", [])
+    }
+    report_photos = list(dict.fromkeys(
+        name for cluster in clusters for name in cluster.get("photos", [])))
+    reserve: dict[str, dict[str, Any]] = {}
+    missing: list[str] = []
+
+    def reserve_source(
+        path: Path, source_name: str, anchor: str, external: bool,
+        relative: Path,
+    ) -> None:
+        resolved = path.expanduser().resolve()
+        if not resolved.is_file():
+            missing.append(str(resolved))
+            return
+        reserve[str(resolved)] = {
+            "source": resolved, "source_name": source_name,
+            "anchor": anchor, "external": external, "relative": relative,
+        }
+
+    raw_state = raw_sources.public() if raw_sources is not None else {}
+    raw_root = (
+        Path(str(raw_state.get("root", ""))).expanduser().resolve()
+        if raw_state.get("configured") else None)
+    for keeper in sorted(keepers):
+        keeper_relative = Path(keeper)
+        try:
+            keeper_path = photos.resolve(keeper)
+        except PhotoError:
+            missing.append(keeper)
+            continue
+        if keeper_path.suffix.lower() in RAW_EXTENSIONS:
+            reserve_source(
+                keeper_path, keeper, keeper, False, keeper_relative)
+        parent = keeper_path.parent
+        try:
+            siblings = list(parent.iterdir())
+        except OSError:
+            siblings = []
+        for sibling in siblings:
+            if (
+                sibling.is_file()
+                and sibling.stem.casefold() == keeper_path.stem.casefold()
+                and sibling.suffix.lower() in RAW_EXTENSIONS
+            ):
+                relative = sibling.relative_to(photos.root)
+                reserve_source(
+                    sibling, relative.as_posix(), keeper, False, relative)
+        if raw_root is not None:
+            for raw_relative_text in raw_state.get("matches", {}).get(keeper, []):
+                raw_relative = Path(str(raw_relative_text))
+                reserve_source(
+                    raw_root / raw_relative, raw_relative.as_posix(), keeper,
+                    True, Path("External") / raw_relative)
+
+    items: list[dict[str, Any]] = []
+    destinations: set[str] = set()
+    source_paths: set[str] = set()
+    collisions: list[str] = []
+    total_bytes = 0
+
+    def add_item(
+        source: Path, source_name: str, destination: Path, category: str,
+        operation: str, cluster_id: str = "",
+    ) -> None:
+        nonlocal total_bytes
+        resolved = source.expanduser().resolve()
+        source_key = os.path.normcase(str(resolved))
+        if source_key in source_paths:
+            return
+        source_paths.add(source_key)
+        destination = destination.expanduser().resolve()
+        destination_key = os.path.normcase(str(destination))
+        if destination_key in destinations or destination.exists():
+            collisions.append(str(destination))
+        destinations.add(destination_key)
+        size = resolved.stat().st_size
+        total_bytes += size
+        identity = f"{category}\0{source_key}\0{destination_key}"
+        items.append({
+            "id": hashlib.sha256(identity.encode()).hexdigest()[:16],
+            "cluster_id": cluster_id,
+            "source_name": source_name,
+            "source": str(resolved),
+            "destination": str(destination),
+            "selected": category == "raw_reserve",
+            "companion": category == "raw_reserve",
+            "category": category,
+            "operation": operation,
+            "bytes": size,
+            "status": "pending",
+        })
+
+    reserved_paths = set(reserve)
+    cluster_for = {
+        name: cluster["cluster_id"]
+        for cluster in clusters for name in cluster.get("photos", [])
+    }
+    for name in report_photos:
+        if name in keepers:
+            continue
+        try:
+            source = photos.resolve(name)
+        except PhotoError:
+            missing.append(name)
+            continue
+        if str(source) in reserved_paths:
+            continue
+        add_item(
+            source, name, layout["Rejected"] / Path(name), "rejected",
+            "move", cluster_for.get(name, ""))
+    for entry in reserve.values():
+        add_item(
+            entry["source"], entry["source_name"],
+            layout["RAW Reserve"] / entry["relative"], "raw_reserve",
+            "copy" if entry["external"] else "move",
+            cluster_for.get(entry["anchor"], ""))
+
+    free_bytes = min(
+        (shutil.disk_usage(_nearest_existing(Path(item["destination"]))).free
+         for item in items), default=0)
+    errors: list[str] = []
+    if missing:
+        errors.append(f"{len(set(missing))} source files are missing")
+    if collisions:
+        errors.append(f"{len(collisions)} project destination collisions exist")
+    if total_bytes > free_bytes:
+        errors.append("project volume does not have enough temporary free space")
+    if not items:
+        errors.append("there are no reviewed rejections or RAW companions to organize")
+    core = {
+        "format": PLAN_FORMAT,
+        "report_sha256": report.sha256,
+        "project_id": project.get("id"),
+        "project_path": str(project_path.expanduser().resolve()),
+        "review_revision": revision,
+        "created_at": _now(),
+        "policy": "require_all",
+        "action": "project_filter",
+        "layout": "project_library",
+        "destination": str(layout["root"]),
+        "selection_scope": "rejected_and_raw_reserve",
+        "preserve_relative": True,
+        "include_companions": True,
+        "items": items,
+        "summary": {
+            "files": len(items),
+            "selected_files": sum(
+                item["category"] == "raw_reserve" for item in items),
+            "unselected_files": sum(
+                item["category"] == "rejected" for item in items),
+            "companion_files": sum(
+                item["category"] == "raw_reserve" for item in items),
+            "rejected_files": sum(
+                item["category"] == "rejected" for item in items),
+            "raw_reserve_files": sum(
+                item["category"] == "raw_reserve" for item in items),
+            "external_raw_copies": sum(
+                item["category"] == "raw_reserve"
+                and item["operation"] == "copy" for item in items),
+            "bytes": total_bytes, "free_bytes": free_bytes,
+            "missing": sorted(set(missing)), "collisions": collisions,
+            "errors": errors, "unreviewed_clusters": 0,
+        },
+    }
+    signature = hashlib.sha256(
+        json.dumps(core, sort_keys=True).encode()).hexdigest()
+    return {
+        **core, "plan_id": signature[:20], "signature": signature,
+        "confirmation_code": f"{int(signature[:8], 16) % 10000:04d}",
+    }
+
+
+def cleanup_candidates(project_path: Path) -> dict[str, Any]:
+    """Return the current quarantine inventory without changing project state."""
+    project = load_project(project_path)
+    source = Path(project["source_folder"]).expanduser().resolve()
+    layout = ensure_project_layout(source)
+    rejected_root = layout["Rejected"].resolve()
+    candidates = []
+    for path in sorted(rejected_root.rglob("*")):
+        if not path.is_file():
+            continue
+        relative = path.relative_to(rejected_root).as_posix()
+        suffix = path.suffix.lower()
+        candidates.append({
+            "relative_path": relative,
+            "path": str(path.resolve()),
+            "bytes": path.stat().st_size,
+            "kind": (
+                "raw" if suffix in RAW_EXTENSIONS
+                else "jpeg" if suffix in {".jpg", ".jpeg"}
+                else "photo" if suffix in BITMAP_EXTENSIONS else "other"),
+        })
+    return {
+        "format": "darkimiya-cleanup-candidates-v1",
+        "project_id": project.get("id"),
+        "rejected_root": str(rejected_root),
+        "candidates": candidates,
+        "summary": {
+            "files": len(candidates),
+            "raw_files": sum(item["kind"] == "raw" for item in candidates),
+            "jpeg_files": sum(item["kind"] == "jpeg" for item in candidates),
+            "bytes": sum(item["bytes"] for item in candidates),
+        },
+    }
+
+
+def build_system_cleanup_plan(
+    report: ReportIndex,
+    reviews: ReviewStore,
+    photos: PhotoStore,
+    project_path: Path,
+    cleanup_policy: str = "preserve_useful_raws",
+    selected_paths: list[str] | None = None,
+) -> dict[str, Any]:
+    """Plan an explicit Finder-compatible cleanup from project quarantine."""
+    if cleanup_policy not in CLEANUP_POLICIES:
+        raise ActionError(f"unsupported final-cleanup policy: {cleanup_policy}")
+    project = load_project(project_path)
+    if Path(project["source_folder"]).expanduser().resolve() != photos.root:
+        raise ActionError("project source folder does not match this review")
+    policy_clusters(reviews, "require_all")
+    layout = ensure_project_layout(photos.root)
+    inventory = cleanup_candidates(project_path)
+    chosen: set[str] = set()
+    if cleanup_policy == "inspect":
+        for value in selected_paths or []:
+            relative = Path(str(value))
+            if relative.is_absolute() or ".." in relative.parts:
+                raise ActionError(f"unsafe cleanup selection: {value!r}")
+            chosen.add(relative.as_posix())
+        known = {item["relative_path"] for item in inventory["candidates"]}
+        unknown = sorted(chosen - known)
+        if unknown:
+            raise ActionError(
+                f"cleanup selection contains {len(unknown)} unavailable files")
+    token_seed = "\0".join([
+        str(project.get("id", "")), report.sha256, cleanup_policy,
+        *sorted(chosen),
+    ])
+    trash_token = hashlib.sha256(token_seed.encode()).hexdigest()[:8]
+    trash_batch = f"Darkimiya-{photos.root.name}-cleanup-{trash_token}"
+    items: list[dict[str, Any]] = []
+    destinations: set[str] = set()
+    collisions: list[str] = []
+    total_bytes = 0
+    for candidate in inventory["candidates"]:
+        relative = Path(candidate["relative_path"])
+        kind = candidate["kind"]
+        if cleanup_policy == "jpeg_only" and kind != "jpeg":
+            continue
+        if cleanup_policy == "inspect" and candidate["relative_path"] not in chosen:
+            continue
+        source = Path(candidate["path"])
+        retain_raw = cleanup_policy == "keep_every_raw" and kind == "raw"
+        destination = (
+            layout["RAW Reserve"] / "Retained from Rejected" / relative
+            if retain_raw else _trash_root_for(source, trash_batch) / relative)
+        operation = "move" if retain_raw else "trash"
+        category = "raw_reserve" if retain_raw else "system_trash"
+        destination = destination.expanduser().resolve()
+        destination_key = os.path.normcase(str(destination))
+        if destination_key in destinations or destination.exists():
+            collisions.append(str(destination))
+        destinations.add(destination_key)
+        total_bytes += int(candidate["bytes"])
+        identity = f"{category}\0{source}\0{destination}"
+        items.append({
+            "id": hashlib.sha256(identity.encode()).hexdigest()[:16],
+            "cluster_id": "",
+            "source_name": candidate["relative_path"],
+            "source": str(source), "destination": str(destination),
+            "selected": False, "companion": kind == "raw",
+            "category": category, "operation": operation,
+            "kind": kind, "bytes": int(candidate["bytes"]),
+            "status": "pending",
+        })
+    free_bytes = min(
+        (shutil.disk_usage(_nearest_existing(Path(item["destination"]))).free
+         for item in items), default=0)
+    errors: list[str] = []
+    if collisions:
+        errors.append(f"{len(collisions)} cleanup destination collisions exist")
+    if total_bytes > free_bytes:
+        errors.append("destination does not have enough temporary free space")
+    if not items:
+        errors.append(
+            "select at least one quarantined file"
+            if cleanup_policy == "inspect"
+            else "this cleanup policy produced no files")
+    review_revision = reviews.public_state()["revision"]
+    core = {
+        "format": PLAN_FORMAT, "report_sha256": report.sha256,
+        "project_id": project.get("id"),
+        "project_path": str(project_path.expanduser().resolve()),
+        "review_revision": review_revision, "created_at": _now(),
+        "policy": "human_quarantine", "cleanup_policy": cleanup_policy,
+        "action": "system_cleanup", "layout": "system_trash",
+        "destination": "macOS System Trash",
+        "selection_scope": "project_rejected", "preserve_relative": True,
+        "include_companions": cleanup_policy == "keep_every_raw",
+        "items": items,
+        "summary": {
+            "files": len(items), "selected_files": 0,
+            "unselected_files": len(items),
+            "companion_files": sum(item["kind"] == "raw" for item in items),
+            "trashed_files": sum(
+                item["category"] == "system_trash" for item in items),
+            "retained_raw_files": sum(
+                item["category"] == "raw_reserve" for item in items),
+            "bytes": total_bytes, "free_bytes": free_bytes,
+            "missing": [], "collisions": collisions, "errors": errors,
+            "unreviewed_clusters": 0,
+            "quarantine_files": inventory["summary"]["files"],
+        },
+    }
+    signature = hashlib.sha256(
+        json.dumps(core, sort_keys=True).encode()).hexdigest()
+    return {
+        **core, "plan_id": signature[:20], "signature": signature,
+        "confirmation_code": f"{int(signature[:8], 16) % 10000:04d}",
+    }
+
+
 def default_journal_path(report: ReportIndex, plan: dict[str, Any]) -> Path:
     return report.path.with_name(
         f"{report.path.stem}.{plan['plan_id']}.operation.json")
@@ -371,12 +718,16 @@ class Operation:
         self,
         plan: dict[str, Any],
         journal_path: Path,
+        on_complete: Any = None,
+        on_rollback: Any = None,
     ):
         self.plan = deepcopy(plan)
         self.journal_path = journal_path.expanduser().resolve()
         self._lock = threading.RLock()
         self._thread: threading.Thread | None = None
         self._cancel = threading.Event()
+        self.on_complete = on_complete
+        self.on_rollback = on_rollback
         self.journal = self._load_or_create()
 
     def _load_or_create(self) -> dict[str, Any]:
@@ -454,6 +805,13 @@ class Operation:
             with self._lock:
                 self.journal["status"] = "completed"
                 self._save()
+            if self.on_complete is not None:
+                try:
+                    self.on_complete(self.public())
+                except Exception as exc:
+                    with self._lock:
+                        self.journal["integration_error"] = str(exc)
+                        self._save()
         except Exception as exc:
             with self._lock:
                 self.journal["status"] = "failed"
@@ -478,7 +836,8 @@ class Operation:
             if source_hash != destination_hash:
                 raise ActionError(f"hash verification failed: {source.name}")
             os.replace(temporary, destination)
-            if self.plan["action"] in {"move", "trash"}:
+            operation = item.get("operation", self.plan["action"])
+            if operation in {"move", "trash"}:
                 source.unlink()
         except Exception:
             temporary.unlink(missing_ok=True)
@@ -495,7 +854,9 @@ class Operation:
 
     def rollback_move(self) -> None:
         with self._lock:
-            if self.plan["action"] not in {"move", "trash"}:
+            if self.plan["action"] not in {
+                "move", "trash", "project_filter", "system_cleanup",
+            }:
                 raise ActionError(
                     "rollback is available only for move or Trash operations")
             if self._thread and self._thread.is_alive():
@@ -509,7 +870,8 @@ class Operation:
                     continue
                 source = Path(item["source"])
                 destination = Path(item["destination"])
-                if source.exists():
+                operation = item.get("operation", self.plan["action"])
+                if operation != "copy" and source.exists():
                     raise ActionError(
                         f"rollback source already exists: {source}")
                 if not destination.is_file():
@@ -518,16 +880,19 @@ class Operation:
                 if _sha256(destination) != item.get("sha256"):
                     raise ActionError(
                         f"rollback hash changed: {destination}")
-                source.parent.mkdir(parents=True, exist_ok=True)
-                try:
-                    os.replace(destination, source)
-                except OSError:
-                    shutil.copy2(destination, source)
-                    if _sha256(source) != item["sha256"]:
-                        source.unlink(missing_ok=True)
-                        raise ActionError(
-                            f"rollback verification failed: {source}")
+                if operation == "copy":
                     destination.unlink()
+                else:
+                    source.parent.mkdir(parents=True, exist_ok=True)
+                    try:
+                        os.replace(destination, source)
+                    except OSError:
+                        shutil.copy2(destination, source)
+                        if _sha256(source) != item["sha256"]:
+                            source.unlink(missing_ok=True)
+                            raise ActionError(
+                                f"rollback verification failed: {source}")
+                        destination.unlink()
                 with self._lock:
                     item["status"] = "rolled-back"
                     self.journal["rollback"]["completed"] += 1
@@ -536,6 +901,8 @@ class Operation:
                 self.journal["rollback"]["status"] = "completed"
                 self.journal["status"] = "rolled-back"
                 self._save()
+            if self.on_rollback is not None:
+                self.on_rollback(self.public())
         except Exception as exc:
             with self._lock:
                 self.journal["rollback"]["status"] = "failed"
@@ -741,20 +1108,37 @@ class ActionController:
         report: ReportIndex,
         reviews: ReviewStore,
         photos: PhotoStore,
+        project_path: Path | None = None,
+        raw_sources: RawSourceStore | None = None,
     ):
         self.report = report
         self.reviews = reviews
         self.photos = photos
+        self.project_path = (
+            project_path.expanduser().resolve() if project_path else None)
+        self.raw_sources = raw_sources
+        self.project_layout = (
+            ensure_project_layout(photos.root) if project_path else None)
         self._lock = threading.RLock()
         self.plans: dict[str, dict[str, Any]] = {}
         self.operations: dict[str, Operation | ContactSheetOperation] = {}
+
+    def bind_project(self, project_path: Path) -> None:
+        """Rebind future operations after an explicit project migration."""
+        self.project_path = project_path.expanduser().resolve()
+        self.project_layout = ensure_project_layout(self.photos.root)
 
     def recoverable_journals(self) -> list[dict[str, Any]]:
         """Return validated incomplete journals belonging to this report."""
         journals = []
         pattern = f"{self.report.path.stem}.*.operation.json"
+        roots = [self.report.path.parent]
+        if self.project_layout is not None:
+            roots.append(self.project_layout["Operations"])
+        candidates = list(dict.fromkeys(
+            path for root in roots for path in root.glob(pattern)))
         for path in sorted(
-            self.report.path.parent.glob(pattern),
+            candidates,
             key=lambda candidate: candidate.stat().st_mtime,
             reverse=True,
         ):
@@ -811,6 +1195,26 @@ class ActionController:
     def preflight(self, **options: Any) -> dict[str, Any]:
         action = str(options.get("action", "copy"))
         destination_text = str(options.get("destination", "")).strip()
+        if action == "project_filter":
+            if self.project_path is None:
+                raise ActionError("this review is not attached to a Darkimiya project")
+            plan = build_project_filter_plan(
+                self.report, self.reviews, self.photos,
+                self.project_path, self.raw_sources)
+            with self._lock:
+                self.plans[plan["plan_id"]] = plan
+            return deepcopy(plan)
+        if action == "system_cleanup":
+            if self.project_path is None:
+                raise ActionError("this review is not attached to a Darkimiya project")
+            requested = options.get("selected_cleanup_paths", [])
+            plan = build_system_cleanup_plan(
+                self.report, self.reviews, self.photos, self.project_path,
+                str(options.get("cleanup_policy", "preserve_useful_raws")),
+                requested if isinstance(requested, list) else [])
+            with self._lock:
+                self.plans[plan["plan_id"]] = plan
+            return deepcopy(plan)
         if action != "trash" and not destination_text:
             raise ActionError("destination is required")
         plan = build_plan(
@@ -846,8 +1250,24 @@ class ActionController:
                     f"confirmation must be the four-digit code: {expected}")
             operation = self.operations.get(plan_id)
             if operation is None:
+                journal_path = (
+                    self.project_layout["Operations"] /
+                    f"{self.report.path.stem}.{plan['plan_id']}.operation.json"
+                    if plan.get("action") in {"project_filter", "system_cleanup"}
+                    and self.project_layout is not None
+                    else default_journal_path(self.report, plan))
                 operation = Operation(
-                    plan, default_journal_path(self.report, plan))
+                    plan, journal_path,
+                    on_complete=(
+                        self._finalize_project_filter
+                        if plan.get("action") == "project_filter" else None),
+                    on_rollback=(
+                        self._rollback_project_filter
+                        if plan.get("action") == "project_filter" else None),
+                )
+                if plan.get("action") == "system_cleanup":
+                    operation.on_complete = self._finalize_system_cleanup
+                    operation.on_rollback = self._rollback_system_cleanup
                 self.operations[plan_id] = operation
             operation.start()
             return operation.public()
@@ -900,6 +1320,160 @@ class ActionController:
         operation.rollback_move()
         return operation.public()
 
+    def _finalize_project_filter(self, journal: dict[str, Any]) -> None:
+        if self.project_path is None:
+            return
+        project = load_project(self.project_path)
+        artifacts = project.get("artifacts", {})
+        operation_id = str(journal.get("plan_id", ""))
+        changes: dict[str, list[dict[str, Any]]] = {}
+        for category, key in (
+            ("rejected", "rejected"), ("raw_reserve", "raw_reserve")):
+            current = list(artifacts.get(key, []) or [])
+            current = [
+                item for item in current
+                if not isinstance(item, dict)
+                or item.get("operation_id") != operation_id]
+            current.extend({
+                "operation_id": operation_id,
+                "source_name": item.get("source_name"),
+                "original_path": item.get("source"),
+                "path": item.get("destination"),
+                "operation": item.get("operation", "move"),
+                "sha256": item.get("sha256"),
+                "bytes": item.get("bytes"),
+                "status": "reserved" if category == "raw_reserve" else "rejected",
+                "created_at": item.get("completed_at", _now()),
+            } for item in journal.get("items", [])
+                if item.get("status") == "completed"
+                and item.get("category") == category)
+            changes[key] = current
+        update_project(
+            self.project_path, stage="organize", artifacts=changes)
+        if changes["raw_reserve"] and self.raw_sources is not None:
+            self.raw_sources.configure(self.project_layout["RAW Reserve"])
+            register_file_artifact(
+                self.project_path, "raw_source_map", self.raw_sources.path,
+                stage="organize")
+        register_file_artifact(
+            self.project_path, "operations", Path(journal["journal_path"]),
+            stage="organize", job_id=operation_id)
+
+    def _rollback_project_filter(self, journal: dict[str, Any]) -> None:
+        if self.project_path is None:
+            return
+        project = load_project(self.project_path)
+        operation_id = str(journal.get("plan_id", ""))
+        changes: dict[str, list[dict[str, Any]]] = {}
+        for key in ("rejected", "raw_reserve"):
+            current = list(project.get("artifacts", {}).get(key, []) or [])
+            for item in current:
+                if isinstance(item, dict) and item.get("operation_id") == operation_id:
+                    item["status"] = "restored"
+                    item["restored_at"] = _now()
+            changes[key] = current
+        update_project(
+            self.project_path, stage="cull", artifacts=changes)
+        if self.raw_sources is not None:
+            self.raw_sources.configure(self.project_layout["RAW Reserve"])
+            register_file_artifact(
+                self.project_path, "raw_source_map", self.raw_sources.path,
+                stage="cull")
+        register_file_artifact(
+            self.project_path, "operations", Path(journal["journal_path"]),
+            stage="cull", job_id=operation_id)
+
+    def cleanup_candidates(self) -> dict[str, Any]:
+        if self.project_path is None:
+            raise ActionError("this review is not attached to a Darkimiya project")
+        return cleanup_candidates(self.project_path)
+
+    def _finalize_system_cleanup(self, journal: dict[str, Any]) -> None:
+        if self.project_path is None:
+            return
+        project = load_project(self.project_path)
+        artifacts = project.get("artifacts", {})
+        operation_id = str(journal.get("plan_id", ""))
+        rejected = list(artifacts.get("rejected", []) or [])
+        reserve = list(artifacts.get("raw_reserve", []) or [])
+        by_current_path = {
+            str(Path(str(item.get("path", ""))).expanduser().resolve()): item
+            for item in rejected if isinstance(item, dict) and item.get("path")}
+        for item in journal.get("items", []):
+            if item.get("status") != "completed":
+                continue
+            source = str(Path(item["source"]).expanduser().resolve())
+            record = by_current_path.get(source)
+            if record is None:
+                record = {
+                    "source_name": item.get("source_name"),
+                    "original_path": item.get("source"),
+                    "created_at": item.get("completed_at", _now()),
+                }
+                rejected.append(record)
+            record.update({
+                "cleanup_operation_id": operation_id,
+                "cleanup_source_path": item.get("source"),
+                "path": item.get("destination"),
+                "sha256": item.get("sha256"),
+                "bytes": item.get("bytes"),
+                "status": (
+                    "retained_raw" if item.get("category") == "raw_reserve"
+                    else "system_trash"),
+                "cleaned_at": item.get("completed_at", _now()),
+            })
+            if item.get("category") == "raw_reserve":
+                reserve.append({
+                    "operation_id": operation_id,
+                    "source_name": item.get("source_name"),
+                    "original_path": item.get("source"),
+                    "path": item.get("destination"),
+                    "operation": "move", "sha256": item.get("sha256"),
+                    "bytes": item.get("bytes"), "status": "reserved",
+                    "created_at": item.get("completed_at", _now()),
+                })
+        update_project(
+            self.project_path, stage="cleanup",
+            artifacts={"rejected": rejected, "raw_reserve": reserve})
+        if self.raw_sources is not None:
+            self.raw_sources.configure(self.project_layout["RAW Reserve"])
+            register_file_artifact(
+                self.project_path, "raw_source_map", self.raw_sources.path,
+                stage="cleanup")
+        register_file_artifact(
+            self.project_path, "operations", Path(journal["journal_path"]),
+            stage="cleanup", job_id=operation_id)
+
+    def _rollback_system_cleanup(self, journal: dict[str, Any]) -> None:
+        if self.project_path is None:
+            return
+        project = load_project(self.project_path)
+        operation_id = str(journal.get("plan_id", ""))
+        rejected = list(project.get("artifacts", {}).get("rejected", []) or [])
+        for item in rejected:
+            if isinstance(item, dict) and item.get("cleanup_operation_id") == operation_id:
+                item.update({
+                    "path": item.get("cleanup_source_path")
+                    or item.get("original_path"),
+                    "status": "rejected",
+                    "cleanup_rolled_back_at": _now(),
+                })
+        reserve = [
+            item for item in list(
+                project.get("artifacts", {}).get("raw_reserve", []) or [])
+            if not isinstance(item, dict) or item.get("operation_id") != operation_id]
+        update_project(
+            self.project_path, stage="organize",
+            artifacts={"rejected": rejected, "raw_reserve": reserve})
+        if self.raw_sources is not None:
+            self.raw_sources.configure(self.project_layout["RAW Reserve"])
+            register_file_artifact(
+                self.project_path, "raw_source_map", self.raw_sources.path,
+                stage="organize")
+        register_file_artifact(
+            self.project_path, "operations", Path(journal["journal_path"]),
+            stage="organize", job_id=operation_id)
+
     def resume_journal(
         self, journal_path: Path, confirmation: str
     ) -> dict[str, Any]:
@@ -916,7 +1490,17 @@ class ActionController:
         if confirmation != f"RESUME {plan_id}":
             raise ActionError(
                 f"confirmation must exactly equal: RESUME {plan_id}")
-        operation = Operation(plan, resolved)
+        complete_callback = (
+            self._finalize_project_filter if plan.get("action") == "project_filter"
+            else self._finalize_system_cleanup
+            if plan.get("action") == "system_cleanup" else None)
+        rollback_callback = (
+            self._rollback_project_filter if plan.get("action") == "project_filter"
+            else self._rollback_system_cleanup
+            if plan.get("action") == "system_cleanup" else None)
+        operation = Operation(
+            plan, resolved, on_complete=complete_callback,
+            on_rollback=rollback_callback)
         with self._lock:
             self.plans[plan_id] = plan
             self.operations[plan_id] = operation

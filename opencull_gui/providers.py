@@ -24,10 +24,81 @@ KINDS = {"openrouter", "openai", "ollama"}
 AGENTS = ("A", "B", "C", "D")
 VISION_AGENTS = {"A", "B", "D"}
 MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/+\-]{0,199}$")
+DEFAULT_JUDGMENT_POLICY = {
+    "panel": ["C", "D"],
+    "votes": 5,
+    "required": 4,
+}
 
 
 class ProviderError(ValueError):
     """Provider metadata, credentials, or connectivity are invalid."""
+
+
+def normalize_judgment_policy(
+    panel: Any = None,
+    votes: Any = 5,
+    required: Any = 4,
+) -> dict[str, Any]:
+    """Validate the per-job Kimiya panel and its approval threshold."""
+    requested = DEFAULT_JUDGMENT_POLICY["panel"] if panel is None else panel
+    if not isinstance(requested, (list, tuple)):
+        raise ProviderError("judgment panel must be a list of agent roles")
+    members = [str(value).strip().upper() for value in requested]
+    if not members:
+        raise ProviderError("judgment panel must contain at least one agent")
+    if len(members) != len(set(members)):
+        raise ProviderError("judgment panel cannot contain duplicate agents")
+    unsupported = [member for member in members if member not in AGENTS]
+    if unsupported:
+        raise ProviderError(
+            "judgment panel contains unknown agent roles: "
+            + ", ".join(unsupported))
+    try:
+        vote_count = int(votes)
+        required_count = int(required)
+    except (TypeError, ValueError) as exc:
+        raise ProviderError(
+            "judgment vote count and approval count must be integers") from exc
+    if vote_count < 1 or vote_count > 15:
+        raise ProviderError("judgment vote count must be between 1 and 15")
+    if vote_count < len(members):
+        raise ProviderError(
+            "judgment vote count must be at least the number of panel agents")
+    if required_count < 1 or required_count > vote_count:
+        raise ProviderError(
+            "required approvals must be between 1 and the total vote count")
+    return {
+        "panel": members,
+        "votes": vote_count,
+        "required": required_count,
+    }
+
+
+def apply_judgment_policy(
+    source: str,
+    policy: dict[str, Any],
+) -> str:
+    """Bind one validated final-report policy into an OpenCull program."""
+    normalized = normalize_judgment_policy(
+        policy.get("panel"), policy.get("votes"), policy.get("required"))
+    pattern = re.compile(
+        r"(?m)^(?P<indent>\s*)if memo judge<\d+,\d+/\d+> "
+        r"(?P<claim>\(evidence \|= report_policy\(keep_per_group\)\) "
+        r"under k_cull) panel \[[^\]]+\]:$"
+    )
+    panel_text = ", ".join(normalized["panel"])
+    replacement = (
+        rf"\g<indent>if memo judge<{normalized['votes']},"
+        rf"{normalized['required']}/{normalized['votes']}> "
+        rf"\g<claim> panel [{panel_text}]:"
+    )
+    generated, substitutions = pattern.subn(replacement, source)
+    if substitutions != 1:
+        raise ProviderError(
+            "cannot generate job program; final judgment declaration "
+            "was not found exactly once")
+    return generated
 
 
 def _now() -> str:
@@ -132,6 +203,46 @@ class ProviderStore:
         self.keychain = keychain or MacOSKeychain()
         self._lock = threading.RLock()
         self._state = self._load()
+        self._upgrade_default_openrouter_models()
+
+    def _upgrade_default_openrouter_models(self) -> None:
+        previous_defaults = (
+            {
+                "A": "google/gemini-2.5-flash",
+                "B": "openai/gpt-4.1-mini",
+                "C": "mistralai/mistral-small-3.2-24b-instruct",
+                "D": "qwen/qwen3-vl-30b-a3b-instruct",
+            },
+            {
+                "A": "anthropic/claude-sonnet-5",
+                "B": "openai/gpt-5.4",
+                "C": "google/gemini-3.5-flash",
+                "D": "qwen/qwen3.5-122b-a10b",
+            },
+            {
+                "A": "qwen/qwen3.5-122b-a10b",
+                "B": "google/gemini-2.5-flash",
+                "C": "mistralai/mistral-small-3.2-24b-instruct",
+                "D": "qwen/qwen3.7-flash",
+            },
+        )
+        recommended = {
+            "A": "openai/gpt-5.6-luna-pro",
+            "B": "openai/gpt-5.6-luna-pro",
+            "C": "openai/gpt-4.1-mini",
+            "D": "openai/gpt-5.6-luna-pro",
+        }
+        changed = False
+        for profile in self._state["profiles"]:
+            if (
+                profile.get("kind") == "openrouter"
+                and profile.get("models") in previous_defaults
+            ):
+                profile["models"] = recommended
+                profile["updated_at"] = _now()
+                changed = True
+        if changed:
+            self._save()
 
     def _empty(self) -> dict[str, Any]:
         return {
@@ -384,9 +495,19 @@ class ProviderStore:
         job_id: str,
         profile_id: str,
         program_name: str = "opencull.kim",
+        model_overrides: dict[str, str] | None = None,
+        judgment_policy: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         with self._lock:
             profile = deepcopy(self._profile(profile_id))
+        for agent, value in (model_overrides or {}).items():
+            if agent not in AGENTS:
+                raise ProviderError(f"unknown model-override agent: {agent}")
+            model = str(value).strip()
+            if not MODEL_RE.fullmatch(model):
+                raise ProviderError(
+                    f"invalid model override for agent {agent}")
+            profile["models"][agent] = model
         env_name = f"OPENCULL_PROVIDER_TOKEN_{profile_id.upper()}"
         lines = [
             "-- Generated by OpenCull Phase 7. Contains no credential value.",
@@ -410,9 +531,18 @@ class ProviderStore:
                 lines.append("    vision   = true")
             lines.append("")
         agents_text = "\n".join(lines)
-        if program_name not in {"opencull.kim", "professional_shortlist.kim"}:
+        if program_name not in {
+            "opencull.kim", "professional_shortlist.kim",
+            "edit_suggestions.kim", "semantic_verification.kim",
+            "style_profile.kim",
+        }:
             raise ProviderError(f"unsupported Kimiya program: {program_name}")
         source = (self.project_root / program_name).read_text(encoding="utf-8")
+        bound_judgment_policy = None
+        if program_name == "opencull.kim":
+            bound_judgment_policy = normalize_judgment_policy(
+                **(judgment_policy or DEFAULT_JUDGMENT_POLICY))
+            source = apply_judgment_policy(source, bound_judgment_policy)
         bundle = (self.generated_root / job_id).resolve()
         agents_path = bundle / "agents.kim"
         program_path = bundle / program_name
@@ -424,9 +554,18 @@ class ProviderStore:
                 'use python "opencull_kernel.py"': (
                     f'use python "{self.project_root / "opencull_kernel.py"}"'),
             })
-        else:
+        elif program_name == "professional_shortlist.kim":
             replacements['use python "shortlist_kernel.py"'] = (
                 f'use python "{self.project_root / "shortlist_kernel.py"}"')
+        elif program_name == "edit_suggestions.kim":
+            replacements['use python "edit_suggestion_kernel.py"'] = (
+                f'use python "{self.project_root / "edit_suggestion_kernel.py"}"')
+        elif program_name == "semantic_verification.kim":
+            replacements['use python "semantic_verification_kernel.py"'] = (
+                f'use python "{self.project_root / "semantic_verification_kernel.py"}"')
+        else:
+            replacements['use python "style_profile_kernel.py"'] = (
+                f'use python "{self.project_root / "style_profile_kernel.py"}"')
         for original, generated in replacements.items():
             if original not in source:
                 raise ProviderError(
@@ -445,6 +584,7 @@ class ProviderStore:
             "agents_path": str(agents_path),
             "program_path": str(program_path),
             "program_name": program_name,
+            "judgment_policy": bound_judgment_policy,
             "credential_env": env_name if profile["credential_required"] else "",
             "contains_secret": False,
             "generated_at": _now(),

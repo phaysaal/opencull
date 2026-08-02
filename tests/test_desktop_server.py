@@ -11,6 +11,8 @@ from pathlib import Path
 
 from opencull_gui.desktop_server import DesktopBridgeServer
 from opencull_gui.jobs import JobManager
+from opencull_gui.project import project_manifest_path
+from opencull_gui.project_catalog import ProjectCatalog
 
 
 class FakeJobs:
@@ -71,8 +73,11 @@ class FakeProviders:
 
 class DesktopBridgeTests(unittest.TestCase):
     def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
         self.jobs = FakeJobs()
         self.providers = FakeProviders()
+        self.projects = ProjectCatalog(self.root / "projects.json")
         self.opened = []
 
         def open_review(report, photos):
@@ -81,7 +86,7 @@ class DesktopBridgeTests(unittest.TestCase):
 
         self.server = DesktopBridgeServer(
             ("127.0.0.1", 0), self.jobs, self.providers,
-            open_review)
+            open_review, projects=self.projects)
         self.thread = threading.Thread(target=self.server.serve_forever)
         self.thread.start()
         self.connection = http.client.HTTPConnection(
@@ -92,6 +97,7 @@ class DesktopBridgeTests(unittest.TestCase):
         self.server.shutdown()
         self.server.server_close()
         self.thread.join(timeout=3)
+        self.temporary.cleanup()
 
     def request(self, method: str, path: str, body=None, token=True):
         headers = {
@@ -133,6 +139,26 @@ class DesktopBridgeTests(unittest.TestCase):
         })
         self.assertEqual(status, 200)
         self.assertEqual(self.jobs.actions[-1], ("action", "job-1", "pause"))
+
+    def test_project_is_added_before_and_independently_of_culling(self) -> None:
+        photos = self.root / "Family"; photos.mkdir()
+        status, payload = self.request("POST", "/projects", {
+            "photos": str(photos),
+        })
+        self.assertEqual(status, 200)
+        self.assertEqual(len(payload["projects"]), 1)
+        self.assertEqual(self.jobs.actions, [])
+        self.assertTrue(project_manifest_path(photos).is_file())
+        project_id = payload["projects"][0]["id"]
+
+        status, _ = self.request("POST", "/projects/cull", {
+            "project_id": project_id, "keep_per_group": 2,
+            "recursive": True, "profile": "family",
+            "provider_profile_id": "provider-1",
+        })
+        self.assertEqual(status, 200)
+        self.assertEqual(self.jobs.actions[-1][0], "add")
+        self.assertEqual(self.jobs.actions[-1][1][0], str(photos.resolve()))
 
     def test_reveal_rejects_a_missing_path(self) -> None:
         status, payload = self.request("POST", "/reveal", {
@@ -234,7 +260,7 @@ class JobRelinkTests(unittest.TestCase):
                 state = manager.add(
                     str(original), output=str(root / "result.json"))
                 job_id = state["jobs"][0]["id"]
-                original.rmdir()
+                original.rename(root / "Original-offline")
                 state = manager.relink_source(job_id, str(replacement))
                 self.assertEqual(
                     state["jobs"][0]["photos"], str(replacement.resolve()))
@@ -271,7 +297,7 @@ class JobRelinkTests(unittest.TestCase):
             finally:
                 manager.shutdown()
 
-    def test_native_output_root_keeps_results_out_of_immutable_resources(self):
+    def test_new_jobs_keep_results_in_the_folder_owned_project(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             resources = root / "BundleResources"
@@ -285,9 +311,16 @@ class JobRelinkTests(unittest.TestCase):
                 output_root=results, autostart=False)
             try:
                 state = manager.add(str(photos))
-                output = Path(state["jobs"][0]["output"])
-                self.assertEqual(output.parent, results.resolve())
+                job = state["jobs"][0]
+                output = Path(job["output"])
+                self.assertEqual(
+                    output.parent, (photos / "Darkimiya" / "Reports").resolve())
                 self.assertNotEqual(output.parent, resources.resolve())
+                self.assertTrue((photos / "Darkimiya" / "project.json").is_file())
+                self.assertEqual(
+                    Path(job["project"]),
+                    (photos / "Darkimiya" / "project.json").resolve())
+                self.assertTrue(job["project_id"])
             finally:
                 manager.shutdown()
 

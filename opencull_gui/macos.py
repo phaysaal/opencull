@@ -4,15 +4,17 @@ from __future__ import annotations
 
 import atexit
 import os
+import shutil
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 
-APP_NAME = "OpenCull"
+APP_NAME = "Darkimiya"
 APP_SUPPORT = Path.home() / "Library" / "Application Support" / APP_NAME
 APP_CACHE = Path.home() / "Library" / "Caches" / APP_NAME
 APP_LOGS = Path.home() / "Library" / "Logs" / APP_NAME
+LEGACY_APP_SUPPORT = Path.home() / "Library" / "Application Support" / "OpenCull"
 
 
 def resource_root() -> Path:
@@ -38,7 +40,18 @@ class MacOSPaths:
         for directory in (value.support, value.cache, value.logs, value.results):
             directory.mkdir(parents=True, exist_ok=True)
             os.chmod(directory, 0o700)
+        if base is None:
+            value._import_legacy_state()
         return value
+
+    def _import_legacy_state(self) -> None:
+        """Copy small durable indexes once; never move or rewrite old state."""
+        for name in ("jobs.json", "providers.json", "onboarding-complete"):
+            source = LEGACY_APP_SUPPORT / name
+            destination = self.support / name
+            if source.is_file() and not destination.exists():
+                shutil.copy2(source, destination)
+                os.chmod(destination, 0o600)
 
     @property
     def jobs(self) -> Path:
@@ -67,7 +80,7 @@ class MacOSPaths:
 
     @property
     def launcher_log(self) -> Path:
-        return self.logs / "OpenCull.log"
+        return self.logs / "Darkimiya.log"
 
     @property
     def onboarding_marker(self) -> Path:

@@ -1,1 +1,1 @@
-"""Local review and verified organization GUI for OpenCull reports."""
+"""Darkimiya's local review, development, and verified organization GUI."""

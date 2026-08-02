@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Launch OpenCull's local GUI with immutable evidence and human review."""
+"""Launch Darkimiya's local GUI with immutable evidence and human review."""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from opencull_gui.jobs import JobError, JobManager
 from opencull_gui.providers import ProviderError, ProviderStore
 from opencull_gui.faces import FaceError, FaceStore, default_face_db
 from opencull_gui.shortlist import ShortlistError
+from opencull_gui.project import ensure_project_layout, load_or_create_folder_project
 
 
 def parse_args() -> argparse.Namespace:
@@ -96,8 +97,16 @@ def main() -> int:
     try:
         report = load_report(args.report)
         photos = PhotoStore(args.photos, args.cache)
+        project_path, _project = load_or_create_folder_project(
+            photos.root, report.path.stem,
+            report.path.with_suffix(".opencull-project.json"))
+        layout = ensure_project_layout(photos.root)
+        managed_review = layout["Reviews"] / f"{report.path.stem}.review.json"
         reviews = ReviewStore(
-            args.review or default_review_path(report.path),
+            args.review or (
+                managed_review
+                if project_path == layout["manifest"]
+                else default_review_path(report.path)),
             report,
             photos.root,
         )

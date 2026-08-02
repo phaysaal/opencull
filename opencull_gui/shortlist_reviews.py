@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import tempfile
 import threading
@@ -71,6 +72,7 @@ class ShortlistReviewStore:
             "updated_at": timestamp,
             "entries": {},
             "history": [],
+            "migrations": [],
         }
 
     def _validate_entry(self, photo: str, value: Any) -> dict[str, Any]:
@@ -81,16 +83,22 @@ class ShortlistReviewStore:
         tier = str(value.get("tier", "")).strip().lower()
         note = value.get("note", "")
         edit_raw = value.get("edit_raw", False)
+        interesting = value.get("interesting", False)
         reviewed = value.get("reviewed", False)
         if tier not in TIERS:
             raise ShortlistReviewError(f"unsupported quality tier: {tier!r}")
         if not isinstance(note, str) or len(note) > 5000:
             raise ShortlistReviewError("shortlist note is invalid")
-        if not isinstance(edit_raw, bool) or not isinstance(reviewed, bool):
+        if (
+            not isinstance(edit_raw, bool)
+            or not isinstance(interesting, bool)
+            or not isinstance(reviewed, bool)
+        ):
             raise ShortlistReviewError("review flags must be true or false")
         return {
             "tier": tier,
             "edit_raw": edit_raw,
+            "interesting": interesting,
             "reviewed": reviewed,
             "note": note,
             "updated_at": str(value.get("updated_at", _now())),
@@ -132,6 +140,9 @@ class ShortlistReviewStore:
                 "revision": int(data.get("revision", 0)),
                 "entries": clean_entries,
                 "history": history[-MAX_HISTORY:],
+                "migrations": (
+                    data.get("migrations", [])
+                    if isinstance(data.get("migrations", []), list) else []),
             }
         except (ShortlistReviewError, TypeError, ValueError) as exc:
             self.stale_reason = str(exc)
@@ -151,6 +162,83 @@ class ShortlistReviewStore:
         self._state["updated_at"] = _now()
         _atomic_json(self.path, self._state)
 
+    def merge_legacy(self, legacy_path: Path) -> dict[str, Any]:
+        """Merge compatible pre-project decisions without overwriting newer work."""
+        legacy = legacy_path.expanduser().resolve()
+        with self._lock:
+            result = {
+                "merged": False, "legacy_path": str(legacy),
+                "imported": 0, "replaced": 0, "preserved": 0,
+                "backup_path": "",
+            }
+            if legacy == self.path or not legacy.is_file() or self.stale_reason:
+                return result
+            try:
+                raw = legacy.read_bytes()
+                data = json.loads(raw)
+            except (OSError, json.JSONDecodeError):
+                return result
+            if (
+                not isinstance(data, dict)
+                or data.get("format") != SHORTLIST_REVIEW_FORMAT
+                or data.get("source_report_sha256")
+                    != self.shortlist.data["source_report_sha256"]
+                or data.get("candidate_signature")
+                    != self.shortlist.data.get("candidate_signature", "")
+                or not isinstance(data.get("entries"), dict)
+            ):
+                return result
+            legacy_sha = hashlib.sha256(raw).hexdigest()
+            if any(
+                item.get("legacy_sha256") == legacy_sha
+                for item in self._state.get("migrations", [])
+                if isinstance(item, dict)
+            ):
+                return result
+            try:
+                legacy_entries = {
+                    photo: self._validate_entry(photo, value)
+                    for photo, value in data["entries"].items()
+                }
+            except ShortlistReviewError:
+                return result
+            if self.path.is_file():
+                local_sha = hashlib.sha256(self.path.read_bytes()).hexdigest()
+                backup = self.path.with_name(
+                    f"{self.path.stem}.pre-legacy-merge-{local_sha[:12]}.json")
+                if not backup.exists():
+                    _atomic_json(backup, deepcopy(self._state))
+                result["backup_path"] = str(backup)
+            for photo, legacy_entry in legacy_entries.items():
+                current = self._state["entries"].get(photo)
+                if current is None:
+                    self._state["entries"][photo] = legacy_entry
+                    result["imported"] += 1
+                elif str(legacy_entry.get("updated_at", "")) > str(
+                    current.get("updated_at", "")):
+                    self._state["entries"][photo] = legacy_entry
+                    result["replaced"] += 1
+                else:
+                    result["preserved"] += 1
+            migration = {
+                "kind": "legacy-shortlist-review-merge",
+                "at": _now(), "legacy_path": str(legacy),
+                "legacy_sha256": legacy_sha,
+                "legacy_revision": int(data.get("revision", 0)),
+                "imported": result["imported"],
+                "replaced": result["replaced"],
+                "preserved": result["preserved"],
+                "backup_path": result["backup_path"],
+            }
+            self._state.setdefault("migrations", []).append(migration)
+            self._state["revision"] = max(
+                int(self._state.get("revision", 0)),
+                int(data.get("revision", 0)),
+            ) + 1
+            self._write()
+            result["merged"] = True
+            return result
+
     def public_state(self) -> dict[str, Any]:
         with self._lock:
             reviewed = sum(
@@ -158,6 +246,9 @@ class ShortlistReviewStore:
                 for entry in self._state["entries"].values())
             edit_raw = sum(
                 entry.get("reviewed") is True and entry.get("edit_raw") is True
+                for entry in self._state["entries"].values())
+            interesting = sum(
+                entry.get("interesting") is True
                 for entry in self._state["entries"].values())
             return {
                 **deepcopy(self._state),
@@ -168,6 +259,7 @@ class ShortlistReviewStore:
                     "reviewed": reviewed,
                     "total": len(self.shortlist.entries),
                     "edit_raw": edit_raw,
+                    "interesting": interesting,
                 },
             }
 
@@ -179,6 +271,7 @@ class ShortlistReviewStore:
         note: Any,
         reviewed: Any,
         revision: Any,
+        interesting: Any = False,
     ) -> dict[str, Any]:
         with self._lock:
             self._require_revision(revision)
@@ -190,6 +283,7 @@ class ShortlistReviewStore:
             value = self._validate_entry(photo, {
                 "tier": tier,
                 "edit_raw": edit_raw,
+                "interesting": interesting,
                 "note": note,
                 "reviewed": reviewed,
                 "updated_at": _now(),
@@ -234,6 +328,7 @@ class ShortlistReviewStore:
                     "edit_raw": (
                         human["edit_raw"] if reviewed
                         else ai["tier"] in {"exceptional", "strong"}),
+                    "interesting": bool(human and human.get("interesting")),
                     "human_reviewed": reviewed,
                     "human_note": human["note"] if human else "",
                 })

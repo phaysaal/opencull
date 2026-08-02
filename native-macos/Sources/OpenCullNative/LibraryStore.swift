@@ -29,10 +29,17 @@ final class LibraryStore: ObservableObject {
     init() {
         let support = FileManager.default.urls(
             for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("OpenCull", isDirectory: true)
+            .appendingPathComponent("Darkimiya", isDirectory: true)
         try? FileManager.default.createDirectory(
             at: support, withIntermediateDirectories: true)
         documentURL = support.appendingPathComponent("NativeLibrary.json")
+        let legacyURL = support.deletingLastPathComponent()
+            .appendingPathComponent("OpenCull", isDirectory: true)
+            .appendingPathComponent("NativeLibrary.json")
+        if !FileManager.default.fileExists(atPath: documentURL.path),
+           FileManager.default.fileExists(atPath: legacyURL.path) {
+            try? FileManager.default.copyItem(at: legacyURL, to: documentURL)
+        }
         load()
     }
 

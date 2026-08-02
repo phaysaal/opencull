@@ -20,7 +20,7 @@ final class NativeNotifications {
                 : job.status == "paused"
                     ? "Culling paused"
                     : "Culling needs attention")
-        content.body = "\(job.folderName): \(job.message)"
+        content.body = "\(job.displayName): \(job.message)"
         content.sound = job.status == "completed" ? .default : nil
         let request = UNNotificationRequest(
             identifier: "opencull-job-\(job.id)-\(job.status)",

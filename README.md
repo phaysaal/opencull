@@ -1,9 +1,17 @@
-# OpenCull
+# Darkimiya
 
-OpenCull is an open-source, local-first photo culling experiment built as a
-[Kimiya](../kimiya-lang/) program. It groups near-duplicate RAW/JPEG photos,
-measures explainable technical signals, and asks user-declared LLM agents to
-recommend the best one to three photographs from each group.
+Darkimiya is an open-source, local-first computational darkroom built around
+[Kimiya](../kimiya-lang/). Its Kimiya-powered culling engine, **OpenCull**,
+groups near-duplicate RAW/JPEG photographs, measures explainable technical
+signals, and asks user-declared LLM agents to recommend the strongest frames.
+The wider application carries a folder project through human review, RAW
+development, semantic verification, and delivery.
+
+New projects store portable state under `PHOTO_FOLDER/Darkimiya/`. Credentials,
+private face embeddings, caches, and security bookmarks remain device-private.
+Established OpenCull reports and legacy project manifests remain readable so
+historical evidence is not rewritten merely because the application acquired
+a broader name.
 
 OpenCull is deliberately conservative:
 
@@ -32,6 +40,38 @@ families B and C to warrant the complete report, and only then writes
 `opencull_kernel.py` is the deterministic bridge. Kimiya announces it as a
 Python extension and records its SHA in the certificate.
 
+## Position among existing RAW applications
+
+As of August 2026, no documented mainstream application combines OpenCull's
+entire development loop. Several products overlap with important parts of it:
+
+| Application | Overlap | Important difference |
+| --- | --- | --- |
+| [Aftershoot Develop](https://aftershoot.com/edit/) | RAW development, masks, personalized AI profiles, batch editing, and export | The closest commercial workflow, but its learned profiles are based on a large prior editing corpus rather than OpenCull's explicit semantic directions and before/after verification. |
+| [Imagen AI](https://support.imagen-ai.com/hc/en-us/articles/6069711141009-What-is-a-Personal-AI-Profile?v=0i) | Learns a photographer's established style and applies it across galleries | Primarily an automated Lightroom workflow; its documented personal profile requires at least 2,000 edited examples with the corresponding RAW/XMP evidence. |
+| [Capture One](https://www.captureone.com/en/explore-features/assisted-editing) | Mature RAW conversion, layers, masks, Match Look, and adaptive exposure/white balance | It transfers or adapts a reference look, but does not implement OpenCull's full LLM-directed, guarded, semantically verified loop. |
+| [Adobe Lightroom](https://helpx.adobe.com/lightroom/web/edit-photos/apply-effects/use-adaptive-profiles.html) | Mature RAW conversion, image-adaptive profiles, AI masks, denoise, and local editing | Its adaptive tools do not propose multiple reasoned artistic treatments and verify a rendered result against the selected intent. |
+| [darktable](https://www.darktable.org/about/) | Open-source, non-destructive RAW development, image management, styles, XMP history, and command-line export | It provides the mature pixel engine OpenCull currently lacks, but not OpenCull's personal semantic profile, Kimiya policy, or perceptual acceptance loop. |
+
+OpenCull's distinctive target is the composition of these capabilities:
+
+1. photographic and semantic assessment of the scene;
+2. standard, signature, creative, and learned-personal treatment proposals;
+3. compilation of prose intent into a typed, deterministic recipe;
+4. calibration against the camera JPEG when one is available;
+5. auditable Kimiya policy checks and abstention;
+6. comparison of the original evidence, selected direction, and rendered image;
+7. rejection, revision, or regeneration when the result misses the intent.
+
+The established applications have much more mature demosaicing, camera and
+lens profiles, denoise, masking, color management, and acceleration. OpenCull's
+potential advantage is therefore not a new low-level pixel pipeline. It is the
+explainable, personalized, self-checking control system above that pipeline.
+The preferred production architecture is to retain OpenCull's recipe,
+provenance, Kimiya guardrails, and semantic verification while allowing a
+mature external RAW engine—initially darktable—to execute supported image
+operations through a narrow, versioned adapter.
+
 ## Set up
 
 Python 3.11 or newer is required.
@@ -59,9 +99,9 @@ export PYTHONPATH=/Users/faisal/code/kimiya-lang
 ## Choose agents
 
 Edit `agents.kim`. The checked-in default sends each observed image to
-OpenRouter's `google/gemini-2.5-flash` with per-request Zero Data Retention
-enforcement. Its two report reviewers also use fast, cross-family OpenRouter
-models with ZDR enforced. Only the first agent receives image pixels. The API credential is
+OpenRouter's `openai/gpt-5.6-luna-pro` for vision roles and
+`openai/gpt-4.1-mini` for text judging, with per-request Zero Data Retention
+enforcement. Only the first agent receives image pixels. The API credential is
 loaded at runtime from `../apis/opencull.api`; its contents never enter Kimiya
 source, traces, or certificates. Credential files can contain a raw token,
 `OPENROUTER_API_KEY=...`, or a JSON object with an `OPENROUTER_API_KEY`,
@@ -433,6 +473,16 @@ OpenAI-compatible servers and Ollama do not expose one consistent capability
 schema, so their vision status remains explicitly unverified until a live
 multimodal request succeeds.
 
+Each culling job also has an **Advanced judgment policy**. It may select any
+non-empty subset of the configured A–D roles, choose 1–15 total votes, and set
+the required approval count. The default remains C + D with four approvals out
+of five votes. Votes are distributed across the selected roles; the vote count
+must therefore be at least the number of panel members. Darkimiya validates the
+policy, writes it into the immutable generated `opencull.kim` and provider
+manifest, and runs `kimiya check` before admitting the job to the queue.
+Changing a reusable provider or the form after queueing cannot alter that
+job's recorded panel or threshold.
+
 Provider JSON contains names, endpoint URLs, model IDs, ZDR choice, and an
 optional cost note—but no token. Tokens are write-only in the browser and are
 stored as generic passwords in macOS Keychain under a profile-specific service
@@ -575,18 +625,21 @@ materialization just as it is in source mode.
 macOS state follows platform conventions:
 
 - settings, queue, generated provider programs, and results:
-  `~/Library/Application Support/OpenCull/`;
+  `~/Library/Application Support/Darkimiya/`;
 - per-job Kimiya trace, certificate, memo, locate cache, and datasheets:
-  `~/Library/Application Support/OpenCull/Kimiya/JOB_ID/`;
-- generated previews: `~/Library/Caches/OpenCull/`;
-- launcher diagnostics: `~/Library/Logs/OpenCull/OpenCull.log`;
+  `~/Library/Application Support/Darkimiya/Kimiya/JOB_ID/`;
+- generated previews: `~/Library/Caches/Darkimiya/`;
+- launcher diagnostics: `~/Library/Logs/Darkimiya/Darkimiya.log`;
 - API credentials: macOS Keychain;
 - review and face sidecars: beside their immutable result report.
 
 Application-support, result, cache, and log directories are created with
 owner-only permissions. Source photographs remain in their original folders
 and are still opened read-only. Generated result reports default to
-`Application Support/OpenCull/Results`.
+`Application Support/Darkimiya/Results`. On first launch, Darkimiya copies the
+small queue, provider, onboarding, and native-library indexes from the legacy
+OpenCull application-support folder when a Darkimiya counterpart does not yet
+exist. The legacy files are not moved or rewritten.
 
 #### Build the Apple Silicon application
 
@@ -597,10 +650,14 @@ environment is local to the checkout and is not inherited from Anaconda:
 brew install python@3.12 python-tk@3.12
 python3.12 -m venv .macos-build-venv-arm64
 .macos-build-venv-arm64/bin/python -m pip install \
-  pyinstaller "numpy>=1.26,<3" "Pillow>=10" \
+  pyinstaller -r requirements.txt \
   "opencv-python-headless==4.11.0.86" certifi
 scripts/build_macos.sh
 ```
+
+The native build also checks the reusable environment against
+`requirements.txt` and installs any newly required packaged-runtime library
+before invoking PyInstaller.
 
 This produces:
 
@@ -686,8 +743,8 @@ The isolated native release pipeline is:
 scripts/build_native_macos.sh
 ```
 
-It produces `dist/native/OpenCull.app` and
-`dist/native/OpenCull-0.11.0-arm64.zip`, then verifies the SwiftUI frontend and
+It produces `dist/native/Darkimiya.app` and
+`dist/native/Darkimiya-0.13.0-arm64.zip`, then verifies the SwiftUI frontend and
 frozen Python/Kimiya backend independently. It never replaces the installed
 application. A matching compiler and SDK are mandatory. The accepted local
 build uses Xcode 26.6 with Swift 6.3.3. If Command Line Tools are selected
@@ -697,6 +754,65 @@ instead, select full Xcode before building:
 sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
 scripts/build_native_macos.sh
 ```
+
+### Paired RAW-engine research
+
+OpenCull keeps its deterministic renderer and can compare it with an installed
+darktable engine without changing the project default. The Develop workspace
+offers **Compare OpenCull and darktable** after an OpenCull treatment exists.
+The resulting **Engines** view contains a three-panel contact sheet:
+
+1. the completed OpenCull treatment;
+2. an isolated, native darktable control render;
+3. darktable initial development followed by the identical compiled OpenCull
+   creative operations.
+
+The third panel is deliberately labelled as a hybrid. It does not claim that
+darktable natively executed the OpenCull recipe. The comparison report records
+output hashes, dimensions, luminance distribution, clipping, saturation,
+detail variance, pairwise RGB error, PSNR, and luminance correlation. Visual
+and numeric measurements are bounded to a 2048-pixel research preview so a
+26-megapixel comparison does not exhaust application memory.
+
+The Develop inspector makes X-Trans demosaicing explicit for every darktable
+comparison:
+
+- **Markesteijn 1-pass** (`1025`) is the faster darktable default;
+- **Markesteijn 3-pass** (`1026`) favors maximum fine-detail reconstruction;
+- **Markesteijn 3-pass + VNG dual** (`3074`) blends the high-frequency method
+  with VNG in flatter or artifact-prone regions.
+
+OpenCull rewrites the versioned darktable demosaic history for the selected
+mode and then verifies the applied method identifier from the exported JPEG's
+embedded XMP. Requested and applied identifiers are stored in provenance.
+
+The standalone research command accepts a completed OpenCull render:
+
+```bash
+python renderer_comparison.py \
+  /path/to/photo.RAF \
+  /path/to/reference.JPG \
+  /path/to/compiled.recipe.json \
+  --opencull-render /path/to/completed.opencull.jpg \
+  --demosaic markesteijn-3-pass \
+  --output-dir /path/to/comparison
+```
+
+darktable runs with a disposable configuration, cache, and library, with
+custom presets disabled and the source exposed through a temporary path. It
+does not read or write a sidecar beside the source photograph. Native mapping
+of each typed OpenCull operation into versioned darktable history modules is a
+later research stage and must report unsupported operations rather than
+silently approximate them.
+
+After proofing a treatment, **Render full-size darktable files** in the Develop
+inspector runs a separate delivery job using the selected X-Trans demosaic
+method. It preserves the RAW's complete output dimensions and registers two
+exportable project renders: the native darktable control and the
+darktable-development/OpenCull-recipe result. Both then appear under
+**Export → Linked render** and can be copied to a destination selected with the
+native macOS folder chooser. The bounded 2048-pixel contact sheet remains a
+preview-only research artifact; it is never promoted as a full-size export.
 
 ## Current limitations
 

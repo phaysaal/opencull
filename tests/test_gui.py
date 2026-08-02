@@ -33,10 +33,16 @@ from opencull_gui.reviews import ReviewError, ReviewStore
 from opencull_gui.server import ReviewServer
 from opencull_gui.xmp import xmp_zip
 from opencull_gui.jobs import JobError, JobManager
-from opencull_gui.macos import InstanceLock, MacOSPaths
+from opencull_gui.macos import APP_NAME, InstanceLock, MacOSPaths
 from opencull_gui.providers import ProviderError, ProviderStore
 from opencull_gui.faces import FaceError, FaceStore
+from opencull_gui.raw_sources import RawSourceStore
+from opencull_gui.project import (
+    ensure_project_layout, load_or_create, load_or_create_folder_project,
+    load_project, register_render, update_project,
+)
 from opencull_desktop import run_release_smoke_test
+from delivery_export_pipeline import run_delivery_export
 
 
 def report_data(names=("A.JPG", "B.JPG")):
@@ -170,6 +176,58 @@ class GuiPhotoTests(unittest.TestCase):
             self.assertTrue(store.preview("A.JPG", "thumb").is_file())
 
 
+class RawSourceStoreTests(unittest.TestCase):
+    def test_matches_external_raws_by_case_insensitive_filename_stem(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            report_path = root / "shoot-results.json"
+            report_path.write_text(
+                json.dumps(report_data(("nested/DSCF0001.JPG", "DSCF0002.jpg"))),
+                encoding="utf-8",
+            )
+            raw_root = root / "raw-originals"
+            (raw_root / "card-a").mkdir(parents=True)
+            (raw_root / "card-a" / "dscf0001.RAF").write_bytes(b"raw")
+            (raw_root / "DSCF9999.RAF").write_bytes(b"unrelated")
+            store = RawSourceStore(
+                root / "shoot-results.raw-source.json",
+                load_report(report_path),
+            )
+
+            state = store.configure(raw_root)
+
+            self.assertEqual(
+                state["matches"]["nested/DSCF0001.JPG"],
+                ["card-a/dscf0001.RAF"],
+            )
+            self.assertEqual(state["matches"]["DSCF0002.jpg"], [])
+            self.assertEqual(state["summary"]["matched"], 1)
+            self.assertEqual(state["summary"]["missing"], 1)
+
+    def test_persists_folder_and_reports_ambiguous_stem_matches(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            report_path = root / "shoot-results.json"
+            report_path.write_text(
+                json.dumps(report_data(("A.JPG", "B.JPG"))),
+                encoding="utf-8",
+            )
+            report = load_report(report_path)
+            raw_root = root / "raw-originals"
+            (raw_root / "one").mkdir(parents=True)
+            (raw_root / "two").mkdir()
+            (raw_root / "one" / "A.RAF").write_bytes(b"one")
+            (raw_root / "two" / "A.dng").write_bytes(b"two")
+            settings = root / "shoot-results.raw-source.json"
+
+            RawSourceStore(settings, report).configure(raw_root)
+            restored = RawSourceStore(settings, report).public()
+
+            self.assertEqual(restored["summary"]["ambiguous"], 1)
+            self.assertEqual(len(restored["matches"]["A.JPG"]), 2)
+            self.assertEqual(restored["root"], str(raw_root.resolve()))
+
+
 class FakePhotoStore:
     SIZES = {"thumb": 520, "detail": 2400}
 
@@ -237,6 +295,54 @@ class PreviewManagerTests(unittest.TestCase):
             self.wait_for(
                 lambda: manager.progress()["cancelled"] >= 1)
             self.assertNotIn("STALE.JPG", store.started)
+        finally:
+            store.release.set()
+            manager.shutdown()
+
+    def test_unexpected_decoder_error_does_not_kill_worker(self):
+        class ErrorStore(FakePhotoStore):
+            def generate_preview(self, name, size):
+                if name == "BROKEN.RAF":
+                    raise RuntimeError("decoder crashed")
+                self.ready.add((name, size))
+                return Path("/cached")
+
+        store = ErrorStore()
+        manager = PreviewManager(store, workers=1, max_pending=16)
+        try:
+            manager.focus(["BROKEN.RAF", "GOOD.JPG"], [], "thumb")
+            self.wait_for(lambda: manager.progress()["failed"] == 1)
+            self.wait_for(lambda: manager.progress()["ready"] == 1)
+        finally:
+            manager.shutdown()
+
+    def test_stalled_decoder_is_replaced_and_queue_continues(self):
+        class StallingStore(FakePhotoStore):
+            def __init__(self):
+                super().__init__()
+                self.stalled = threading.Event()
+
+            def generate_preview(self, name, size):
+                if name == "STUCK.RAF":
+                    self.stalled.set()
+                    self.release.wait(timeout=2)
+                    return Path("/ignored")
+                self.ready.add((name, size))
+                return Path("/cached")
+
+        store = StallingStore()
+        manager = PreviewManager(
+            store, workers=1, max_pending=16, stall_timeout=0.05)
+        try:
+            manager.focus(["STUCK.RAF", "NEXT.JPG"], [], "thumb")
+            self.assertTrue(store.stalled.wait(timeout=1))
+            self.wait_for(lambda: manager.progress()["failed"] == 1)
+            self.wait_for(lambda: manager.progress()["ready"] == 1)
+            status = manager.status(["STUCK.RAF"], "thumb")
+            self.assertIn(
+                "decoder was restarted",
+                status["previews"]["STUCK.RAF"]["error"],
+            )
         finally:
             store.release.set()
             manager.shutdown()
@@ -545,6 +651,157 @@ class GuiActionTests(unittest.TestCase):
             self.assertFalse((photos.root / "B.JPG").exists())
             self.assertTrue((root / "unselected" / "B.JPG").exists())
 
+    def test_project_filter_quarantines_rejections_and_reserves_raws(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            report, photos, reviews = self.make_context(root)
+            reviews.update_cluster(
+                "group-0001", ["A.JPG"], "final review", True, 0)
+            internal_raw = photos.root / "A.RAF"
+            internal_raw.write_bytes(b"internal-raw")
+            external = root / "external-raws"; external.mkdir()
+            external_raw = external / "A.RAF"
+            external_raw.write_bytes(b"external-raw")
+            project_path, _ = load_or_create_folder_project(
+                photos.root, "Project filter")
+            raw_sources = RawSourceStore(
+                photos.root / "Darkimiya" / "Reports" / "raw-source.json",
+                report)
+            raw_sources.configure(external)
+            controller = ActionController(
+                report, reviews, photos, project_path, raw_sources)
+
+            plan = controller.preflight(action="project_filter")
+            self.assertEqual(plan["summary"]["rejected_files"], 1)
+            self.assertEqual(plan["summary"]["raw_reserve_files"], 2)
+            self.assertEqual(plan["summary"]["external_raw_copies"], 1)
+            self.assertFalse(plan["summary"]["errors"])
+            by_category = {
+                (item["category"], item["operation"])
+                for item in plan["items"]}
+            self.assertIn(("rejected", "move"), by_category)
+            self.assertIn(("raw_reserve", "move"), by_category)
+            self.assertIn(("raw_reserve", "copy"), by_category)
+
+            operation = controller.execute(
+                plan["plan_id"], plan["confirmation_code"])
+            deadline = time.time() + 5
+            while time.time() < deadline:
+                operation = controller.status(plan["plan_id"])
+                if operation["status"] not in {"planned", "running"}:
+                    break
+                time.sleep(0.01)
+            self.assertEqual(operation["status"], "completed")
+            self.assertTrue((photos.root / "A.JPG").is_file())
+            self.assertFalse((photos.root / "B.JPG").exists())
+            self.assertFalse(internal_raw.exists())
+            self.assertTrue(external_raw.is_file())
+            self.assertTrue((photos.root / "Darkimiya" / "Rejected" / "B.JPG").is_file())
+            self.assertEqual(
+                photos.resolve("B.JPG"),
+                (photos.root / "Darkimiya" / "Rejected" / "B.JPG").resolve())
+            self.assertTrue((photos.root / "Darkimiya" / "RAW Reserve" / "A.RAF").is_file())
+            self.assertTrue((photos.root / "Darkimiya" / "RAW Reserve" / "External" / "A.RAF").is_file())
+            project = load_project(project_path)
+            self.assertEqual(len(project["artifacts"]["rejected"]), 1)
+            self.assertEqual(len(project["artifacts"]["raw_reserve"]), 2)
+            self.assertEqual(len(project["artifacts"]["operations"]), 1)
+            self.assertEqual(raw_sources.public()["summary"]["raw_files"], 2)
+
+            rolled_back = controller.rollback(
+                plan["plan_id"], f"ROLLBACK {plan['plan_id']}")
+            self.assertEqual(rolled_back["status"], "rolled-back")
+            self.assertTrue((photos.root / "B.JPG").is_file())
+            self.assertTrue(internal_raw.is_file())
+            self.assertTrue(external_raw.is_file())
+            self.assertFalse((photos.root / "Darkimiya" / "RAW Reserve" / "A.RAF").exists())
+            self.assertEqual(raw_sources.public()["summary"]["raw_files"], 0)
+            project = load_project(project_path)
+            self.assertTrue(all(
+                item["status"] == "restored"
+                for key in ("rejected", "raw_reserve")
+                for item in project["artifacts"][key]))
+
+    def test_final_cleanup_preserves_useful_raws_and_can_keep_every_raw(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            report, photos, reviews = self.make_context(root)
+            reviews.update_cluster(
+                "group-0001", ["A.JPG"], "final review", True, 0)
+            project_path, _ = load_or_create_folder_project(
+                photos.root, "Final cleanup")
+            rejected = photos.root / "Darkimiya" / "Rejected"
+            rejected.mkdir(parents=True, exist_ok=True)
+            shutil_source = photos.root / "B.JPG"
+            shutil_source.replace(rejected / "B.JPG")
+            (rejected / "Unused.RAF").write_bytes(b"unused-raw")
+            reserve = photos.root / "Darkimiya" / "RAW Reserve"
+            (reserve / "Useful.RAF").write_bytes(b"useful-raw")
+            raw_sources = RawSourceStore(
+                photos.root / "Darkimiya" / "Reports" / "raw-source.json",
+                report)
+            raw_sources.configure(reserve)
+            controller = ActionController(
+                report, reviews, photos, project_path, raw_sources)
+
+            inventory = controller.cleanup_candidates()
+            self.assertEqual(inventory["summary"]["files"], 2)
+            fake_trash = root / "System Trash"
+            with patch(
+                "opencull_gui.actions._trash_root_for",
+                side_effect=lambda _source, batch: fake_trash / batch,
+            ):
+                default_plan = controller.preflight(
+                    action="system_cleanup",
+                    cleanup_policy="preserve_useful_raws")
+            self.assertEqual(default_plan["summary"]["trashed_files"], 2)
+            self.assertEqual(default_plan["summary"]["retained_raw_files"], 0)
+            self.assertTrue((reserve / "Useful.RAF").is_file())
+
+            inspect = controller.preflight(
+                action="system_cleanup", cleanup_policy="inspect",
+                selected_cleanup_paths=["B.JPG"])
+            self.assertEqual([item["source_name"] for item in inspect["items"]], ["B.JPG"])
+
+            with patch(
+                "opencull_gui.actions._trash_root_for",
+                side_effect=lambda _source, batch: fake_trash / batch,
+            ):
+                plan = controller.preflight(
+                    action="system_cleanup", cleanup_policy="keep_every_raw")
+            self.assertEqual(plan["summary"]["trashed_files"], 1)
+            self.assertEqual(plan["summary"]["retained_raw_files"], 1)
+            controller.execute(plan["plan_id"], plan["confirmation_code"])
+            deadline = time.time() + 5
+            while time.time() < deadline:
+                operation = controller.status(plan["plan_id"])
+                if operation["status"] not in {"planned", "running"}:
+                    break
+                time.sleep(0.01)
+            self.assertEqual(operation["status"], "completed")
+            self.assertFalse((rejected / "B.JPG").exists())
+            self.assertFalse((rejected / "Unused.RAF").exists())
+            self.assertTrue((reserve / "Useful.RAF").is_file())
+            retained = reserve / "Retained from Rejected" / "Unused.RAF"
+            self.assertTrue(retained.is_file())
+            trashed = next(
+                Path(item["destination"]) for item in plan["items"]
+                if item["category"] == "system_trash")
+            self.assertTrue(trashed.is_file())
+            project = load_project(project_path)
+            self.assertTrue(any(
+                item.get("status") == "system_trash"
+                for item in project["artifacts"]["rejected"]))
+
+            rolled_back = controller.rollback(
+                plan["plan_id"], f"ROLLBACK {plan['plan_id']}")
+            self.assertEqual(rolled_back["status"], "rolled-back")
+            self.assertTrue((rejected / "B.JPG").is_file())
+            self.assertTrue((rejected / "Unused.RAF").is_file())
+            self.assertFalse(trashed.exists())
+            self.assertFalse(retained.exists())
+            self.assertTrue((reserve / "Useful.RAF").is_file())
+
     def test_trash_unselected_is_verified_and_rollbackable(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -756,6 +1013,57 @@ class GuiFaceTests(unittest.TestCase):
             finally:
                 store.shutdown()
 
+    def test_empty_database_can_rebind_report_hash_only(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            store, report, reviews = self.make_store(root)
+            database = store.path
+            photos = store.photos
+            models = store.model_root
+            store.shutdown()
+            connection = __import__("sqlite3").connect(database)
+            connection.execute(
+                "UPDATE metadata SET value = ? WHERE key = 'report_sha256'",
+                ("temporary-reformatted-hash",),
+            )
+            connection.commit()
+            connection.close()
+
+            rebound = FaceStore(
+                database, report, photos, reviews, models,
+                engine=FakeFaceEngine(),
+            )
+            try:
+                metadata = dict(rebound._db.execute(
+                    "SELECT key, value FROM metadata"))
+                self.assertEqual(metadata["report_sha256"], report.sha256)
+            finally:
+                rebound.shutdown()
+
+    def test_populated_database_never_rebinds_report_hash(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            store, report, reviews = self.make_store(root)
+            database = store.path
+            photos = store.photos
+            models = store.model_root
+            store.start()
+            self.wait_faces(store)
+            store.shutdown()
+            connection = __import__("sqlite3").connect(database)
+            connection.execute(
+                "UPDATE metadata SET value = ? WHERE key = 'report_sha256'",
+                ("different-report",),
+            )
+            connection.commit()
+            connection.close()
+
+            with self.assertRaisesRegex(FaceError, "different evidence"):
+                FaceStore(
+                    database, report, photos, reviews, models,
+                    engine=FakeFaceEngine(),
+                )
+
     def test_rename_split_merge_forget_and_coverage(self):
         with tempfile.TemporaryDirectory() as temporary:
             store, _, reviews = self.make_store(Path(temporary))
@@ -948,6 +1256,37 @@ class GuiProviderTests(unittest.TestCase):
             self.assertIn("key_env", agents)
             self.assertIn("zdr      = true", agents)
 
+    def test_migrates_only_opencull_default_models_to_affordable_panel(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            store, keychain = self.make_store(root)
+            saved = store.save(provider_data(), 0, "private-token")
+            profile_id = saved["profiles"][0]["id"]
+
+            migrated = ProviderStore(
+                root / "providers.json", root / "opencull", keychain)
+            self.assertEqual(
+                migrated.public()["profiles"][0]["models"],
+                {
+                    "A": "openai/gpt-5.6-luna-pro",
+                    "B": "openai/gpt-5.6-luna-pro",
+                    "C": "openai/gpt-4.1-mini",
+                    "D": "openai/gpt-5.6-luna-pro",
+                },
+            )
+
+            custom = provider_data()
+            custom["id"] = profile_id
+            custom["models"] = dict(custom["models"])
+            custom["models"]["A"] = "user/custom-vision-model"
+            migrated.save(custom, migrated.public()["revision"])
+            reopened = ProviderStore(
+                root / "providers.json", root / "opencull", keychain)
+            self.assertEqual(
+                reopened.public()["profiles"][0]["models"]["A"],
+                "user/custom-vision-model",
+            )
+
     def test_materializes_professional_program_without_credentials(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -964,6 +1303,74 @@ class GuiProviderTests(unittest.TestCase):
                 str((root / "opencull" / "shortlist_kernel.py").resolve()),
                 program)
             self.assertNotIn("private-token", program)
+
+    def test_materializes_per_job_openrouter_model_override(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            store, _ = self.make_store(root)
+            saved = store.save(provider_data(), 0, "private-token")
+            profile = saved["profiles"][0]
+            manifest = store.materialize(
+                "overridejob1", profile["id"], "opencull.kim",
+                {"A": "openai/gpt-5.6-luna-pro"},
+            )
+            agents = Path(manifest["agents_path"]).read_text(encoding="utf-8")
+            self.assertIn(
+                'model   = "openai/gpt-5.6-luna-pro"', agents)
+            self.assertEqual(
+                manifest["profile"]["models"]["A"],
+                "openai/gpt-5.6-luna-pro",
+            )
+            self.assertEqual(
+                store.public()["profiles"][0]["models"]["A"],
+                "google/gemini-2.5-flash",
+            )
+
+    def test_materializes_immutable_custom_judgment_policy(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            store, _ = self.make_store(root)
+            saved = store.save(provider_data(), 0, "private-token")
+            profile = saved["profiles"][0]
+            policy = {"panel": ["B", "C", "D"], "votes": 7, "required": 5}
+            manifest = store.materialize(
+                "policyjob123", profile["id"],
+                judgment_policy=policy)
+            program = Path(manifest["program_path"]).read_text(encoding="utf-8")
+            self.assertIn(
+                "judge<7,5/7> (evidence |= report_policy(keep_per_group)) "
+                "under k_cull panel [B, C, D]",
+                program,
+            )
+            self.assertEqual(manifest["judgment_policy"], policy)
+            stored = json.loads(
+                (Path(manifest["program_path"]).parent / "manifest.json")
+                .read_text(encoding="utf-8"))
+            self.assertEqual(stored["judgment_policy"], policy)
+            checker = JobManager(
+                root / "check-jobs.json", Path(__file__).resolve().parents[1],
+                autostart=False)
+            try:
+                checker._check_program(Path(manifest["program_path"]))
+            finally:
+                checker.shutdown()
+
+    def test_rejects_invalid_judgment_policy(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            store, _ = self.make_store(Path(temporary))
+            saved = store.save(provider_data(), 0, "private-token")
+            profile_id = saved["profiles"][0]["id"]
+            with self.assertRaisesRegex(ProviderError, "duplicate"):
+                store.materialize(
+                    "duplicate123", profile_id,
+                    judgment_policy={
+                        "panel": ["C", "C"], "votes": 5, "required": 4})
+            with self.assertRaisesRegex(ProviderError, "at least the number"):
+                store.materialize(
+                    "fewvotes123", profile_id,
+                    judgment_policy={
+                        "panel": ["B", "C", "D"], "votes": 2,
+                        "required": 2})
 
     def test_validates_endpoint_and_revision_conflicts(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1021,6 +1428,42 @@ class GuiProviderTests(unittest.TestCase):
             finally:
                 manager.shutdown()
 
+    def test_queue_binds_custom_judgment_policy_to_generated_program(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            store, _ = self.make_store(root)
+            saved = store.save(
+                provider_data("ollama", "http://127.0.0.1:11434"), 0)
+            profile_id = saved["profiles"][0]["id"]
+            photos = root / "photos"
+            photos.mkdir()
+            checked = []
+            manager = JobManager(
+                root / "jobs.json", store.project_root,
+                providers=store, autostart=False,
+                command_builder=lambda job: [],
+                program_checker=lambda path: checked.append(path),
+            )
+            try:
+                state = manager.add(
+                    str(photos), str(root / "result.json"),
+                    provider_profile_id=profile_id,
+                    judge_panel=["B", "C", "D"],
+                    judge_votes=7, judge_required=5)
+                job = state["jobs"][0]
+                self.assertEqual(job["judgment_policy"], {
+                    "panel": ["B", "C", "D"],
+                    "votes": 7,
+                    "required": 5,
+                })
+                self.assertEqual(checked, [Path(job["program_path"])])
+                self.assertIn(
+                    "judge<7,5/7>",
+                    Path(job["program_path"]).read_text(encoding="utf-8"),
+                )
+            finally:
+                manager.shutdown()
+
     def test_openai_compatible_connection_and_model_discovery(self):
         class ModelsHandler(BaseHTTPRequestHandler):
             def log_message(self, format, *args):
@@ -1059,6 +1502,13 @@ class GuiProviderTests(unittest.TestCase):
 
 
 class GuiMacOSAppTests(unittest.TestCase):
+    def test_desktop_uses_darkimiya_application_namespace(self):
+        self.assertEqual(APP_NAME, "Darkimiya")
+        self.assertEqual(MacOSPaths().support.name, "Darkimiya")
+        self.assertEqual(MacOSPaths().cache.name, "Darkimiya")
+        self.assertEqual(MacOSPaths().logs.name, "Darkimiya")
+        self.assertEqual(MacOSPaths().launcher_log.name, "Darkimiya.log")
+
     def test_application_paths_are_private_and_separated(self):
         with tempfile.TemporaryDirectory() as temporary:
             paths = MacOSPaths.create(Path(temporary))
@@ -1099,6 +1549,8 @@ class GuiMacOSAppTests(unittest.TestCase):
             self.assertEqual(result["kimiya_check_status"], 0)
             self.assertTrue(result["private_paths"])
             self.assertTrue(result["single_instance"])
+            self.assertTrue(result["project_migration"])
+            self.assertTrue(result["project_catalog"])
 
 
 class GuiDesignFoundationTests(unittest.TestCase):
@@ -1111,10 +1563,65 @@ class GuiDesignFoundationTests(unittest.TestCase):
 
     def test_application_shell_has_stable_navigation_and_landmarks(self):
         self.assertIn('class="skip-link"', self.html)
-        self.assertIn('class="app-navigation"', self.html)
+        self.assertIn('class="app-sidebar"', self.html)
+        self.assertIn('class="app-sidebar-navigation"', self.html)
+        self.assertIn('class="toolbar-context"', self.html)
+        self.assertIn('class="toolbar-menu"', self.html)
         self.assertIn('aria-current="page"', self.html)
         self.assertIn('id="review-workspace"', self.html)
-        self.assertIn('aria-label="Review status and actions"', self.html)
+        self.assertIn('aria-label="Darkimiya project navigation"', self.html)
+        self.assertNotIn('class="app-navigation"', self.html)
+        self.assertNotIn('class="project-stage-bar"', self.html)
+
+    def test_recovery_center_exposes_explicit_non_destructive_legacy_migration(self):
+        self.assertIn('id="migration-panel"', self.html)
+        self.assertIn('id="migration-code"', self.html)
+        self.assertIn('id="migrate-project"', self.html)
+        self.assertIn("/api/project/migration", self.javascript)
+        self.assertIn("/api/project/migrate", self.javascript)
+        self.assertIn("The old manifest stays untouched", self.html)
+        self.assertIn("No photograph is moved", self.html)
+
+    def test_native_project_review_reuses_the_primary_window(self):
+        root = Path(__file__).parents[1] / "native-macos" / "Sources" / "OpenCullNative"
+        app = (root / "OpenCullNativeApp.swift").read_text(encoding="utf-8")
+        content = (root / "ContentView.swift").read_text(encoding="utf-8")
+        models = (root / "Models.swift").read_text(encoding="utf-8")
+        self.assertIn("struct DarkimiyaApp: App", app)
+        self.assertNotIn("Choose an OpenCull", content)
+        self.assertNotIn("OpenCull native diagnostics", models)
+        self.assertIn('case projects = "Projects"', content)
+        self.assertIn('Label("Add Project"', content)
+        self.assertIn('Text("Projects").font', content)
+        self.assertIn("project.cullingBlocksWorkflow", content)
+        self.assertIn(".defaultSize(width: 1100, height: 760)", app)
+        self.assertIn('Button("Cull the Folder")', content)
+        self.assertIn('Button("Re-Cull")', content)
+        self.assertIn('backend.act(jobID: culling.id, action: "cancel")', content)
+        self.assertIn('ProgressView(value: culling.progress.fraction)', content)
+        self.assertNotIn("ProjectDashboardView", content)
+        self.assertNotIn("activeProjectID", models)
+        self.assertIn("target = await backend.openProject(project.id)", content)
+        self.assertIn("target = await backend.openManualSelection(project.id)", content)
+        content = (root / "ContentView.swift").read_text(encoding="utf-8")
+        models = (root / "Models.swift").read_text(encoding="utf-8")
+        self.assertNotIn("WindowGroup(for: ReviewTarget.self)", app)
+        self.assertNotIn("@Environment(\\.openWindow)", content)
+        self.assertIn("ProjectWorkspaceView(target: target)", content)
+        self.assertIn("final class ProjectSession: ObservableObject", models)
+        self.assertIn("projectSession.open(target)", content)
+        self.assertIn('<span>Activity</span>', self.html)
+
+    def test_unified_sidebar_exposes_each_project_stage_once(self):
+        for stage in ("cull", "shortlist", "style", "develop", "verify"):
+            self.assertEqual(self.html.count(f'data-stage="{stage}"'), 1)
+        for label in ("Cull", "Shortlist", "Personal style", "Develop images", "Verify"):
+            self.assertIn(f"<span>{label}</span>", self.html)
+        self.assertNotIn('data-stage="export"', self.html)
+        self.assertNotIn('id="export-workspace"', self.html)
+        self.assertIn('id="jobs-button" class="app-sidebar-item"', self.html)
+        self.assertIn('id="people-button" class="app-sidebar-item"', self.html)
+        self.assertIn("--app-sidebar-width:", self.css)
 
     def test_professional_shortlist_workspace_contract(self):
         for identifier in (
@@ -1147,12 +1654,62 @@ class GuiDesignFoundationTests(unittest.TestCase):
         self.assertIn("display: none !important", self.css)
         self.assertIn(".professional-assessment-grid", self.css)
         self.assertIn("Keep RAW for professional editing", self.html)
+        self.assertNotIn('id="shortlist-visible-count"', self.html)
+
+    def test_shortlist_sidebar_prioritizes_edit_directions_without_completed_job_chrome(self):
+        self.assertIn(
+            '</div>\n      <section class="edit-direction-launch"',
+            self.html,
+        )
+        self.assertLess(
+            self.html.index('class="edit-direction-launch"'),
+            self.html.index('id="shortlist-list"'),
+        )
+        self.assertIn('id="personal-style-suggestion"', self.html)
+        self.assertNotIn('id="continue-to-style"', self.html)
+        self.assertNotIn('id="open-shortlist-queue"', self.html)
+        self.assertIn("function renderPersonalStyleAvailability(", self.javascript)
+        self.assertIn('job.status === "completed"', self.javascript)
+        self.assertIn("#edit-regeneration-dialog {", self.css)
+        self.assertIn(
+            "grid-template-rows: minmax(250px, .82fr) auto minmax(230px, 1.18fr)",
+            self.css,
+        )
+
+    def test_culling_form_exposes_a_bounded_judgment_policy(self):
+        for identity in ("job-judge-votes", "job-judge-required"):
+            self.assertIn(f'id="{identity}"', self.html)
+        self.assertEqual(self.html.count('class="job-judge-agent"'), 4)
+        self.assertIn("function jobJudgmentPolicy()", self.javascript)
+        self.assertIn("judge_panel: judgment.panel", self.javascript)
+        self.assertIn("judge_votes: judgment.votes", self.javascript)
+        self.assertIn("judge_required: judgment.required", self.javascript)
+        self.assertIn("Kimiya validates the generated program", self.html)
 
     def test_dom_ids_are_unique_and_javascript_contract_is_present(self):
         html_ids = re.findall(r'\bid="([^"]+)"', self.html)
         self.assertEqual(len(html_ids), len(set(html_ids)))
         referenced = set(re.findall(r'\$\("#([A-Za-z0-9_-]+)"\)', self.javascript))
         self.assertFalse(referenced.difference(html_ids))
+
+    def test_development_exports_are_queued_and_scoped_to_the_active_recipe(self):
+        self.assertIn('"/api/jobs/add-delivery-export"', self.javascript)
+        self.assertIn("state.deliveryExportJobId = job?.id || null;", self.javascript)
+        self.assertIn("job.photo === state.activeDevelopPhoto", self.javascript)
+        self.assertIn("job.style === state.activeDevelopVariant", self.javascript)
+        self.assertIn(
+            'job.engine === (state.activeDevelopEngine || $("#develop-engine").value)',
+            self.javascript,
+        )
+        self.assertIn("function renderDeliveryExportJobStatus()", self.javascript)
+        self.assertNotIn(
+            "Full-resolution darktable files are ready in Export",
+            self.javascript,
+        )
+        active_recovery = (
+            '["queued", "running", "stopping", "detached"].includes(job.status)'
+        )
+        self.assertIn(active_recovery, self.javascript)
 
     def test_design_tokens_focus_and_reduced_motion_are_defined(self):
         for token in (
@@ -1163,6 +1720,22 @@ class GuiDesignFoundationTests(unittest.TestCase):
         self.assertIn(":focus-visible", self.css)
         self.assertIn("@media (prefers-reduced-motion: reduce)", self.css)
         self.assertIn("dialog::backdrop", self.css)
+
+    def test_preview_images_wait_for_an_immutable_decoded_artifact(self):
+        for contract in (
+            "function bindPreviewImage(",
+            "function commitDecodedPreview(",
+            'candidate.decoding = "async"',
+            "await candidate.decode()",
+            'new IntersectionObserver(',
+            "/api/previews/file?name=",
+        ):
+            self.assertIn(contract, self.javascript)
+        self.assertNotRegex(
+            self.javascript,
+            r"\.src\s*=\s*[^;\n]*?/api/image",
+        )
+        self.assertNotIn("image.src = imageUrl", self.javascript)
 
     def test_custom_close_glyph_is_centered_inside_its_circle(self):
         close_rule = re.search(
@@ -1220,11 +1793,11 @@ class GuiDesignFoundationTests(unittest.TestCase):
             'event.key.toLowerCase() === "a" && !event.repeat',
             self.javascript,
         )
-        self.assertIn("void acceptAIAndNext();", self.javascript)
+        self.assertIn("void acceptSelectionAndNext();", self.javascript)
         self.assertIn(
             "cluster.photos[number - 1] && !event.repeat", self.javascript)
         self.assertIn(
-            "A accepts the AI recommendation and advances", self.html)
+            "Accept the current selection and move to the next group", self.html)
 
     def test_delivery_destination_has_native_folder_chooser(self):
         self.assertIn('id="pick-operation-destination"', self.html)
@@ -1281,6 +1854,66 @@ class GuiDesignFoundationTests(unittest.TestCase):
             'target.querySelector(".cluster-item.active")', self.javascript)
         self.assertIn("activeItem.scrollIntoView({", self.javascript)
         self.assertIn('block: "nearest"', self.javascript)
+
+    def test_phase2_group_browser_is_a_compact_source_list(self):
+        for identifier in (
+            "cluster-filter-menu", "active-filter-label",
+            "cluster-window-controls", "person-filter",
+        ):
+            self.assertIn(f'id="{identifier}"', self.html)
+        self.assertIn('class="cluster-filter-popover"', self.html)
+        self.assertIn('class="cluster-browser-summary"', self.html)
+        self.assertIn('visual.className = "cluster-visual"', self.javascript)
+        self.assertIn('status.className = "cluster-row-status"', self.javascript)
+        self.assertIn('$("#cluster-filter-menu").open = false', self.javascript)
+        self.assertNotIn('class="filename-preview"', self.html)
+        for selector in (
+            ".cluster-filter-popover", ".cluster-visual",
+            ".cluster-row-status", ".cluster-item-copy",
+        ):
+            self.assertIn(selector, self.css)
+
+    def test_phase3_canvas_keeps_photographs_primary(self):
+        for marker in (
+            'class="photo-image-surface"', 'class="human-toggle selection-toggle"',
+            'class="selection-mark"', 'class="photo-format-badge"',
+            'class="photo-details-button"', 'class="photo-info" hidden',
+        ):
+            self.assertIn(marker, self.html)
+        self.assertIn('card.classList.add("effective-selected")', self.javascript)
+        self.assertIn('imageButton.addEventListener("dblclick"', self.javascript)
+        self.assertIn('setTimeout(() => toggleHumanKeeper(cluster, name), 220)', self.javascript)
+        self.assertIn('formatBadge.textContent = photoFormatLabel(name, rawFiles)', self.javascript)
+        self.assertIn('details.hidden = !expanded', self.javascript)
+        for selector in (
+            ".photo-image-surface", ".selection-toggle",
+            ".photo-format-badge", ".photo-details-copy",
+        ):
+            self.assertIn(selector, self.css)
+
+    def test_phase4_contextual_inspector_centralizes_review_evidence(self):
+        for identifier in (
+            "inspector-toggle", "review-inspector", "inspector-group-panel",
+            "inspector-photo-panel", "inspector-recovery-panel",
+            "inspector-rationale", "inspector-photo-metadata",
+            "inspector-photo-flag", "inspector-toggle-keeper",
+            "inspector-open-recovery", "inspector-link-raw",
+        ):
+            self.assertIn(f'id="{identifier}"', self.html)
+        self.assertIn('role="tablist" aria-label="Inspector sections"', self.html)
+        for contract in (
+            "function setInspectorTab(tab)", "function setInspectorOpen(open)",
+            "function focusReviewPhoto(name", "function renderReviewInspector(cluster, decision)",
+            "function appendInspectorMetadata(target, metrics)",
+            'event.key.toLowerCase() === "i"',
+        ):
+            self.assertIn(contract, self.javascript)
+        for selector in (
+            ".review-inspector", ".inspector-tabs", ".inspector-photo-preview",
+            ".inspector-metadata", ".inspector-annotation-grid",
+        ):
+            self.assertIn(selector, self.css)
+        self.assertIn("#review-workspace .evidence { display: none; }", self.css)
 
     def test_phase3_queue_has_guided_intake_and_operational_summary(self):
         self.assertIn('class="job-intake-grid"', self.html)
@@ -1412,6 +2045,23 @@ class GuiDesignFoundationTests(unittest.TestCase):
         self.assertIn("operation.journal_path", self.javascript)
         self.assertIn(".operation-receipt", self.css)
 
+    def test_darkimiya_cleanup_is_separate_inspectable_and_raw_aware(self):
+        self.assertIn(
+            '<option value="system_cleanup">Final cleanup to macOS Trash…</option>',
+            self.html)
+        for identifier in (
+            "cleanup-policy", "cleanup-inspector", "cleanup-candidate-list",
+            "cleanup-select-all", "cleanup-select-none",
+        ):
+            self.assertIn(f'id="{identifier}"', self.html)
+        for policy in (
+            "preserve_useful_raws", "keep_every_raw", "jpeg_only", "inspect",
+        ):
+            self.assertIn(f'value="{policy}"', self.html)
+        self.assertIn("async function loadCleanupCandidates", self.javascript)
+        self.assertIn('action === "system_cleanup"', self.javascript)
+        self.assertIn(".cleanup-candidate-list", self.css)
+
     def test_phase7_recovery_center_explains_predictable_interruptions(self):
         for identifier in (
             "recovery-button", "recovery-banner", "recovery-dialog",
@@ -1455,16 +2105,189 @@ class GuiDesignFoundationTests(unittest.TestCase):
 
     def test_review_can_accept_and_advance_after_successful_save(self):
         self.assertIn('id="accept-ai-next"', self.html)
-        self.assertIn("Accept and Next", self.html)
-        self.assertIn("async function acceptAIAndNext()", self.javascript)
+        self.assertIn("Accept selection &amp; Next", self.html)
+        self.assertIn("async function acceptSelectionAndNext()", self.javascript)
         self.assertIn(
             "if (saved && state.activeClusterId === clusterId) navigate(1);",
             self.javascript)
         self.assertIn(
-            '$("#accept-ai-next").addEventListener("click", acceptAIAndNext);',
+            '$("#accept-ai-next").addEventListener("click", acceptSelectionAndNext);',
             self.javascript)
         self.assertIn('event.key.toLowerCase() === "a" && !event.repeat',
                       self.javascript)
+
+    def test_phase5_uses_a_persistent_compact_decision_bar(self):
+        for identifier in (
+            "skip-group", "review-more-actions", "actionbar-undo",
+            "accept-ai-next", "review-note",
+        ):
+            self.assertIn(f'id="{identifier}"', self.html)
+        self.assertIn('class="review-action-bar"', self.html)
+        self.assertIn('class="inspector-review-note"', self.html)
+        self.assertNotIn('class="human-review"', self.html)
+        self.assertIn("function skipActiveGroup()", self.javascript)
+        self.assertIn(
+            '(draft) => ({...draft, reviewed: true}), "Selection accepted"',
+            self.javascript)
+        self.assertIn('.review-action-bar {', self.css)
+        self.assertIn('position: fixed;', self.css[self.css.rfind(".review-action-bar {"):])
+
+    def test_phase6_uses_quiet_progress_and_coordinated_recovery(self):
+        self.assertIn('id="summary" class="summary"', self.html)
+        self.assertIn('id="preview-status" class="status" role="status"', self.html)
+        self.assertIn('aria-live="polite" hidden>Preview queue idle', self.html)
+        for identifier in ("queue-preview-status", "queue-preview-details"):
+            self.assertIn(f'id="{identifier}"', self.html)
+        self.assertIn("recoveryIssues: new Map()", self.javascript)
+        self.assertIn('copy.className = "project-progress-copy"', self.javascript)
+        self.assertIn('progress.className = "project-review-progress"', self.javascript)
+        self.assertIn("state.recoveryIssues.set(title", self.javascript)
+        self.assertIn("additional issue", self.javascript)
+        self.assertNotIn('target.append(alert(`Missing source files:', self.javascript)
+        for selector in (
+            ".project-progress-copy", ".project-review-progress",
+            ".queue-preview-diagnostics", "#cluster-alerts:empty",
+        ):
+            self.assertIn(selector, self.css)
+
+    def test_redesign_phase7_has_adaptive_semantic_visual_system(self):
+        self.assertIn('content="dark light"', self.html)
+        for token in (
+            "--oc-window:", "--oc-toolbar:", "--oc-sidebar:",
+            "--oc-surface:", "--oc-control:", "--oc-separator:",
+            "--oc-text:", "--oc-text-secondary:", "--oc-accent:",
+            "--oc-success:", "--oc-warning:", "--oc-danger:",
+            "--oc-focus:", "--oc-control-height:",
+        ):
+            self.assertIn(token, self.css)
+        self.assertIn("color-scheme: dark light", self.css)
+        self.assertIn("@media (prefers-color-scheme: light)", self.css)
+        self.assertIn("@media (prefers-contrast: more)", self.css)
+        self.assertIn("@media (forced-colors: active)", self.css)
+        self.assertIn('[role="button"]', self.css)
+
+    def test_redesign_phase7_inspector_tabs_follow_keyboard_tab_pattern(self):
+        for name in ("group", "photo", "recovery"):
+            self.assertIn(f'id="inspector-tab-{name}"', self.html)
+            self.assertIn(f'aria-controls="inspector-{name}-panel"', self.html)
+            self.assertIn(f'aria-labelledby="inspector-tab-{name}"', self.html)
+        self.assertIn("button.tabIndex = active ? 0 : -1", self.javascript)
+        self.assertIn('event.key === "ArrowRight"', self.javascript)
+        self.assertIn('event.key === "ArrowLeft"', self.javascript)
+        self.assertIn('event.key === "Home"', self.javascript)
+        self.assertIn('event.key === "End"', self.javascript)
+        self.assertIn("inspectorTabs[target].focus()", self.javascript)
+
+    def test_redesign_phase7_light_controls_and_recipes_are_legible(self):
+        self.assertIn('summary.textContent = "Editing recipe"', self.javascript)
+        self.assertNotIn("Capture One parameter and layer recipe", self.javascript)
+        self.assertIn(".edit-direction-card > details > summary", self.css)
+        self.assertIn("font-family: inherit", self.css)
+        refinement = self.css[self.css.rfind(
+            "/* Light appearance contrast corrections") :]
+        self.assertIn('.search input,', refinement)
+        self.assertIn('input[type="text"]', refinement)
+        self.assertIn("background: #ffffff", refinement)
+        self.assertIn(".professional-verdict .rationale", refinement)
+        self.assertIn(".professional-evidence > .alert.fallback", refinement)
+        self.assertIn('class="raw-evidence-disclosure"', self.html)
+        self.assertIn(
+            ".professional-evidence > .raw-evidence-disclosure", refinement)
+        guardrail_style = refinement[
+            refinement.index(".professional-evidence > .alert.fallback {") :]
+        self.assertIn("margin-top: 18px", guardrail_style)
+        self.assertIn("font-size: 11px", guardrail_style)
+        self.assertIn(
+            ".professional-evidence > .alert.fallback span", refinement)
+        recipe_typography = refinement[
+            refinement.index(".edit-direction-card .direction-recipe h5,") :]
+        self.assertIn("font-family: inherit", recipe_typography)
+        self.assertIn("font-size: 12px", recipe_typography)
+
+    def test_personal_style_dialog_is_a_compact_aligned_form(self):
+        for selector in (
+            "#style-profile-dialog", "#style-profile-dialog .dialog-header",
+            "#style-profile-dialog .shortlist-generate-body",
+            "#style-profile-dialog .dialog-actions",
+        ):
+            self.assertIn(selector, self.css)
+        self.assertIn("height: auto", self.css[self.css.rfind("#style-profile-dialog {") :])
+        self.assertIn("grid-template-columns: 190px minmax(0, 1fr)", self.css)
+        self.assertIn('id="style-profile-dialog"', self.html)
+
+    def test_personal_style_examples_use_additive_native_file_pickers(self):
+        for identifier in (
+            "pick-style-photos", "pick-style-existing", "style-photos-summary",
+            "style-photo-list",
+        ):
+            self.assertIn(f'id="{identifier}"', self.html)
+        self.assertIn('id="style-photos" type="text" readonly', self.html)
+        self.assertIn('id="style-existing" type="text" readonly', self.html)
+        for endpoint in (
+            '"/api/jobs/pick-style-photos"',
+            '"/api/jobs/pick-style-profile"',
+        ):
+            self.assertIn(endpoint, self.javascript)
+        self.assertIn("state.stylePhotoPaths = [...new Set", self.javascript)
+        self.assertIn("function renderStylePhotoSelection()", self.javascript)
+        self.assertIn("style-photo-remove", self.javascript)
+        server = (Path(__file__).parents[1] / "opencull_gui" / "server.py").read_text(
+            encoding="utf-8")
+        jobs = (Path(__file__).parents[1] / "opencull_gui" / "jobs.py").read_text(
+            encoding="utf-8")
+        self.assertIn('body.get("photos", "")', server)
+        self.assertIn("style-profile-examples", jobs)
+
+    def test_provider_and_model_routes_are_customizable_for_style_workflows(self):
+        self.assertIn('class="edit-direction-provider-field"', self.html)
+        self.assertIn('id="edit-direction-provider"', self.html)
+        self.assertIn("current.regeneration_required", self.javascript)
+        self.assertIn("saved as a revision", self.html)
+        self.assertIn("function updateShortlistPreviewAspect()", self.javascript)
+        self.assertIn('stage.classList.toggle("preview-portrait"', self.javascript)
+        self.assertIn("grid-template-rows: minmax(0, 1fr) minmax(0, 1fr)", self.css)
+        self.assertIn("aspect-ratio: var(--preview-aspect-ratio, 3 / 2)", self.css)
+        self.assertIn(
+            "height: calc(100vh - var(--app-toolbar-height) - 42px)",
+            self.css,
+        )
+        self.assertIn('id="regenerate-edit-direction"', self.html)
+        self.assertIn("kimiya_validation?.status", self.javascript)
+        self.assertIn("only_photo: onlyPhoto", self.javascript)
+        self.assertIn("Regenerate this photograph", self.html)
+        self.assertIn('id="generate-missing-edit-directions"', self.html)
+        self.assertIn('id="regenerate-all-edit-directions"', self.html)
+        self.assertIn("function chooseEditDirectionGeneration(current)", self.javascript)
+        self.assertIn("only_photos: onlyPhotos", self.javascript)
+        self.assertIn("openai/gpt-5.6-luna-pro", self.html)
+        self.assertIn("openai/gpt-5.6-luna-pro", self.javascript)
+        self.assertIn("for (const profile of state.providers?.profiles || [])", self.javascript)
+        self.assertIn("AI model", self.html)
+        self.assertIn('value="openai/gpt-5.6-luna-pro"', self.html)
+        self.assertIn(".edit-direction-provider-field", self.css)
+        self.assertIn('id="style-provider-help"', self.html)
+        self.assertIn("function providerOptionLabel(profile)", self.javascript)
+        self.assertIn("function providerKindLabel(kind)", self.javascript)
+        self.assertIn('item.kind === "openrouter"', self.javascript)
+        self.assertIn('options.model || "openai/gpt-5.6-luna-pro"', self.javascript)
+
+    def test_style_profile_queue_has_live_stage_progress_semantics(self):
+        self.assertIn('job.kind === "style_profile"', self.javascript)
+        self.assertIn("function styleProfileProgress(job)", self.javascript)
+        self.assertIn("STYLE_PROGRESS", self.javascript)
+        self.assertIn("Starting the profile extractor", self.javascript)
+        self.assertIn("latest validated extraction stage", self.javascript)
+        self.assertIn("job.photo_examples?.length", self.javascript)
+        self.assertIn("function jobDisplayName(job)", self.javascript)
+        self.assertIn("Added ${jobTime(job.created_at)}", self.javascript)
+        self.assertIn('id="style-extraction-progress"', self.html)
+        self.assertIn("function renderStyleExtractionProgress()", self.javascript)
+        self.assertIn("Personal style extraction started", self.javascript)
+        self.assertIn('job.kind !== "style_profile"', self.javascript)
+        self.assertNotIn(
+            'setSaveStatus("Personal style extraction added to Queue")',
+            self.javascript)
+        self.assertIn("refreshJobs(true);", self.javascript)
 
     def test_phase8_exposes_concurrent_activity_and_keyboard_navigation(self):
         for identifier in (
@@ -1507,6 +2330,168 @@ class GuiDesignFoundationTests(unittest.TestCase):
 
 
 class GuiJobTests(unittest.TestCase):
+    def test_development_recipe_preview_is_bounded_local_and_cached(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            photos = root / "photos"; photos.mkdir()
+            Image.new("RGB", (320, 200), (70, 110, 150)).save(photos / "A.JPG")
+            server = ReviewServer.__new__(ReviewServer)
+            server.project_layout = {"Previews": root / "Previews"}
+            server.development_payload = lambda: {
+                "source_folder": str(photos),
+                "candidates": [{"photo": "A.JPG", "raw_files": []}],
+            }
+            first = server.development_recipe_preview(
+                "A.JPG", "calibrated", "default",
+                "markesteijn-3-pass", 96)
+            second = server.development_recipe_preview(
+                "A.JPG", "calibrated", "default",
+                "markesteijn-3-pass", 96)
+            self.assertEqual(first, second)
+            self.assertTrue(first.is_file())
+            with Image.open(first) as preview:
+                self.assertLessEqual(max(preview.size), 96)
+
+    def test_full_resolution_darktable_job_uses_delivery_pipeline(self):
+        manager = JobManager.__new__(JobManager)
+        manager.python = "/usr/bin/python3"
+        manager.project_root = Path("/Applications/OpenCull.app/Resources")
+        command = manager._command({
+            "kind": "renderer_export",
+            "source": "/tmp/A.RAF", "reference": "/tmp/A.JPG",
+            "directions": "/tmp/directions.json", "photo": "A.JPG",
+            "style": "personal", "output_dir": "/tmp/full",
+            "project": "/tmp/project.json",
+            "demosaic": "markesteijn-3-pass",
+        })
+        self.assertTrue(command[1].endswith("renderer_export_pipeline.py"))
+        self.assertIn("markesteijn-3-pass", command)
+        self.assertNotIn("--opencull-render", command)
+
+    def test_delivery_export_is_queued_and_rejects_an_active_duplicate(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            photos = root / "photos"; photos.mkdir()
+            reference = photos / "A.JPG"
+            Image.new("RGB", (32, 24), (80, 100, 120)).save(reference)
+            directions = photos / "Darkimiya" / "directions.json"
+            directions.parent.mkdir()
+            directions.write_text('{"entries": []}', encoding="utf-8")
+            project_path, _ = load_or_create_folder_project(photos)
+            layout = ensure_project_layout(photos)
+            manager = JobManager(
+                root / "jobs.json", root, autostart=False,
+                command_builder=lambda job: [])
+            first = manager.add_delivery_export(
+                str(reference), str(reference), str(directions), "A.JPG",
+                "standard", "default", str(project_path),
+                str(layout["Exports"] / "A-standard-default.jpg"))
+            job = first["jobs"][-1]
+            self.assertEqual(job["kind"], "delivery_export")
+            self.assertEqual(job["status"], "queued")
+            self.assertEqual(job["execution_lane"], "background_export")
+            with self.assertRaisesRegex(JobError, "already queued for export"):
+                manager.add_delivery_export(
+                    str(reference), str(reference), str(directions), "A.JPG",
+                    "standard", "default", str(project_path),
+                    str(layout["Exports"] / "A-standard-default.jpg"))
+
+    def test_delivery_export_command_carries_the_immutable_recipe_identity(self):
+        manager = JobManager.__new__(JobManager)
+        manager.python = "/usr/bin/python3"
+        manager.project_root = Path("/Applications/Darkimiya.app/Contents/Resources")
+        command = manager._command({
+            "kind": "delivery_export", "source": "/tmp/A.RAF",
+            "reference": "/tmp/A.JPG", "directions": "/tmp/directions.json",
+            "photo": "A.JPG", "style": "standard", "engine": "darktable",
+            "demosaic": "markesteijn-3-pass", "render_output_dir": "/tmp/render",
+            "project": "/tmp/project.json", "destination": "/tmp/export.jpg",
+            "export_key": "recipe-key", "output": "/tmp/receipt.json",
+            "render": "",
+        })
+        self.assertTrue(command[1].endswith("delivery_export_pipeline.py"))
+        self.assertIn("recipe-key", command)
+        self.assertIn("/tmp/export.jpg", command)
+
+    def test_delivery_export_atomically_copies_and_records_an_existing_render(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            photos = root / "photos"; photos.mkdir()
+            reference = photos / "A.JPG"
+            Image.new("RGB", (32, 24), (80, 100, 120)).save(reference)
+            project_path, _ = load_or_create_folder_project(photos)
+            layout = ensure_project_layout(photos)
+            rendered = layout["Developments"] / "A.standard.default.jpg"
+            Image.new("RGB", (32, 24), (90, 110, 130)).save(rendered)
+            register_render(project_path, {
+                "created_at": "2026-08-02T00:00:00+00:00",
+                "recipe": {"style": "standard", "source_photo": "A.JPG"},
+                "output": {"path": str(rendered), "sha256": "render-sha"},
+            })
+            directions = layout["Recipes"] / "directions.json"
+            directions.write_text('{"entries": []}', encoding="utf-8")
+            destination = layout["Exports"] / "A-standard-default.jpg"
+            receipt = layout["Operations"] / "export-test.json"
+            record = run_delivery_export(
+                source=reference, reference=reference, directions=directions,
+                photo="A.JPG", style="standard", engine="default",
+                demosaic="markesteijn-1-pass", render=rendered,
+                render_output_dir=layout["Developments"], project=project_path,
+                destination=destination, export_key="recipe-key", receipt=receipt)
+            self.assertTrue(destination.is_file())
+            self.assertTrue(receipt.is_file())
+            self.assertEqual(record["destination"], str(destination))
+            self.assertEqual(
+                load_project(project_path)["artifacts"]["exports"][-1]["export_key"],
+                "recipe-key")
+
+    def test_full_resolution_export_has_an_isolated_background_resource_lane(self):
+        manager = JobManager.__new__(JobManager)
+        manager.project_root = Path("/Applications/Darkimiya.app/Contents/Resources")
+        export_environment = manager._environment_for_job({
+            "kind": "renderer_export",
+        })
+        preview_environment = manager._environment_for_job({
+            "kind": "development_render",
+        })
+        self.assertEqual(export_environment["DARKIMIYA_BACKGROUND_EXPORT"], "1")
+        self.assertEqual(export_environment["DARKIMIYA_EXPORT_NICE"], "10")
+        self.assertEqual(export_environment["OMP_NUM_THREADS"], "2")
+        self.assertEqual(export_environment["VECLIB_MAXIMUM_THREADS"], "2")
+        self.assertNotIn("DARKIMIYA_BACKGROUND_EXPORT", preview_environment)
+
+    def test_calibrated_is_a_supported_development_treatment(self):
+        jobs = (Path(__file__).parents[1] / "opencull_gui" / "jobs.py").read_text(
+            encoding="utf-8")
+        javascript = (
+            Path(__file__).parents[1] / "opencull_gui" / "static" / "app.js"
+        ).read_text(encoding="utf-8")
+        self.assertIn('"calibrated", "standard", "signature"', jobs)
+        self.assertIn('active === "calibrated"', javascript)
+        self.assertIn("developmentRenderFor", javascript)
+        self.assertIn("Render with ${selectedEngine", javascript)
+
+    def test_edit_direction_worker_receives_personal_style_profile(self):
+        manager = JobManager.__new__(JobManager)
+        manager.python = "/usr/bin/python3"
+        manager.project_root = Path("/Applications/OpenCull.app/Resources")
+        command = manager._command({
+            "kind": "edit_suggestions",
+            "program_path": "/tmp/edit_suggestions.kim",
+            "shortlist": "/tmp/shortlist.json",
+            "review": "/tmp/review.json",
+            "photos": "/tmp/photos",
+            "output": "/tmp/directions.json",
+            "profile": "professional",
+            "style_profile": "/tmp/personal-style.json",
+        })
+        self.assertIn(
+            "style_profile=/tmp/personal-style.json",
+            command,
+        )
+        self.assertIn("only_photo=", command)
+        self.assertIn("only_photos=[]", command)
+
     def wait_for(self, manager, predicate, timeout=5):
         deadline = time.time() + timeout
         while time.time() < deadline:
@@ -1515,6 +2500,22 @@ class GuiJobTests(unittest.TestCase):
                 return state
             time.sleep(0.02)
         self.fail("job manager condition timed out")
+
+    def test_development_image_is_not_parsed_as_json_progress(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "A.standard.jpg"
+            output.write_bytes(b"\xff\xd8\xff\xe0binary-jpeg")
+
+            progress = JobManager._progress({
+                "kind": "development_pipeline",
+                "output": str(output),
+                "checkpoint": str(output),
+            })
+
+            self.assertEqual(progress["completed_items"], 1)
+            self.assertEqual(progress["total_items"], 1)
+            self.assertEqual(progress["fraction"], 1)
+            self.assertTrue(progress["checkpoint_complete"])
 
     def test_sequential_queue_completes_in_order(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1553,6 +2554,69 @@ class GuiJobTests(unittest.TestCase):
             finally:
                 manager.shutdown()
 
+    def test_command_builder_failure_does_not_kill_queue_worker(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            first = root / "first"
+            second = root / "second"
+            first.mkdir()
+            second.mkdir()
+
+            def command(job):
+                if Path(job["photos"]).name == "first":
+                    raise KeyError("style-only command field")
+                return [
+                    sys.executable, "-c",
+                    "import pathlib,sys;pathlib.Path(sys.argv[1]).write_text('{}')",
+                    job["output"],
+                ]
+
+            manager = JobManager(
+                root / "jobs.json", root, command_builder=command)
+            try:
+                manager.add(str(first), str(root / "one.json"))
+                manager.add(str(second), str(root / "two.json"))
+                state = self.wait_for(
+                    manager,
+                    lambda value: len(value["jobs"]) == 2
+                    and value["jobs"][0]["status"] == "failed"
+                    and value["jobs"][1]["status"] == "completed",
+                )
+                self.assertIn(
+                    "Could not start Kimiya", state["jobs"][0]["message"])
+                self.assertTrue((root / "two.json").is_file())
+            finally:
+                manager.shutdown()
+
+    def test_queued_root_style_output_is_migrated_to_results(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            results = root / "Results"
+            results.mkdir()
+            state_path = root / "jobs.json"
+            state_path.write_text(json.dumps({
+                "format": "opencull-job-queue-v1",
+                "revision": 1,
+                "jobs": [{
+                    "id": "style-job", "kind": "style_profile",
+                    "output": "/Personal_profile_v1.json",
+                    "checkpoint": "/Personal_profile_v1.json",
+                    "log": "/Personal_profile_v1.json.log",
+                    "status": "queued",
+                }],
+            }), encoding="utf-8")
+            manager = JobManager(
+                state_path, root, output_root=results,
+                command_builder=lambda job: [], autostart=False)
+            try:
+                job = manager.public()["jobs"][0]
+                self.assertEqual(
+                    Path(job["output"]),
+                    results.resolve() / "Personal_profile_v1.json")
+                self.assertEqual(Path(job["log"]).parent, results.resolve())
+            finally:
+                manager.shutdown()
+
     def test_worker_receives_private_job_specific_kimiya_workspace(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -1586,6 +2650,79 @@ class GuiJobTests(unittest.TestCase):
                 self.assertEqual(expected.stat().st_mode & 0o077, 0)
             finally:
                 manager.shutdown()
+
+    def test_recovers_legacy_bundle_report_from_committed_certificate(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            state_path = root / "jobs.json"
+            workspaces = root / "Kimiya"
+            results = root / "Results"
+            results.mkdir()
+            legacy = (
+                root / "dist" / "OpenCull.app" / "Contents" /
+                "Frameworks" / "607_FUJI-results.json")
+            state_path.write_text(json.dumps({
+                "format": "opencull-job-queue-v1",
+                "revision": 1,
+                "jobs": [{
+                    "id": "legacy-job",
+                    "photos": str(root / "photos"),
+                    "output": str(legacy),
+                    "checkpoint": f"{legacy}.checkpoint.json",
+                    "log": f"{legacy}.log",
+                    "status": "completed",
+                }, {
+                    "id": "shortlist-job",
+                    "kind": "professional_shortlist",
+                    "report": str(legacy),
+                    "output": str(results / "shortlist.json"),
+                    "checkpoint": str(results / "shortlist.checkpoint.json"),
+                    "log": str(results / "shortlist.log"),
+                    "status": "completed",
+                }],
+            }), encoding="utf-8")
+            certificate = workspaces / "legacy-job" / "certificate.json"
+            certificate.parent.mkdir(parents=True)
+            committed_text = json.dumps(report_data(), separators=(",", ":"))
+            certificate.write_text(json.dumps({
+                "status": "COMMITTED",
+                "value": committed_text,
+            }), encoding="utf-8")
+
+            manager = JobManager(
+                state_path, root, autostart=False,
+                kimiya_workspace_root=workspaces, output_root=results)
+            try:
+                jobs = manager.public()["jobs"]
+                recovered = (results / "607_FUJI-results.json").resolve()
+                self.assertTrue(recovered.is_file())
+                self.assertEqual(jobs[0]["output"], str(recovered))
+                self.assertEqual(
+                    jobs[0]["legacy_output"], str(legacy.resolve()))
+                self.assertEqual(jobs[1]["report"], str(recovered))
+                self.assertEqual(
+                    manager.resolve_report_path(legacy), recovered)
+                self.assertEqual(
+                    json.loads(recovered.read_text())["format"],
+                    "opencull-report-v2",
+                )
+                self.assertEqual(recovered.read_text(), committed_text)
+            finally:
+                manager.shutdown()
+
+            recovered.write_text(
+                json.dumps(report_data(), indent=2), encoding="utf-8")
+            repaired = JobManager(
+                state_path, root, autostart=False,
+                kimiya_workspace_root=workspaces, output_root=results)
+            try:
+                self.assertEqual(recovered.read_text(), committed_text)
+                self.assertIn(
+                    "identity verified",
+                    repaired.public()["jobs"][0]["message"],
+                )
+            finally:
+                repaired.shutdown()
 
     def test_pause_and_resume_uses_checkpoint(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1690,6 +2827,73 @@ class GuiJobTests(unittest.TestCase):
 
 
 class GuiHttpTests(unittest.TestCase):
+    def test_development_payload_reloads_worker_registered_render(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            photos = root / "photos"
+            photos.mkdir()
+            report_path = root / "trip-results.json"
+            project_path = report_path.with_suffix(".opencull-project.json")
+
+            server = ReviewServer.__new__(ReviewServer)
+            server.report = type("Report", (), {"path": report_path})()
+            server.photos = type("Photos", (), {"root": photos})()
+            server.project_path = project_path
+            server.project = load_or_create(project_path, "Trip", photos)
+            server.project_layout = ensure_project_layout(photos)
+            server.raw_sources = type(
+                "RawSources", (), {"public": lambda _self: {"configured": False}})()
+            server.edit_directions_payload = lambda: {"available": False}
+
+            output = root / "A.standard.jpg"
+            output.write_bytes(b"render")
+            update_project(project_path, artifacts={"renders": [{
+                "variant": "standard", "source_photo": "A.JPG",
+                "path": str(output), "sha256": "render-hash",
+            }]})
+
+            payload = server.development_payload()
+
+            self.assertEqual(len(payload["variants"]), 1)
+            self.assertEqual(payload["variants"][0]["source_photo"], "A.JPG")
+            self.assertEqual(server.project["artifacts"]["renders"][0]["sha256"],
+                             "render-hash")
+            self.assertEqual(
+                payload["default_export_directory"],
+                str((photos / "Darkimiya" / "Exports").resolve()))
+
+    def test_export_payload_shows_latest_semantic_render_only(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            photos = root / "photos"
+            photos.mkdir()
+            server = ReviewServer.__new__(ReviewServer)
+            server.project_path = root / "project.json"
+            server.project_layout = ensure_project_layout(photos)
+            server.project = load_or_create(server.project_path, "Trip", photos)
+            older = root / "older.jpg"; older.write_bytes(b"older")
+            current = root / "current.jpg"; current.write_bytes(b"current")
+            server.project = update_project(server.project_path, artifacts={"renders": [
+                {"variant": "personal-darktable-guided", "source_photo": "A.RAF",
+                 "path": str(older), "recipe_revision": 1,
+                 "created_at": "2026-01-01T00:00:00+00:00"},
+                {"variant": "personal-darktable-guided", "source_photo": "A.RAF",
+                 "path": str(current), "recipe_revision": 2,
+                 "created_at": "2026-01-02T00:00:00+00:00"},
+            ]})
+
+            payload = server.export_payload()
+
+            self.assertEqual(len(payload["renders"]), 1)
+            self.assertEqual(payload["renders"][0]["path"], str(current))
+            self.assertEqual(
+                payload["renders"][0]["suggested_filename"],
+                "A-personal-darktable-guided.jpg")
+            self.assertEqual(payload["hidden_render_revisions"], 1)
+            self.assertEqual(
+                payload["default_export_directory"],
+                str((photos / "Darkimiya" / "Exports").resolve()))
+
     def test_private_people_api_indexes_locally_and_serves_only_crops(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -1934,6 +3138,14 @@ class GuiHttpTests(unittest.TestCase):
                 response.read()
                 self.assertEqual(response.status, 202)
 
+                connection.request(
+                    "GET",
+                    "/api/previews/file?name=A.JPG&size=thumb&revision=not-ready",
+                )
+                response = connection.getresponse()
+                response.read()
+                self.assertEqual(response.status, 404)
+
                 focus_body = json.dumps({
                     "visible": ["A.JPG"], "prefetch": ["B.JPG"],
                     "size": "thumb",
@@ -1968,6 +3180,20 @@ class GuiHttpTests(unittest.TestCase):
                 self.assertEqual(response.status, 200)
                 self.assertEqual(response.getheader("Content-Type"), "image/jpeg")
                 self.assertTrue(image.startswith(b"\xff\xd8"))
+
+                revision = status["previews"]["A.JPG"]["revision"]
+                self.assertTrue(revision)
+                connection.request(
+                    "GET",
+                    "/api/previews/file?name=A.JPG&size=thumb&revision=" + revision,
+                )
+                response = connection.getresponse()
+                immutable_image = response.read()
+                self.assertEqual(response.status, 200)
+                self.assertEqual(response.getheader("Content-Type"), "image/jpeg")
+                self.assertIn("immutable", response.getheader("Cache-Control"))
+                self.assertEqual(response.getheader("ETag"), f'"{revision}"')
+                self.assertTrue(immutable_image.startswith(b"\xff\xd8"))
 
                 connection.request("POST", "/api/review", body=b"{}")
                 response = connection.getresponse()

@@ -1,0 +1,90 @@
+-- OpenCull scene-specific professional edit directions.
+
+param shortlist: text = "opencull-professional-shortlist.json"
+param review: text = "opencull-professional-shortlist.review.json"
+param photos: text = "."
+param output: text = "opencull-edit-directions.json"
+param profile: text = "family"
+param resume: bool = true
+param checkpoint: text = ""
+param style_profile: text = ""
+param only_photo: text = ""
+param only_photos: text = "[]"
+
+use "agents.kim"
+use python "edit_suggestion_kernel.py"
+
+context k_edit_directions:
+    domain = "professional photographic editing direction"
+    preserve = [scene_identity, subject_dignity, believable_light, uncertainty]
+    allow_loss = [wording, exact_slider_values]
+
+schema EditDirections:
+    scene_reading: text
+    standard_title: text
+    standard_intent: text
+    standard_instructions: text
+    standard_recipe: text
+    signature_title: text
+    signature_intent: text
+    signature_instructions: text
+    signature_recipe: text
+    creative_title: text
+    creative_intent: text
+    creative_instructions: text
+    creative_recipe: text
+    personal_title: text
+    personal_intent: text
+    personal_instructions: text
+    personal_recipe: text
+    guardrails: text
+    confidence: num
+
+request := build_edit_request(shortlist, review, photos, style_profile, only_photo, only_photos)
+candidates := parse_edit_candidates(request)
+checkpoint_file := edit_checkpoint_path(output, checkpoint)
+entries := load_edit_checkpoint(checkpoint_file, request, resume)
+pending := remaining_edit_candidates(candidates, entries)
+
+forall candidate in pending:
+    photo := observe image(edit_candidate_path(request, candidate))
+    check photo.exists
+    raw := memo gen<EditDirections>(edit_direction_prompt(candidate, profile), images=[photo]) by A
+    direction := normalize_edit_direction(raw)
+    format_repaired := false
+    if check valid_edit_direction(direction):
+        check true
+    else:
+        repaired_raw := memo gen<EditDirections>(edit_direction_repair_prompt(raw)) by B
+        direction := normalize_edit_direction(repaired_raw)
+        format_repaired := true
+    if check valid_edit_direction(direction):
+        entry := edit_direction_json(direction, candidate, format_repaired)
+    else:
+        entry := rejected_edit_direction_json(candidate, format_repaired)
+    entries := entries + [entry]
+    state := build_edit_checkpoint(request, entries, false)
+    check len(state) > 0
+    act file.overwrite(checkpoint_file, state)
+    settle until check file_exists(checkpoint_file) within 5
+
+validated_entries := []
+forall entry in entries:
+    if check edit_direction_needs_validation(entry):
+        if memo judge<3,2/3> (entry |= edit_direction_policy()) under k_edit_directions panel [B, C, D]:
+            validated_entry := mark_edit_direction_validation(entry, true)
+        else:
+            validated_entry := mark_edit_direction_validation(entry, false)
+    else:
+        validated_entry := entry
+    validated_entries := validated_entries + [validated_entry]
+
+entries := validated_entries
+report := build_edit_report(request, entries, profile)
+check valid_edit_report(report, request, candidates)
+act file.overwrite(output, report)
+settle until check file_exists(output) within 5
+final_state := build_edit_checkpoint(request, entries, true)
+check len(final_state) > 0
+act file.overwrite(checkpoint_file, final_state)
+commit(report)
