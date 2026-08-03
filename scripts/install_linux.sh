@@ -28,9 +28,18 @@ fi
 
 echo "Installing Darkimiya into $venv_dir (Python $version)"
 mkdir -p "$venv_dir" "$bin_dir" "$desktop_dir" "$icon_dir"
-"$python_bin" -m venv "$venv_dir"
+# --system-site-packages lets the native window find the system PyGObject and
+# WebKit, which cannot be installed from PyPI. Without it the launcher still
+# runs, in the browser instead of its own window.
+"$python_bin" -m venv --system-site-packages "$venv_dir"
 "$venv_dir/bin/python" -m pip install --upgrade --quiet pip
-"$venv_dir/bin/python" -m pip install --quiet "$project_dir"
+if "$python_bin" -c 'import gi' 2>/dev/null; then
+  "$venv_dir/bin/python" -m pip install --quiet "$project_dir[shell]"
+else
+  echo "PyGObject is not installed, so the launcher will open in your browser."
+  echo "For a native window: sudo apt install python3-gi gir1.2-webkit2-4.1"
+  "$venv_dir/bin/python" -m pip install --quiet "$project_dir"
+fi
 
 # Fail here rather than at the first RAW preview: without rawpy every RAW is
 # decoded by a separate process per photograph, and on Linux there is no

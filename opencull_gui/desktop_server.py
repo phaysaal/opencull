@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import platform
 import secrets
+import threading
 from collections.abc import Callable
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -16,6 +17,8 @@ from . import dialogs
 from .jobs import JobError, JobManager
 from .project_catalog import ProjectCatalog, ProjectCatalogError
 from .providers import ProviderError, ProviderStore
+
+LAUNCHER_ROOT = Path(__file__).with_name("launcher")
 
 
 class DesktopBridgeServer(ThreadingHTTPServer):
@@ -81,14 +84,56 @@ class DesktopBridgeHandler(BaseHTTPRequestHandler):
             raise ValueError("request body must be an object")
         return value
 
+    def _serve_launcher_asset(self, path: str) -> bool:
+        """Serve the launcher's own files, which carry no secrets.
+
+        The page is what obtains the session token, so it cannot present one
+        yet. Only these three names are reachable, and the session is bound to
+        loopback, so this widens nothing an attacker could not already read
+        from the installed package.
+        """
+        names = {
+            "/": ("index.html", "text/html; charset=utf-8"),
+            "/launcher.css": ("launcher.css", "text/css; charset=utf-8"),
+            "/launcher.js": ("launcher.js", "text/javascript; charset=utf-8"),
+        }
+        if path not in names:
+            return False
+        name, content_type = names[path]
+        body = (LAUNCHER_ROOT / name).read_bytes()
+        if name == "index.html":
+            # The token goes into the document rather than the URL, where it
+            # would survive in history and in any logged request line.
+            token = json.dumps(self.server.token)
+            body = body.replace(
+                b"<script src=\"/launcher.js\">",
+                f"<script>window.__DARKIMIYA_TOKEN__={token};</script>"
+                "<script src=\"/launcher.js\">".encode())
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header(
+            "Content-Security-Policy",
+            "default-src 'none'; script-src 'self' 'unsafe-inline'; "
+            "style-src 'self'; connect-src 'self'; img-src 'self' data:")
+        self.end_headers()
+        self.wfile.write(body)
+        return True
+
     def do_GET(self) -> None:
+        path = urlparse(self.path).path
+        if self._serve_launcher_asset(path):
+            return
         if not self._authorized():
             return
-        path = urlparse(self.path).path
         if path == "/health":
             self._json({"ok": True, "service": "opencull-native-bridge-v1"})
         elif path == "/state":
             self._json({
+                # Lets the launcher show ~/Pictures/Shoot rather than the
+                # absolute path, which is orientation rather than evidence.
+                "home": str(Path.home()),
                 "queue": self.server.jobs.public(),
                 "providers": self.server.providers.public(),
                 "projects": (
@@ -242,6 +287,24 @@ class DesktopBridgeHandler(BaseHTTPRequestHandler):
             elif path == "/providers/test":
                 result = self.server.providers.test_connection(
                     str(body.get("profile_id", "")))
+            elif path == "/choose-folder":
+                try:
+                    result = {"path": dialogs.choose_folder(
+                        str(body.get("prompt")
+                            or "Choose a folder of photographs to cull"))}
+                except dialogs.DialogCancelled:
+                    # Dismissing a chooser is a decision, not a failure.
+                    result = {"path": ""}
+                except dialogs.DialogError as exc:
+                    raise JobError(str(exc)) from exc
+            elif path == "/choose-report":
+                try:
+                    result = {"path": dialogs.choose_files(
+                        "Choose a finished culling report")[0]}
+                except dialogs.DialogCancelled:
+                    result = {"path": ""}
+                except dialogs.DialogError as exc:
+                    raise JobError(str(exc)) from exc
             elif path == "/reveal":
                 target = Path(str(body.get("path", ""))).expanduser().resolve()
                 if not target.exists():
@@ -267,19 +330,40 @@ def serve_desktop_bridge(
     open_review: Callable[..., dict[str, object]],
     diagnostics: dict[str, object] | None = None,
     projects: ProjectCatalog | None = None,
+    present: Callable[[str], None] | None = None,
 ) -> int:
     server = DesktopBridgeServer(
         ("127.0.0.1", 0), jobs, providers, open_review, diagnostics, projects)
-    print(json.dumps({
-        "format": "opencull-native-bootstrap-v1",
-        "url": f"http://127.0.0.1:{server.server_port}",
-        "token": server.token,
-    }), flush=True)
+    url = f"http://127.0.0.1:{server.server_port}"
+    if present is None:
+        # Bootstrap mode: an external shell owns the window and reads this
+        # line to find the service.
+        print(json.dumps({
+            "format": "opencull-native-bootstrap-v1",
+            "url": url,
+            "token": server.token,
+        }), flush=True)
+        try:
+            server.serve_forever(poll_interval=0.25)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            server.server_close()
+            jobs.shutdown()
+        return 0
+
+    # Presented mode: this process owns the window, so the service runs
+    # behind it and stops when it closes.
+    thread = threading.Thread(
+        target=server.serve_forever, kwargs={"poll_interval": 0.25},
+        name="darkimiya-bridge", daemon=True)
+    thread.start()
     try:
-        server.serve_forever(poll_interval=0.25)
+        present(f"{url}/")
     except KeyboardInterrupt:
         pass
     finally:
+        server.shutdown()
         server.server_close()
         jobs.shutdown()
     return 0

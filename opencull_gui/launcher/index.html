@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Darkimiya</title>
+<link rel="stylesheet" href="/launcher.css">
+</head>
+<body>
+<header class="chrome" id="chrome">
+  <span class="chrome__mark" aria-hidden="true"></span>
+  <h1 class="chrome__title">Darkimiya</h1>
+  <div class="chrome__actions">
+    <button class="ghost" id="open-providers" type="button">Providers</button>
+  </div>
+</header>
+
+<main class="page" id="page">
+  <section class="hero" aria-labelledby="hero-count">
+    <p class="eyebrow">Library</p>
+    <p class="hero__count" id="hero-count" hidden>
+      <span class="num" id="frame-total">—</span>
+    </p>
+    <p class="hero__lead" id="hero-lead" hidden>Start with a folder.</p>
+    <p class="hero__sub" id="hero-sub">Reading the library…</p>
+    <div class="hero__actions">
+      <button class="primary" id="cull-folder" type="button">
+        Cull a folder
+      </button>
+      <button class="ghost" id="open-existing" type="button">
+        Open a finished report
+      </button>
+    </div>
+    <p class="notice" id="notice" hidden></p>
+  </section>
+
+  <section class="band" id="library-band" aria-labelledby="library-heading">
+    <h2 class="band__title" id="library-heading">Folders</h2>
+    <ol class="rows" id="library"></ol>
+  </section>
+
+  <section class="band" id="queue-band" hidden aria-labelledby="queue-heading">
+    <h2 class="band__title" id="queue-heading">In progress</h2>
+    <ol class="rows" id="queue"></ol>
+  </section>
+</main>
+
+<dialog class="sheet" id="providers-sheet" aria-labelledby="providers-title">
+  <form method="dialog" class="sheet__head">
+    <h2 id="providers-title">Providers</h2>
+    <button class="ghost" value="close" aria-label="Close">Done</button>
+  </form>
+  <div class="sheet__body">
+    <p class="sheet__lead" id="providers-lead">
+      Darkimiya asks a model you choose to compare frames. The key stays on
+      this machine.
+    </p>
+    <label class="field">
+      <span class="field__label">Profile name</span>
+      <input id="provider-name" type="text" value="OpenRouter" autocomplete="off">
+    </label>
+    <label class="field">
+      <span class="field__label">API key</span>
+      <input id="provider-key" type="password" autocomplete="new-password">
+      <span class="field__help" id="provider-key-help"></span>
+    </label>
+    <div class="sheet__actions">
+      <button class="primary" id="save-provider" type="button">Save provider</button>
+      <span class="sheet__status" id="provider-status" role="status"></span>
+    </div>
+  </div>
+</dialog>
+
+<script src="/launcher.js"></script>
+</body>
+</html>

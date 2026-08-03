@@ -25,6 +25,8 @@ dev = ["pytest>=8.0", "ruff>=0.6"]
 # The desktop launcher and the PyInstaller bundle. Both are macOS-oriented
 # today; see docs for the cross-platform shell plan.
 build = ["pyinstaller>=6.0", "certifi"]
+# Native application window; falls back to the browser when absent.
+shell = ["pywebview>=5.0"]
 
 [project.scripts]
 # The desktop launcher: queue, projects and providers. This is what a menu
@@ -68,7 +70,7 @@ py-modules = [
 include = ["opencull_gui*"]
 
 [tool.setuptools.package-data]
-opencull_gui = ["static/*"]
+opencull_gui = ["static/*", "launcher/*"]
 
 [tool.pytest.ini_options]
 # Tests import the top-level kernels directly; without this they resolve only

@@ -1,0 +1,448 @@
+/* Darkimiya launcher.
+ *
+ * The palette is a darkroom rather than the usual blue-black application
+ * chrome: a warm near-black wall, warm paper white, and safelight amber as
+ * the single accent. Amber means "work in flight" everywhere it appears.
+ *
+ * The signature is the sprocket edge on each folder row. While a cull runs,
+ * its perforations glow amber and advance, so film moves through the machine.
+ */
+
+:root {
+  --ink: #131211;
+  --surface: #1B1918;
+  --raised: #232120;
+  --edge: #302C29;
+  --edge-soft: #262322;
+  --paper: #EDE7DE;
+  --muted: #98908A;
+  --faint: #6B645F;
+  --safelight: #FF9B47;
+  --safelight-dim: #7A4A21;
+  --fixed: #86CFA6;
+  --alarm: #E8735A;
+
+  --display: "Ubuntu Condensed", "SF Compact Display", "Roboto Condensed",
+             "Inter Tight", "Helvetica Neue", system-ui, sans-serif;
+  --body: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Adwaita Sans",
+          Cantarell, Ubuntu, "Segoe UI Variable Text", "Segoe UI",
+          system-ui, sans-serif;
+  --data: "SF Mono", "Ubuntu Mono", "JetBrains Mono", "Cascadia Mono",
+          ui-monospace, monospace;
+
+  --gutter: 28px;
+  --radius: 10px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  background: var(--ink);
+  color: var(--paper);
+  font-family: var(--body);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+button { font: inherit; color: inherit; }
+
+:focus-visible {
+  outline: 2px solid var(--safelight);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* --- window chrome -------------------------------------------------- */
+/* Slim bar doubling as the drag region for the native window. */
+
+.chrome {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 var(--gutter);
+  height: 46px;
+  border-bottom: 1px solid var(--edge-soft);
+  background: var(--surface);
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+
+.chrome__mark {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  background: var(--safelight);
+  box-shadow: 0 0 10px rgba(255, 155, 71, .55);
+}
+
+.chrome__title {
+  margin: 0;
+  font-family: var(--display);
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+}
+
+.chrome__actions {
+  margin-left: auto;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+/* --- page ------------------------------------------------------------ */
+
+.page {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 0 var(--gutter) 40px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--edge) transparent;
+}
+
+.eyebrow {
+  margin: 0;
+  font-family: var(--display);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .22em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+/* --- hero ------------------------------------------------------------ */
+/* The frame count is the number a photographer actually thinks in. */
+
+.hero {
+  padding: 40px 0 34px;
+  border-bottom: 1px solid var(--edge-soft);
+}
+
+.hero__count {
+  margin: 10px 0 2px;
+  font-family: var(--display);
+  font-size: clamp(44px, 8vw, 72px);
+  font-weight: 700;
+  line-height: .95;
+  letter-spacing: -.02em;
+}
+
+.hero__count .num {
+  font-variant-numeric: tabular-nums;
+}
+
+.hero__sub {
+  margin: 0 0 24px;
+  color: var(--muted);
+  max-width: 52ch;
+}
+
+.hero__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+/* --- controls -------------------------------------------------------- */
+
+.primary,
+.ghost {
+  border-radius: 8px;
+  padding: 9px 16px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background-color .15s ease, border-color .15s ease,
+              transform .06s ease;
+}
+
+.primary {
+  background: var(--safelight);
+  color: #241203;
+  font-weight: 650;
+  border-color: #FFAE68;
+}
+
+.primary:hover { background: #FFAC63; }
+.primary:active { transform: translateY(1px); }
+
+.ghost {
+  background: transparent;
+  border-color: var(--edge);
+  color: var(--paper);
+}
+
+.ghost:hover { background: var(--raised); border-color: #3B3633; }
+.ghost:active { transform: translateY(1px); }
+
+button:disabled {
+  opacity: .45;
+  cursor: default;
+  transform: none;
+}
+
+.notice {
+  margin: 16px 0 0;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--safelight-dim);
+  background: rgba(255, 155, 71, .07);
+  color: #FFC48F;
+  max-width: 62ch;
+}
+
+.notice[data-tone="alarm"] {
+  border-color: #6B3025;
+  background: rgba(232, 115, 90, .08);
+  color: #F2A08D;
+}
+
+/* --- bands ----------------------------------------------------------- */
+
+.band { padding: 26px 0 0; }
+
+.band__title {
+  margin: 0 0 12px;
+  font-family: var(--display);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .22em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--edge-soft);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.row {
+  display: flex;
+  align-items: stretch;
+  border-bottom: 1px solid var(--edge-soft);
+}
+
+.row:last-child { border-bottom: 0; }
+.row:hover { background: var(--raised); }
+
+/* The signature: film perforations down the leading edge of every row. */
+.row__film {
+  flex: 0 0 13px;
+  align-self: stretch;
+  border-right: 1px solid var(--edge-soft);
+  background-image: repeating-linear-gradient(
+    180deg,
+    transparent 0 6px,
+    rgba(237, 231, 222, .16) 6px 10px,
+    transparent 10px 16px);
+  background-size: 3px 16px;
+  background-position: center top;
+  background-repeat: repeat-y;
+}
+
+.row.is-running .row__film {
+  background-image: repeating-linear-gradient(
+    180deg,
+    transparent 0 6px,
+    rgba(255, 155, 71, .9) 6px 10px,
+    transparent 10px 16px);
+  animation: advance 1.15s linear infinite;
+}
+
+@keyframes advance {
+  to { background-position-y: 16px; }
+}
+
+.row__body {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 13px 16px;
+}
+
+.row__main { min-width: 0; flex: 1 1 auto; }
+
+.row__name {
+  margin: 0;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.row__path {
+  margin: 2px 0 0;
+  font-family: var(--data);
+  font-size: 11.5px;
+  color: var(--faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+}
+
+.row__count {
+  flex: 0 0 auto;
+  font-family: var(--data);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+.row__state {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.row__state[data-tone="running"] { color: var(--safelight); }
+.row__state[data-tone="ready"] { color: var(--fixed); }
+.row__state[data-tone="failed"] { color: var(--alarm); }
+
+.row__actions { flex: 0 0 auto; display: flex; gap: 8px; }
+
+.row__actions .ghost { padding: 6px 12px; font-size: 13px; }
+
+/* Progress reads as a strip of exposed frames rather than a rounded bar. */
+.meter {
+  margin-top: 7px;
+  height: 3px;
+  background: var(--edge);
+  overflow: hidden;
+}
+
+.meter__fill {
+  height: 100%;
+  background: var(--safelight);
+  transition: width .4s ease;
+}
+
+/* --- empty state ----------------------------------------------------- */
+/* No folders yet is an invitation, not a zero. The hero carries it, and the
+   folder band is removed rather than filled with a placeholder. */
+
+.hero__lead {
+  margin: 10px 0 6px;
+  font-family: var(--display);
+  font-size: clamp(30px, 5vw, 42px);
+  font-weight: 700;
+  line-height: 1.05;
+  letter-spacing: -.01em;
+}
+
+body.is-empty .hero {
+  border-bottom: 0;
+  padding-top: 56px;
+}
+
+/* --- providers sheet ------------------------------------------------- */
+
+.sheet {
+  border: 1px solid var(--edge);
+  border-radius: 14px;
+  background: var(--surface);
+  color: var(--paper);
+  padding: 0;
+  width: min(520px, calc(100vw - 48px));
+}
+
+.sheet::backdrop { background: rgba(8, 7, 7, .6); }
+
+.sheet__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--edge-soft);
+  margin: 0;
+}
+
+.sheet__head h2 {
+  margin: 0;
+  font-family: var(--display);
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+}
+
+.sheet__body { padding: 20px; }
+
+.sheet__lead { margin: 0 0 18px; color: var(--muted); }
+
+.field { display: block; margin-bottom: 16px; }
+
+.field__label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--muted);
+}
+
+.field input {
+  width: 100%;
+  padding: 9px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--edge);
+  background: var(--ink);
+  color: var(--paper);
+  font: inherit;
+}
+
+.field input:focus { border-color: var(--safelight); outline: none; }
+
+/* A stored key shows as dots in the placeholder, never as a value. */
+.field input.has-stored::placeholder {
+  color: var(--fixed);
+  opacity: 1;
+  letter-spacing: .14em;
+}
+
+.field input.has-stored { border-color: #2E5C45; }
+
+.field__help {
+  display: block;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--faint);
+}
+
+.sheet__actions { display: flex; align-items: center; gap: 12px; }
+
+.sheet__status { font-size: 12.5px; color: var(--muted); }
+.sheet__status[data-tone="ok"] { color: var(--fixed); }
+.sheet__status[data-tone="alarm"] { color: var(--alarm); }
+
+/* --- responsive ------------------------------------------------------ */
+
+@media (max-width: 620px) {
+  :root { --gutter: 18px; }
+  .row__body { flex-wrap: wrap; gap: 8px; }
+  .row__count, .row__state { order: 3; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}

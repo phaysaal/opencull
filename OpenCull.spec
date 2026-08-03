@@ -25,6 +25,7 @@ if not KIMIYA.is_dir():
 
 datas = [
     (str(ROOT / "opencull_gui" / "static"), "opencull_gui/static"),
+    (str(ROOT / "opencull_gui" / "launcher"), "opencull_gui/launcher"),
     (str(ROOT / "opencull.kim"), "."),
     (str(ROOT / "professional_shortlist.kim"), "."),
     (str(ROOT / "edit_suggestions.kim"), "."),

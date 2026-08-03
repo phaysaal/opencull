@@ -13,7 +13,7 @@ import sys
 import tempfile
 import threading
 import webbrowser
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from opencull_gui import dialogs
@@ -260,8 +260,10 @@ def run_release_smoke_test(output_path: Path) -> int:
     return 0 if checks["passed"] else 1
 
 
-def run_native_server(paths: MacOSPaths) -> int:
-    """Run the private queue service owned by the SwiftUI desktop shell."""
+def run_native_server(
+    paths: MacOSPaths, present: Callable[[str], None] | None = None,
+) -> int:
+    """Run the queue service, either headless or behind a window we present."""
     from opencull_gui.desktop_server import serve_desktop_bridge
     from opencull_gui.project_catalog import ProjectCatalog
 
@@ -396,11 +398,34 @@ def run_native_server(paths: MacOSPaths) -> int:
                 "log_path": str(paths.launcher_log),
                 "results_path": str(paths.results),
                 "frozen": bool(getattr(sys, "frozen", False)),
-            }, projects=projects)
+            }, projects=projects, present=present)
     finally:
         for server in review_servers:
             server.shutdown()
             server.server_close()
+
+
+def run_launcher(paths: MacOSPaths) -> int:
+    """Open the launcher in a native window with the queue service behind it."""
+    from opencull_gui import shell
+
+    def present(url: str) -> None:
+        used = shell.open_launcher(url)
+        if used == "native":
+            return
+        # The browser is a separate process, so this one has to stay alive to
+        # keep serving the page it just opened.
+        available, reason = shell.native_window_available()
+        if not available:
+            print(reason)
+        print(f"Darkimiya: {url}")
+        print("Press Ctrl-C to stop.")
+        try:
+            threading.Event().wait()
+        except KeyboardInterrupt:
+            print()
+
+    return run_native_server(paths, present=present)
 
 
 def _check_native_program(program: Path) -> None:
@@ -877,6 +902,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--no-browser", action="store_true")
     parser.add_argument("--release-smoke-test", metavar="REPORT_PATH")
     parser.add_argument("--native-server", action="store_true")
+    parser.add_argument(
+        "--tk-launcher", action="store_true",
+        help="use the previous Tk launcher instead of the application window")
     parser.add_argument("finder_items", nargs="*")
     return parser.parse_args(argv)
 
@@ -924,7 +952,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         logging.info("Darkimiya desktop is already running")
         return 0
     try:
-        return DesktopApp(paths, args.finder_items).run()
+        if args.tk_launcher:
+            return DesktopApp(paths, args.finder_items).run()
+        return run_launcher(paths)
     finally:
         lock.release()
 
