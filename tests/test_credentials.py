@@ -178,6 +178,39 @@ class ProviderStoreIntegrationTests(unittest.TestCase):
         self.assertIn("backend", storage)
         self.assertIn("protected", storage)
 
+    def test_resaving_a_profile_by_id_keeps_the_stored_credential(self):
+        # The desktop dialog leaves the credential field blank to keep the
+        # existing key. Without the profile id it re-sent the same name and
+        # the store rejected it as a duplicate, so the dialog could not save
+        # at all once a profile existed.
+        first = self.store.save(
+            self.profile(), self.store.public()["revision"], SECRET)
+        profile_id = first["profiles"][0]["id"]
+        updated = self.store.save(
+            {**self.profile(), "id": profile_id, "credential_required": True},
+            self.store.public()["revision"], "")
+        self.assertEqual(len(updated["profiles"]), 1)
+        self.assertEqual(updated["profiles"][0]["credential"], "stored")
+        self.assertEqual(self.store.credential(profile_id), SECRET)
+
+    def test_resending_the_same_name_without_an_id_is_still_refused(self):
+        from opencull_gui.providers import ProviderError
+
+        self.store.save(self.profile(), self.store.public()["revision"], SECRET)
+        with self.assertRaises(ProviderError):
+            self.store.save(
+                self.profile(), self.store.public()["revision"], "")
+
+    def test_a_supplied_credential_replaces_the_stored_one(self):
+        first = self.store.save(
+            self.profile(), self.store.public()["revision"], SECRET)
+        profile_id = first["profiles"][0]["id"]
+        self.store.save(
+            {**self.profile(), "id": profile_id, "credential_required": True},
+            self.store.public()["revision"], "sk-or-v1-replacement")
+        self.assertEqual(
+            self.store.credential(profile_id), "sk-or-v1-replacement")
+
 
 if __name__ == "__main__":
     unittest.main()

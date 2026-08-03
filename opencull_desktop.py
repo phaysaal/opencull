@@ -496,7 +496,7 @@ class DesktopApp:
                 self.welcome,
                 text=(
                     "The OpenCull engine never changes source photographs during culling. "
-                    "Provider credentials stay in macOS Keychain."
+                    "Provider credentials stay in the system credential store."
                 ),
             ).pack(anchor="w", pady=(6, 8))
             welcome_actions = ttk.Frame(self.welcome)
@@ -611,9 +611,17 @@ class DesktopApp:
         frame = ttk.Frame(dialog, padding=18)
         frame.pack(fill="both", expand=True)
         frame.columnconfigure(1, weight=1)
-        kind = tk.StringVar(value="openrouter")
-        name = tk.StringVar(value="OpenRouter")
-        endpoint = tk.StringVar(value="")
+        # Edit the existing profile rather than always composing a new one.
+        # Without this the dialog had no way to reach a saved profile, so each
+        # save appended another copy and a stored credential was invisible.
+        state = self.providers.public()
+        existing = state["profiles"][0] if state["profiles"] else None
+        stored = bool(existing and existing.get("credential") == "stored")
+        kind = tk.StringVar(value=existing["kind"] if existing else "openrouter")
+        name = tk.StringVar(value=existing["name"] if existing else "OpenRouter")
+        endpoint = tk.StringVar(
+            value=existing["endpoint"] if existing and existing["kind"] != "openrouter"
+            else "")
         secret = tk.StringVar(value="")
         defaults = {
             "A": "openai/gpt-5.6-luna-pro",
@@ -621,6 +629,8 @@ class DesktopApp:
             "C": "openai/gpt-4.1-mini",
             "D": "openai/gpt-5.6-luna-pro",
         }
+        if existing:
+            defaults = {**defaults, **existing.get("models", {})}
         models = {agent: tk.StringVar(value=model) for agent, model in defaults.items()}
         ttk.Label(
             frame, text="Provider configuration",
@@ -642,23 +652,37 @@ class DesktopApp:
                 frame, textvariable=variable,
                 show="•" if label == "Credential" else "")
             entry.grid(row=row, column=1, sticky="ew", padx=(10, 0), pady=3)
-        row = 5
+            if label == "Credential" and stored:
+                # Tk has no placeholder, so the stored state is shown beside
+                # the field. It is a label rather than entry text, which could
+                # be submitted and would replace a working key with bullets.
+                ttk.Label(
+                    frame, text="•" * 20 + "  stored — leave blank to keep",
+                    foreground="#2f8f5b").grid(
+                        row=row + 1, column=1, sticky="w", padx=(10, 0))
+        row = 6 if stored else 5
         for agent in ("A", "B", "C", "D"):
             ttk.Label(frame, text=f"Agent {agent} model").grid(
                 row=row, column=0, sticky="w")
             ttk.Entry(frame, textvariable=models[agent], width=46).grid(
                 row=row, column=1, sticky="ew", padx=(10, 0), pady=3)
             row += 1
+        storage = state.get("credential_storage") or {}
+        where = storage.get("label", "the system credential store")
         notice = ttk.Label(
             frame,
-            text="Credentials are written to macOS Keychain and never saved in settings.",
+            text=(
+                f"Credentials are written to {where} and never saved in settings."
+                + ("" if storage.get("protected", True)
+                   else " No system keyring was found.")
+            ),
             wraplength=480)
         notice.grid(row=row, column=0, columnspan=2, sticky="w", pady=(10, 8))
 
         def save() -> None:
             try:
                 provider_kind = kind.get()
-                result = self.providers.save({
+                profile_value = {
                     "name": name.get().strip(),
                     "kind": provider_kind,
                     "endpoint": endpoint.get().strip(),
@@ -666,13 +690,25 @@ class DesktopApp:
                         agent: value.get().strip()
                         for agent, value in models.items()},
                     "credential_required": (
-                        provider_kind == "openrouter" or bool(secret.get())),
+                        provider_kind == "openrouter"
+                        or bool(secret.get()) or stored),
                     "zdr": provider_kind == "openrouter",
                     "cost_note": "",
-                }, self.providers.public()["revision"], secret.get())
-                profile = result["profiles"][-1]
+                }
+                # Updating in place keeps the stored credential when the field
+                # is left blank; omitting the id appended a new profile whose
+                # credential was missing.
+                if existing:
+                    profile_value["id"] = existing["id"]
+                result = self.providers.save(
+                    profile_value, self.providers.public()["revision"],
+                    secret.get())
+                profile = next(
+                    (item for item in result["profiles"]
+                     if item["id"] == profile_value.get("id")),
+                    result["profiles"][-1])
                 self.provider.set(f"{profile['name']} · {profile['kind']}")
-                self.status.set("Provider saved; credential is in macOS Keychain.")
+                self.status.set(f"Provider saved; credential is in {where}.")
                 dialog.destroy()
                 self._refresh()
             except Exception as exc:
