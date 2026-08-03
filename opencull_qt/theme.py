@@ -153,6 +153,32 @@ QProgressBar {{
 }}
 QProgressBar::chunk {{ background: {SAFELIGHT}; }}
 
+/* --- review page --- */
+QListWidget#clusterList {{
+    background: {SURFACE}; border: none;
+    border-right: 1px solid {EDGE_SOFT}; outline: none;
+    padding: 6px 0;
+}}
+QListWidget#clusterList::item {{
+    padding: 9px 12px; color: {MUTED}; border: none;
+}}
+QListWidget#clusterList::item:selected {{
+    background: {RAISED}; color: {PAPER};
+    border-left: 2px solid {SAFELIGHT};
+}}
+QListWidget#clusterList::item:hover {{ background: {RAISED}; }}
+
+QLabel#clusterTitle {{ color: {PAPER}; }}
+QFrame#frame {{
+    background: {SURFACE}; border: 1px solid {EDGE_SOFT}; border-radius: 8px;
+}}
+QFrame#frame:hover {{ background: {RAISED}; border-color: {EDGE}; }}
+QFrame#frame[kept="true"] {{ background: {RAISED}; border-color: {SAFELIGHT}; }}
+QLabel#frameImage {{ background: {INK}; border-radius: 4px; color: {FAINT}; }}
+QLabel#frameName {{ color: {FAINT}; }}
+QLabel#frameNumber {{ color: {MUTED}; }}
+QLabel#frameAi {{ color: {SAFELIGHT}; letter-spacing: 1px; }}
+
 QScrollArea {{ border: none; background: {INK}; }}
 QScrollBar:vertical {{ background: transparent; width: 10px; margin: 0; }}
 QScrollBar::handle:vertical {{

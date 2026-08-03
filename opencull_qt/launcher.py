@@ -21,15 +21,21 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
+from opencull_gui.photos import PhotoStore
 from opencull_gui.project_catalog import ProjectCatalogError
+from opencull_gui.report import load_report
+from opencull_gui.reviews import ReviewStore, default_review_path
 from scan import classify_folder
 
 from . import theme
+from .previews import PreviewLoader
 from .providers import ProvidersDialog
+from .review import ReviewPage
 from .widgets import Row, band, replace_rows
 
 ACTIVE = {"running", "queued"}
@@ -124,6 +130,7 @@ class Launcher(QMainWindow):
         self.services = services
         self.preferred_screen = screen
         self._contents: dict[str, dict] = {}
+        self._loader: PreviewLoader | None = None
         self.setWindowTitle("Darkimiya")
         self.resize(1040, 720)
         self.setMinimumSize(760, 540)
@@ -165,7 +172,13 @@ class Launcher(QMainWindow):
         column.addStretch(1)
         scroll.setWidget(page)
         outer.addWidget(scroll, 1)
-        self.setCentralWidget(central)
+
+        # One window, two pages: the library, and the review of one folder.
+        self.pages = QStackedWidget()
+        self.pages.addWidget(central)
+        self.setCentralWidget(self.pages)
+        self.projects_page = central
+        self.review_page: ReviewPage | None = None
 
     def _chrome(self) -> QWidget:
         bar = QFrame()
@@ -262,6 +275,8 @@ class Launcher(QMainWindow):
         self.notice.show()
 
     def refresh(self) -> None:
+        if self.pages.currentWidget() is not self.projects_page:
+            return
         queue = self.services.jobs.public()
         projects = self.services.projects.public(queue)["projects"]
         active = [job for job in queue["jobs"] if job.get("status") in ACTIVE]
@@ -427,20 +442,46 @@ class Launcher(QMainWindow):
             f"{treatment_label(contents['kind']).lower()} in your browser.")
 
     def open_review(self, project: dict) -> None:
-        report = Path(str(project.get("report", "")))
-        photos = Path(str(project.get("photos", "")))
-        if not report.is_file():
+        """Show the folder's review on the second page of this window."""
+        report_path = Path(str(project.get("report", "")))
+        photos_path = Path(str(project.get("photos", "")))
+        if not report_path.is_file():
             self.report("That report is no longer on disk.", "alarm")
             return
         try:
-            opened = self.services.open_review(report, photos)
+            report = load_report(report_path)
+            photos = PhotoStore(photos_path, self.services.paths.cache / "previews")
+            reviews = ReviewStore(
+                default_review_path(report_path), report, photos.root)
         except Exception as exc:
             self.report(f"The review could not be opened: {exc}", "alarm")
             return
-        # The review workspace is still the web interface; the launcher hands
-        # it over rather than duplicating it.
-        webbrowser.open(str(opened["url"]))
-        self.report(f"Opened {project.get('name', 'the review')} in your browser.")
+        self.show_review(report, photos, reviews)
+
+    def show_review(self, report, photos, reviews) -> None:
+        self._close_review()
+        self._loader = PreviewLoader(photos, self)
+        page = ReviewPage(report, reviews, self._loader)
+        page.closed.connect(self.show_projects)
+        self.review_page = page
+        self.pages.addWidget(page)
+        self.pages.setCurrentWidget(page)
+        page.setFocus()
+
+    def show_projects(self) -> None:
+        self.pages.setCurrentWidget(self.projects_page)
+        self._close_review()
+        self.refresh()
+
+    def _close_review(self) -> None:
+        loader = getattr(self, "_loader", None)
+        if loader is not None:
+            loader.shutdown()
+            self._loader = None
+        if self.review_page is not None:
+            self.pages.removeWidget(self.review_page)
+            self.review_page.deleteLater()
+            self.review_page = None
 
     def cancel(self, job: dict) -> None:
         try:
@@ -467,6 +508,7 @@ class Launcher(QMainWindow):
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt naming
         self._timer.stop()
+        self._close_review()
         self.services.close()
         super().closeEvent(event)
 
