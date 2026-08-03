@@ -301,7 +301,8 @@ class LauncherWindowTests(unittest.TestCase):
     def buttons(self, row):
         from PySide6.QtWidgets import QPushButton
 
-        return [b.text() for b in row.findChildren(QPushButton)]
+        # The remove control is an icon and carries no text.
+        return [b.text() for b in row.findChildren(QPushButton) if b.text()]
 
     def folder(self, window, kind):
         """Pretend a folder holds RAW, rendered, or both."""
@@ -423,6 +424,38 @@ class LauncherWindowTests(unittest.TestCase):
         intents = [call.kwargs["intent"] for call in opened.call_args_list]
         self.assertEqual(intents, ["review", "develop"])
 
+    def test_every_folder_can_be_removed(self):
+        window, _ = self.build(projects=[
+            {"id": "p1", "name": "A", "photos": "/p/a", "available": True}])
+        self.assertTrue(hasattr(self.cards(window)[0], "remove_button"))
+
+    def test_removing_asks_first(self):
+        window, services = self.build(projects=[
+            {"id": "p1", "name": "A", "photos": "/p/a", "available": True}])
+        with mock.patch.object(window, "confirm_remove", return_value=False):
+            window.remove_project({"id": "p1", "name": "A", "photos": "/p/a"})
+        services.projects.remove.assert_not_called()
+
+    def test_removing_forgets_the_folder_once_confirmed(self):
+        window, services = self.build(projects=[
+            {"id": "p1", "name": "A", "photos": "/p/a", "available": True}])
+        with mock.patch.object(window, "confirm_remove", return_value=True):
+            window.remove_project({"id": "p1", "name": "A", "photos": "/p/a"})
+        services.projects.remove.assert_called_once_with("p1")
+
+    def test_removing_says_the_photographs_are_untouched(self):
+        window, _ = self.build(projects=[])
+        with mock.patch.object(window, "confirm_remove", return_value=True):
+            window.remove_project({"id": "p1", "name": "A", "photos": "/p/a"})
+        self.assertIn("untouched", window.notice_text.text())
+
+    def test_removal_never_reaches_the_filesystem(self):
+        # The library entry is the only thing this may touch.
+        source = Path("opencull_qt/launcher.py").read_text(encoding="utf-8")
+        removal = source.split("def remove_project")[1].split("\n    def ")[0]
+        for forbidden in ("unlink", "rmtree", "shutil", "os.remove"):
+            self.assertNotIn(forbidden, removal)
+
     def test_closing_the_window_shuts_the_services_down(self):
         window, services = self.build()
         window.close()
@@ -496,6 +529,62 @@ class ProvidersDialogTests(unittest.TestCase):
         models = self.store.public()["profiles"][0]["models"]
         self.assertEqual(set(models), set(AGENTS))
 
+class CatalogRemovalTests(unittest.TestCase):
+    """Forgetting a folder must never reach the photographs."""
+
+    def setUp(self):
+        self._temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self._temporary.name)
+        self.shoot = self.root / "shoot"
+        self.shoot.mkdir()
+        for index in range(3):
+            (self.shoot / f"DSCF{index:04d}.JPG").write_bytes(b"\xff\xd8\xff\xd9")
+        self.addCleanup(self._temporary.cleanup)
+
+    def catalog(self):
+        from opencull_gui.project_catalog import ProjectCatalog
+
+        return ProjectCatalog(self.root / "projects.json")
+
+    def test_a_removed_folder_leaves_the_library(self):
+        catalog = self.catalog()
+        catalog.add(str(self.shoot))
+        project_id = catalog.public()["projects"][0]["id"]
+        catalog.remove(project_id)
+        self.assertEqual(catalog.public()["projects"], [])
+
+    def test_the_photographs_survive(self):
+        catalog = self.catalog()
+        catalog.add(str(self.shoot))
+        catalog.remove(catalog.public()["projects"][0]["id"])
+        self.assertEqual(len(list(self.shoot.glob("*.JPG"))), 3)
+
+    def test_the_project_manifest_survives_so_the_work_can_come_back(self):
+        catalog = self.catalog()
+        record = catalog.add(str(self.shoot))
+        manifest = Path(str(record.get("project", "")))
+        catalog.remove(catalog.public()["projects"][0]["id"])
+        if manifest.name:
+            self.assertTrue(manifest.is_file())
+
+    def test_adding_the_folder_again_restores_it(self):
+        catalog = self.catalog()
+        catalog.add(str(self.shoot))
+        catalog.remove(catalog.public()["projects"][0]["id"])
+        catalog.add(str(self.shoot))
+        self.assertEqual(len(catalog.public()["projects"]), 1)
+
+    def test_removing_an_unknown_project_is_refused(self):
+        from opencull_gui.project_catalog import ProjectCatalogError
+
+        with self.assertRaises(ProjectCatalogError):
+            self.catalog().remove("nope")
+
+    def test_removal_survives_a_restart(self):
+        catalog = self.catalog()
+        catalog.add(str(self.shoot))
+        catalog.remove(catalog.public()["projects"][0]["id"])
+        self.assertEqual(self.catalog().public()["projects"], [])
 
 if __name__ == "__main__":
     unittest.main()

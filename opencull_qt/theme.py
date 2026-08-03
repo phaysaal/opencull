@@ -158,6 +158,8 @@ QFrame#card {{
 }}
 QFrame#card:hover {{ border-color: {EDGE}; }}
 QLabel#cardName {{ color: {PAPER}; }}
+QPushButton#icon {{ background: transparent; border: none; border-radius: 13px; }}
+QPushButton#icon:hover {{ background: {EDGE_SOFT}; }}
 QLabel#cardCount {{ color: {MUTED}; }}
 
 /* --- review page --- */

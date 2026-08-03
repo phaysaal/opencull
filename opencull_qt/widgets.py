@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from PySide6.QtCore import QRect, Qt, QTimer
-from PySide6.QtGui import QColor, QPainter, QPainterPath
+from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -203,6 +203,45 @@ def replace_rows(layout: QVBoxLayout, widgets: list[QWidget]) -> None:
         layout.addWidget(widget)
 
 
+class IconButton(QPushButton):
+    """A small painted glyph, for an action that needs no word beside it."""
+
+    def __init__(self, glyph: str = "remove", tip: str = "",
+                 parent: QWidget | None = None):
+        super().__init__(parent)
+        self.glyph = glyph
+        self.setObjectName("icon")
+        self.setFixedSize(26, 26)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFlat(True)
+        if tip:
+            self.setToolTip(tip)
+
+    def paintEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        colour = QColor(theme.ALARM if self.underMouse() else theme.FAINT)
+        pen = QPen(colour)
+        pen.setWidth(2)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(pen)
+        # A cross, not a bin: this removes the folder from the library, it
+        # does not destroy anything inside it.
+        box = self.rect().adjusted(9, 9, -9, -9)
+        painter.drawLine(box.topLeft(), box.bottomRight())
+        painter.drawLine(box.topRight(), box.bottomLeft())
+        painter.end()
+
+    def enterEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        super().enterEvent(event)
+        self.update()
+
+    def leaveEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        super().leaveEvent(event)
+        self.update()
+
+
 class Filmstrip(QWidget):
     """Frames from a folder, shown as a short strip of film.
 
@@ -286,6 +325,7 @@ class ProjectCard(QFrame):
         actions: list[tuple[str, Callable[[], None]]] | None = None,
         progress: int | None = None,
         frames: int = 3,
+        on_remove: Callable[[], None] | None = None,
     ):
         super().__init__()
         self.setObjectName("card")
@@ -353,6 +393,12 @@ class ProjectCard(QFrame):
                 button.clicked.connect(lambda _=False, run=handler: run())
                 buttons.addWidget(button)
             buttons.addStretch(1)
+            if on_remove is not None:
+                self.remove_button = IconButton(
+                    tip="Remove from the library. The photographs stay.")
+                self.remove_button.clicked.connect(
+                    lambda _=False: on_remove())
+                buttons.addWidget(self.remove_button)
             body.addLayout(buttons)
 
         body.addStretch(1)

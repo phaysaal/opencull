@@ -227,6 +227,23 @@ class ProjectCatalog:
         ]
         self._state["projects"].insert(0, record)
 
+    def remove(self, project_id: str) -> dict[str, Any]:
+        """Forget a folder without touching anything inside it.
+
+        This removes the library entry only. The photographs, the project
+        manifest, any culling report and any review sidecar all stay where
+        they are, so adding the folder again recovers the work. Nothing in
+        Darkimiya deletes a photograph.
+        """
+        record = self.record_for(project_id)
+        self._state["projects"] = [
+            item for item in self._state["projects"]
+            if item.get("id") != project_id
+        ]
+        self._state["revision"] = int(self._state.get("revision", 0)) + 1
+        self._save()
+        return record
+
     def record_for(self, project_id: str) -> dict[str, Any]:
         for record in self._state["projects"]:
             if record.get("id") == project_id:

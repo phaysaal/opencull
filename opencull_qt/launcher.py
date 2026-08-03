@@ -387,7 +387,8 @@ class Launcher(QMainWindow):
             str(project.get("name", "")),
             short_path(str(project.get("photos", ""))),
             subtitle, label, tone, actions,
-            progress=job_progress(project["culling"]) if running else None)
+            progress=job_progress(project["culling"]) if running else None,
+            on_remove=lambda p=project: self.remove_project(p))
 
         root = str(project.get("photos", ""))
         for position, name in enumerate(contents.get("samples") or []):
@@ -562,6 +563,39 @@ class Launcher(QMainWindow):
             self.pages.removeWidget(self.review_page)
             self.review_page.deleteLater()
             self.review_page = None
+
+    def remove_project(self, project: dict) -> None:
+        """Forget a folder. Nothing inside it is touched."""
+        name = str(project.get("name") or Path(str(project.get("photos", ""))).name)
+        if not self.confirm_remove(name):
+            return
+        try:
+            self.services.projects.remove(str(project.get("id", "")))
+        except (ProjectCatalogError, ValueError) as exc:
+            self.report(str(exc), "alarm")
+            self.refresh()
+            return
+        self._contents.pop(str(project.get("photos", "")), None)
+        self.report(
+            f"{name} was removed from the library. Its photographs, and any "
+            "cull already made, are untouched on disk.")
+        self.refresh()
+
+    def confirm_remove(self, name: str) -> bool:
+        box = QMessageBox(self)
+        box.setWindowTitle("Remove from library?")
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setText(f"Remove {name} from the library?")
+        box.setInformativeText(
+            "Darkimiya forgets this folder. The photographs stay exactly where "
+            "they are, along with any culling report and review already made, "
+            "so adding the folder again brings the work back.\n\n"
+            "Nothing in Darkimiya deletes a photograph.")
+        remove = box.addButton("Remove from library", QMessageBox.ButtonRole.AcceptRole)
+        keep = box.addButton("Keep", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(keep)
+        box.exec()
+        return box.clickedButton() is remove
 
     def cancel(self, job: dict) -> None:
         try:
