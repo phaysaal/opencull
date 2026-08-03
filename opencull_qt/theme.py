@@ -153,6 +153,13 @@ QProgressBar {{
 }}
 QProgressBar::chunk {{ background: {SAFELIGHT}; }}
 
+QFrame#card {{
+    background: {SURFACE}; border: 1px solid {EDGE_SOFT}; border-radius: 10px;
+}}
+QFrame#card:hover {{ border-color: {EDGE}; }}
+QLabel#cardName {{ color: {PAPER}; }}
+QLabel#cardCount {{ color: {MUTED}; }}
+
 /* --- review page --- */
 QListWidget#clusterList {{
     background: {SURFACE}; border: none;

@@ -217,6 +217,53 @@ class FolderClassificationTests(unittest.TestCase):
         write_photo(self.root / "day2" / "A.JPG", size=(40, 30))
         self.assertEqual(scan.classify_folder(self.root)["kind"], "bitmap")
 
+class FolderSampleTests(unittest.TestCase):
+    """The library shows a folder by its frames, so it must name a few."""
+
+    def setUp(self):
+        self._temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self._temporary.name)
+
+    def tearDown(self):
+        self._temporary.cleanup()
+
+    def make(self, count: int, suffix: str = ".JPG") -> dict:
+        for index in range(count):
+            path = self.root / f"DSCF{index:04d}{suffix}"
+            if suffix.lower() in {".jpg", ".jpeg", ".png"}:
+                write_photo(path, size=(40, 30))
+            else:
+                path.write_bytes(b"\0")
+        return scan.classify_folder(self.root)
+
+    def test_a_large_folder_is_sampled_not_truncated(self):
+        result = self.make(30)
+        self.assertEqual(len(result["samples"]), 3)
+        # Spread across the folder, not the first three frames of the shoot.
+        self.assertNotEqual(
+            result["samples"],
+            ["DSCF0000.JPG", "DSCF0001.JPG", "DSCF0002.JPG"])
+
+    def test_a_small_folder_offers_what_it_has(self):
+        self.assertEqual(len(self.make(2)["samples"]), 2)
+
+    def test_an_empty_folder_offers_nothing(self):
+        self.assertEqual(scan.classify_folder(self.root)["samples"], [])
+
+    def test_rendered_files_are_preferred_over_raw(self):
+        write_photo(self.root / "B.JPG", size=(40, 30))
+        (self.root / "A.RAF").write_bytes(b"\0")
+        # A JPEG decodes without a RAW library and is what the camera chose.
+        self.assertEqual(scan.classify_folder(self.root)["samples"], ["B.JPG"])
+
+    def test_a_raw_only_folder_still_offers_samples(self):
+        result = self.make(4, suffix=".RAF")
+        self.assertEqual(len(result["samples"]), 3)
+
+    def test_samples_are_relative_to_the_folder(self):
+        write_photo(self.root / "day2" / "A.JPG", size=(40, 30))
+        self.assertEqual(
+            scan.classify_folder(self.root)["samples"], ["day2/A.JPG"])
 
 if __name__ == "__main__":
     unittest.main()

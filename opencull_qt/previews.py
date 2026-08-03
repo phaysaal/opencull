@@ -12,6 +12,7 @@ next time it is asked for.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, Signal
 from PySide6.QtGui import QPixmap
@@ -26,9 +27,10 @@ class _Signals(QObject):
 
 class _Job(QRunnable):
     def __init__(self, store: PhotoStore, name: str, size: str,
-                 signals: _Signals, generation: int, current):
+                 signals: _Signals, generation: int, current, key: str = ""):
         super().__init__()
         self.store = store
+        self.key = key or name
         self.name = name
         self.size = size
         self.signals = signals
@@ -43,16 +45,16 @@ class _Job(QRunnable):
         try:
             path = self.store.preview(self.name, self.size)
         except (PhotoError, OSError) as exc:
-            self.signals.failed.emit(self.name, self.size, str(exc))
+            self.signals.failed.emit(self.key, self.size, str(exc))
             return
         if self._current() != self.generation:
             return
         pixmap = QPixmap(str(path))
         if pixmap.isNull():
             self.signals.failed.emit(
-                self.name, self.size, "the generated preview could not be read")
+                self.key, self.size, "the generated preview could not be read")
             return
-        self.signals.ready.emit(self.name, self.size, pixmap)
+        self.signals.ready.emit(self.key, self.size, pixmap)
 
 
 class PreviewLoader(QObject):
@@ -61,7 +63,7 @@ class PreviewLoader(QObject):
     ready = Signal(str, str, QPixmap)
     failed = Signal(str, str, str)
 
-    def __init__(self, store: PhotoStore, parent: QObject | None = None,
+    def __init__(self, store: PhotoStore | None, parent: QObject | None = None,
                  cache_size: int = 240):
         super().__init__(parent)
         self.store = store
@@ -110,6 +112,45 @@ class PreviewLoader(QObject):
         self._generation += 1
         self._pool.clear()
         self._pool.waitForDone(3000)
+
+
+class LibraryPreviewLoader(PreviewLoader):
+    """Previews across many folders, sharing one pool and one cache.
+
+    The library shows frames from every folder at once, and each folder has
+    its own PhotoStore because a store is rooted at the photographs it serves.
+    Constructing one loader per folder would mean one thread pool per folder.
+    """
+
+    def __init__(self, cache_root, parent: QObject | None = None,
+                 cache_size: int = 120):
+        super().__init__(store=None, parent=parent, cache_size=cache_size)
+        self.cache_root = cache_root
+        self._stores: dict[str, PhotoStore] = {}
+
+    def store_for(self, root) -> PhotoStore | None:
+        key = str(root)
+        if key not in self._stores:
+            try:
+                self._stores[key] = PhotoStore(
+                    Path(root), Path(self.cache_root) / "previews")
+            except PhotoError:
+                return None
+        return self._stores[key]
+
+    def request_in(self, root, name: str, size: str = "thumb") -> QPixmap | None:
+        """Ask for one photograph, identified by its folder and name."""
+        key = f"{root}\x1f{name}"
+        hit = self._cache.get((key, size))
+        if hit is not None:
+            return hit
+        store = self.store_for(root)
+        if store is None:
+            return None
+        self._pool.start(
+            _Job(store, name, size, self._signals, self._generation,
+                 lambda: self._generation, key=key))
+        return None
 
 
 def scaled(pixmap: QPixmap, width: int, height: int) -> QPixmap:

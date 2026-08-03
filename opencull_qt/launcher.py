@@ -15,6 +15,7 @@ from PySide6.QtGui import QGuiApplication, QIcon
 from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -33,10 +34,10 @@ from opencull_gui.reviews import ReviewStore, default_review_path
 from scan import classify_folder
 
 from . import theme
-from .previews import PreviewLoader
+from .previews import LibraryPreviewLoader, PreviewLoader
 from .providers import ProvidersDialog
 from .review import ReviewPage
-from .widgets import Row, band, replace_rows
+from .widgets import ProjectCard, Row, band, replace_rows
 
 ACTIVE = {"running", "queued"}
 
@@ -131,6 +132,9 @@ class Launcher(QMainWindow):
         self.preferred_screen = screen
         self._contents: dict[str, dict] = {}
         self._loader: PreviewLoader | None = None
+        self._cards: dict[str, ProjectCard] = {}
+        self._library_previews = LibraryPreviewLoader(services.paths.cache, self)
+        self._library_previews.ready.connect(self._library_painted)
         self.setWindowTitle("Darkimiya")
         self.resize(1040, 720)
         self.setMinimumSize(760, 540)
@@ -165,7 +169,7 @@ class Launcher(QMainWindow):
         column.setSpacing(0)
         column.addWidget(self._hero())
 
-        self.library_band, self.library_rows = band("Folders")
+        self.library_band, self.library_grid = self._card_band("Folders")
         self.queue_band, self.queue_rows = band("In progress")
         column.addWidget(self.library_band)
         column.addWidget(self.queue_band)
@@ -179,6 +183,25 @@ class Launcher(QMainWindow):
         self.setCentralWidget(self.pages)
         self.projects_page = central
         self.review_page: ReviewPage | None = None
+
+    @staticmethod
+    def _card_band(title: str) -> tuple[QWidget, QGridLayout]:
+        section = QWidget()
+        layout = QVBoxLayout(section)
+        layout.setContentsMargins(0, 22, 0, 0)
+        layout.setSpacing(12)
+        heading = QLabel(title.upper())
+        heading.setObjectName("bandTitle")
+        heading.setFont(theme.display(8))
+        layout.addWidget(heading)
+        holder = QWidget()
+        grid = QGridLayout(holder)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(16)
+        grid.setVerticalSpacing(16)
+        grid.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        layout.addWidget(holder)
+        return section, grid
 
     def _chrome(self) -> QWidget:
         bar = QFrame()
@@ -300,10 +323,7 @@ class Launcher(QMainWindow):
                 parts.append(f"{reviewed} reviewed")
             self.summary.setText(" · ".join(parts))
 
-        replace_rows(self.library_rows, [
-            self._folder_row(project, index == len(projects) - 1)
-            for index, project in enumerate(projects)
-        ])
+        self._fill_library(projects)
         self.queue_band.setVisible(bool(active))
         replace_rows(self.queue_rows, [
             Row(str(job.get("name") or job.get("kind") or "Job"),
@@ -328,6 +348,63 @@ class Launcher(QMainWindow):
                 except OSError:
                     self._contents[photos] = {"kind": "empty", "total": 0}
         return self._contents[photos]
+
+    def _fill_library(self, projects: list[dict]) -> None:
+        while self.library_grid.count():
+            item = self.library_grid.takeAt(0)
+            if item.widget():
+                item.widget().setParent(None)
+                item.widget().deleteLater()
+        self._cards.clear()
+        # Three across matches the window's default width; the grid rewraps
+        # rather than scrolling sideways when it is narrower.
+        columns = max(1, (self.width() - 56 + 16) // (316 + 16))
+        for index, project in enumerate(projects):
+            card = self._folder_card(project)
+            self._cards[str(project.get("photos", ""))] = card
+            self.library_grid.addWidget(card, index // columns, index % columns)
+
+    def _folder_card(self, project: dict) -> ProjectCard:
+        label, tone = project_state(project)
+        culled = bool(project.get("report_available"))
+        running = tone == "running"
+        actions: list[tuple[str, object]] = []
+        if culled:
+            actions.append(("Review", lambda p=project: self.open_review(p)))
+        contents = self.folder_contents(project)
+        treatment = treatment_label(contents["kind"])
+        if treatment and not running and project.get("available"):
+            actions.append((treatment, lambda p=project: self.develop(p)))
+        if not running and project.get("available"):
+            actions.append((
+                "Re-cull" if culled else "Cull",
+                lambda p=project, again=culled: self.cull_project(p, again)))
+
+        total = int(contents.get("total") or 0)
+        subtitle = (
+            f"{total:,} photograph{'' if total == 1 else 's'}" if total
+            else "no readable photographs")
+        card = ProjectCard(
+            str(project.get("name", "")),
+            short_path(str(project.get("photos", ""))),
+            subtitle, label, tone, actions,
+            progress=job_progress(project["culling"]) if running else None)
+
+        root = str(project.get("photos", ""))
+        for position, name in enumerate(contents.get("samples") or []):
+            pixmap = self._library_previews.request_in(root, name)
+            if pixmap is not None:
+                card.strip.set_frame(position, pixmap)
+        return card
+
+    def _library_painted(self, key: str, size: str, pixmap) -> None:
+        root, _, name = key.partition("\x1f")
+        card = self._cards.get(root)
+        if card is None:
+            return
+        samples = (self._contents.get(root) or {}).get("samples") or []
+        if name in samples:
+            card.strip.set_frame(samples.index(name), pixmap)
 
     def _folder_row(self, project: dict, last: bool) -> Row:
         label, tone = project_state(project)
@@ -509,6 +586,7 @@ class Launcher(QMainWindow):
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt naming
         self._timer.stop()
         self._close_review()
+        self._library_previews.shutdown()
         self.services.close()
         super().closeEvent(event)
 

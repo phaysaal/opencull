@@ -155,22 +155,28 @@ def _announce_sips_fallback() -> None:
     warnings.warn(raw_decoder_status()["detail"], RuntimeWarning, stacklevel=3)
 
 
-def classify_folder(directory: Path, recursive: bool = True) -> dict[str, Any]:
-    """Count what kinds of photograph a folder holds.
+def classify_folder(
+    directory: Path, recursive: bool = True, samples: int = 3,
+) -> dict[str, Any]:
+    """Count what kinds of photograph a folder holds, and name a few.
 
     Which treatment a folder can receive follows from this: RAW files can be
     developed, rendered bitmaps can only be edited, and a folder holding both
     can do either. Counting extensions is a directory walk with no decoding,
     so it stays cheap on a large shoot.
+
+    The sampled names are for showing the folder rather than describing it.
+    They are spread across the folder instead of taken from the front, because
+    the first few frames of a shoot are usually the least representative of it.
     """
-    raw = 0
-    bitmap = 0
+    raw: list[Path] = []
+    bitmap: list[Path] = []
     for path in image_files(directory, recursive):
         suffix = path.suffix.lower()
         if suffix in RAW_EXTENSIONS:
-            raw += 1
+            raw.append(path)
         elif suffix in BITMAP_EXTENSIONS:
-            bitmap += 1
+            bitmap.append(path)
     if raw and bitmap:
         kind = "mixed"
     elif raw:
@@ -179,7 +185,25 @@ def classify_folder(directory: Path, recursive: bool = True) -> dict[str, Any]:
         kind = "bitmap"
     else:
         kind = "empty"
-    return {"raw": raw, "bitmap": bitmap, "total": raw + bitmap, "kind": kind}
+    # Prefer rendered files for the sample: they decode without a RAW library
+    # and are what the camera itself chose to show.
+    pool = bitmap or raw
+    chosen: list[Path] = []
+    if pool and samples > 0:
+        if len(pool) <= samples:
+            chosen = list(pool)
+        else:
+            step = len(pool) / samples
+            chosen = [pool[min(len(pool) - 1, int(index * step))]
+                      for index in range(samples)]
+    return {
+        "raw": len(raw),
+        "bitmap": len(bitmap),
+        "total": len(raw) + len(bitmap),
+        "kind": kind,
+        "samples": [
+            path.relative_to(directory).as_posix() for path in chosen],
+    }
 
 
 def raw_preview(path: Path) -> Image.Image:

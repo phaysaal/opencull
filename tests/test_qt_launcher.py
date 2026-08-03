@@ -97,7 +97,9 @@ class LauncherLogicTests(unittest.TestCase):
 
 
 class FakeServices:
-    def __init__(self, projects=None, jobs=None):
+    def __init__(self, projects=None, jobs=None, cache=None):
+        self.paths = mock.Mock()
+        self.paths.cache = Path(cache or tempfile.mkdtemp())
         self._projects = projects or []
         self._jobs = jobs or []
         self.added: list[str] = []
@@ -153,6 +155,10 @@ class LauncherWindowTests(unittest.TestCase):
         return [
             layout.itemAt(index).widget() for index in range(layout.count())]
 
+    def cards(self, window):
+        grid = window.library_grid
+        return [grid.itemAt(index).widget() for index in range(grid.count())]
+
     def test_an_empty_library_invites_a_folder_instead_of_showing_zero(self):
         window, _ = self.build(projects=[])
         self.assertFalse(window.count.isVisible())
@@ -167,7 +173,7 @@ class LauncherWindowTests(unittest.TestCase):
             {"name": "Wedding", "photos": "/p/w", "available": True,
              "report_available": False},
         ])
-        rows = self.rows(window.library_rows)
+        rows = self.cards(window)
         self.assertEqual([row.name for row in rows], ["600_FUJI", "Wedding"])
         self.assertEqual(rows[0].badge.text(), "CULLED")
         self.assertEqual(rows[1].badge.text(), "NOT CULLED")
@@ -188,16 +194,18 @@ class LauncherWindowTests(unittest.TestCase):
         self.assertEqual(row.badge.text(), "CULLING")
         self.assertEqual(row.meter.value(), 42)
 
-    def test_a_running_folder_advances_its_sprocket(self):
+    def test_a_running_folder_shows_its_progress(self):
         window, _ = self.build(projects=[
             {"name": "A", "photos": "/p/a", "available": True,
-             "culling": {"status": "running"}}])
-        self.assertTrue(self.rows(window.library_rows)[0].sprocket.is_running())
+             "culling": {"status": "running", "log_tail": "40 %"}}])
+        card = self.cards(window)[0]
+        self.assertEqual(card.badge.text(), "CULLING")
+        self.assertEqual(card.meter.value(), 40)
 
-    def test_a_settled_folder_does_not(self):
+    def test_a_settled_folder_has_no_meter(self):
         window, _ = self.build(projects=[
             {"name": "A", "photos": "/p/a", "available": True}])
-        self.assertFalse(self.rows(window.library_rows)[0].sprocket.is_running())
+        self.assertFalse(hasattr(self.cards(window)[0], "meter"))
 
     def test_opening_a_folder_lists_it_without_culling_it(self):
         # Opening enlists the folder; what to do with it is the next choice.
@@ -210,7 +218,7 @@ class LauncherWindowTests(unittest.TestCase):
             return_value={"kind": "raw", "total": 3},
         ):
             window.open_folder()
-        self.assertEqual(len(self.rows(window.library_rows)), 1)
+        self.assertEqual(len(self.cards(window)), 1)
         self.assertEqual(services.added, [], "opening must not queue a cull")
 
     def test_opening_a_folder_says_what_it_found(self):
@@ -245,7 +253,7 @@ class LauncherWindowTests(unittest.TestCase):
             return_value="",
         ):
             window.open_folder()
-        self.assertEqual(len(self.rows(window.library_rows)), 0)
+        self.assertEqual(len(self.cards(window)), 0)
         self.assertEqual(services.added, [])
 
     def test_cancelling_a_job_reaches_the_queue(self):
@@ -305,7 +313,7 @@ class LauncherWindowTests(unittest.TestCase):
         self.folder(window, "raw")
         window.refresh()
         self.assertEqual(
-            self.buttons(self.rows(window.library_rows)[0]), ["Develop", "Cull"])
+            self.buttons(self.cards(window)[0]), ["Develop", "Cull"])
 
     def test_a_jpeg_folder_offers_edit_instead_of_develop(self):
         window, _ = self.build(projects=[
@@ -313,7 +321,7 @@ class LauncherWindowTests(unittest.TestCase):
         self.folder(window, "bitmap")
         window.refresh()
         self.assertEqual(
-            self.buttons(self.rows(window.library_rows)[0]), ["Edit", "Cull"])
+            self.buttons(self.cards(window)[0]), ["Edit", "Cull"])
 
     def test_a_mixed_folder_offers_both_treatments(self):
         window, _ = self.build(projects=[
@@ -321,7 +329,7 @@ class LauncherWindowTests(unittest.TestCase):
         self.folder(window, "mixed")
         window.refresh()
         self.assertIn(
-            "Develop / Edit", self.buttons(self.rows(window.library_rows)[0]))
+            "Develop / Edit", self.buttons(self.cards(window)[0]))
 
     def test_a_folder_with_no_photographs_offers_no_treatment(self):
         window, _ = self.build(projects=[
@@ -329,7 +337,7 @@ class LauncherWindowTests(unittest.TestCase):
         self.folder(window, "empty")
         window.refresh()
         self.assertEqual(
-            self.buttons(self.rows(window.library_rows)[0]), ["Cull"])
+            self.buttons(self.cards(window)[0]), ["Cull"])
 
     def test_a_culled_folder_offers_review_and_recull(self):
         window, _ = self.build(projects=[
@@ -338,8 +346,8 @@ class LauncherWindowTests(unittest.TestCase):
         self.folder(window, "raw")
         window.refresh()
         self.assertEqual(
-            self.buttons(self.rows(window.library_rows)[0]),
-            ["Open review", "Develop", "Re-cull"])
+            self.buttons(self.cards(window)[0]),
+            ["Review", "Develop", "Re-cull"])
 
     def test_a_running_folder_offers_no_second_cull(self):
         window, _ = self.build(projects=[
@@ -347,7 +355,7 @@ class LauncherWindowTests(unittest.TestCase):
              "culling": {"status": "running"}}])
         self.folder(window, "raw")
         window.refresh()
-        self.assertEqual(self.buttons(self.rows(window.library_rows)[0]), [])
+        self.assertEqual(self.buttons(self.cards(window)[0]), [])
 
     def test_culling_a_fresh_folder_asks_nothing(self):
         window, services = self.build(projects=[])

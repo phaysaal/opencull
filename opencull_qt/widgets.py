@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QRect, Qt, QTimer
 from PySide6.QtGui import QColor, QPainter, QPainterPath
 from PySide6.QtWidgets import (
     QFrame,
@@ -201,3 +201,159 @@ def replace_rows(layout: QVBoxLayout, widgets: list[QWidget]) -> None:
             widget.deleteLater()
     for widget in widgets:
         layout.addWidget(widget)
+
+
+class Filmstrip(QWidget):
+    """Frames from a folder, shown as a short strip of film.
+
+    A photographer recognises a shoot by its pictures, not by its folder
+    name, so the library shows the pictures. The perforations are the same
+    signature the rows carried, turned on its side.
+    """
+
+    PERF = 5
+    PITCH = 14
+
+    def __init__(self, count: int = 3, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.count = count
+        self._pixmaps: list = [None] * count
+        self.setMinimumHeight(120)
+        self.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
+    def set_frame(self, index: int, pixmap) -> None:
+        if 0 <= index < self.count:
+            self._pixmaps[index] = pixmap
+            self.update()
+
+    def clear(self) -> None:
+        self._pixmaps = [None] * self.count
+        self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        painter.fillRect(self.rect(), QColor(theme.INK))
+
+        margin = 9
+        window = QRect(
+            0, margin, self.width(), max(0, self.height() - margin * 2))
+        cell = self.width() / self.count if self.count else self.width()
+        for index in range(self.count):
+            box = QRect(
+                int(index * cell), window.top(),
+                int(cell) - 1, window.height())
+            pixmap = self._pixmaps[index]
+            if pixmap is None or pixmap.isNull():
+                painter.fillRect(box, QColor(theme.SURFACE))
+                continue
+            # Fill the cell and crop, so a strip reads as one continuous film
+            # rather than as letterboxed thumbnails.
+            scaled_pixmap = pixmap.scaled(
+                box.size(), Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                Qt.TransformationMode.SmoothTransformation)
+            offset_x = (scaled_pixmap.width() - box.width()) // 2
+            offset_y = (scaled_pixmap.height() - box.height()) // 2
+            painter.drawPixmap(
+                box, scaled_pixmap,
+                QRect(offset_x, offset_y, box.width(), box.height()))
+
+        # Perforations along both edges of the strip.
+        colour = QColor(theme.PAPER)
+        colour.setAlphaF(0.20)
+        painter.setPen(Qt.PenStyle.NoPen)
+        x = 4.0
+        while x < self.width():
+            for top in (2.0, self.height() - margin + 2.0):
+                path = QPainterPath()
+                path.addRoundedRect(x, top, self.PERF, 3.0, 1.0, 1.0)
+                painter.fillPath(path, colour)
+            x += self.PITCH
+        painter.end()
+
+
+class ProjectCard(QFrame):
+    """One folder in the library, shown by its frames."""
+
+    def __init__(
+        self,
+        name: str,
+        path: str,
+        subtitle: str,
+        state_label: str,
+        tone: str = "",
+        actions: list[tuple[str, Callable[[], None]]] | None = None,
+        progress: int | None = None,
+        frames: int = 3,
+    ):
+        super().__init__()
+        self.setObjectName("card")
+        self.name = name
+        self.tone = tone
+        # Uniform, so a grid of folders reads as a grid rather than as a
+        # ragged column: a card carries a meter or buttons, rarely both.
+        self.setFixedSize(316, 268)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        self.strip = Filmstrip(frames)
+        self.strip.setFixedHeight(132)
+        layout.addWidget(self.strip)
+
+        body = QVBoxLayout()
+        body.setContentsMargins(14, 12, 14, 13)
+        body.setSpacing(3)
+
+        header = QHBoxLayout()
+        header.setSpacing(8)
+        title = QLabel(name)
+        title.setObjectName("cardName")
+        title.setFont(theme.body(11, weight=title.font().Weight.DemiBold))
+        header.addWidget(title, 1)
+
+        self.badge = QLabel(state_label.upper())
+        self.badge.setObjectName("rowState")
+        self.badge.setProperty("tone", tone)
+        self.badge.setFont(theme.display(8))
+        header.addWidget(self.badge)
+        body.addLayout(header)
+
+        self.path_label = ElidedLabel(path)
+        self.path_label.setObjectName("rowPath")
+        self.path_label.setFont(theme.mono(8))
+        body.addWidget(self.path_label)
+
+        if subtitle:
+            count = QLabel(subtitle)
+            count.setObjectName("cardCount")
+            count.setFont(theme.body(9))
+            body.addWidget(count)
+
+        if progress is not None:
+            self.meter = QProgressBar()
+            self.meter.setRange(0, 100)
+            self.meter.setValue(max(0, min(100, progress)))
+            self.meter.setTextVisible(False)
+            self.meter.setFixedHeight(3)
+            body.addSpacing(4)
+            body.addWidget(self.meter)
+
+        if actions:
+            body.addSpacing(9)
+            buttons = QHBoxLayout()
+            buttons.setSpacing(7)
+            for label, handler in actions:
+                button = QPushButton(label)
+                button.setObjectName("ghost")
+                button.setCursor(Qt.CursorShape.PointingHandCursor)
+                button.setFont(theme.body(9))
+                button.clicked.connect(lambda _=False, run=handler: run())
+                buttons.addWidget(button)
+            buttons.addStretch(1)
+            body.addLayout(buttons)
+
+        body.addStretch(1)
+        layout.addLayout(body)
