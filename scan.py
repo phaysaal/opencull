@@ -19,6 +19,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import warnings
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -106,8 +107,57 @@ def image_files(directory: Path, recursive: bool) -> list[Path]:
     )
 
 
+RAW_DECODER_ADVICE = (
+    "Install rawpy for fast RAW previews: pip install rawpy"
+)
+SIPS_PREVIEW_EDGE = 2560
+_sips_fallback_announced = False
+
+
+def raw_decoder_status() -> dict[str, Any]:
+    """Describe the RAW decoder this process will use.
+
+    The `sips` path spawns one subprocess per photograph and decodes the whole
+    frame, where rawpy reads the preview already embedded in the file. The
+    difference is large enough that a silent fallback reads to the user as a
+    broken application, so callers surface this in the interface.
+    """
+    if rawpy is not None:
+        return {
+            "decoder": "rawpy",
+            "available": True,
+            "degraded": False,
+            "detail": "rawpy reads embedded RAW previews directly.",
+        }
+    if shutil.which("sips"):
+        return {
+            "decoder": "sips",
+            "available": True,
+            "degraded": True,
+            "detail": (
+                "rawpy is missing, so RAW previews fall back to the macOS "
+                f"`sips` tool: one subprocess per photograph. {RAW_DECODER_ADVICE}"
+            ),
+        }
+    return {
+        "decoder": None,
+        "available": False,
+        "degraded": True,
+        "detail": f"No RAW decoder is available. {RAW_DECODER_ADVICE}",
+    }
+
+
+def _announce_sips_fallback() -> None:
+    global _sips_fallback_announced
+    if _sips_fallback_announced:
+        return
+    _sips_fallback_announced = True
+    warnings.warn(raw_decoder_status()["detail"], RuntimeWarning, stacklevel=3)
+
+
 def raw_preview(path: Path) -> Image.Image:
     if rawpy is None:
+        _announce_sips_fallback()
         return sips_preview(path)
     with rawpy.imread(str(path)) as raw:
         try:
@@ -128,12 +178,12 @@ def sips_preview(path: Path) -> Image.Image:
     executable = shutil.which("sips")
     if not executable:
         raise RuntimeError(
-            "RAW decoding needs optional rawpy or the macOS `sips` tool")
+            f"RAW decoding needs rawpy or the macOS `sips` tool. {RAW_DECODER_ADVICE}")
     with tempfile.TemporaryDirectory(prefix="opencull-raw-") as directory:
         output = Path(directory) / "preview.jpg"
         result = subprocess.run(
             [
-                executable, "-s", "format", "jpeg", "-Z", "1024",
+                executable, "-s", "format", "jpeg", "-Z", str(SIPS_PREVIEW_EDGE),
                 str(path), "--out", str(output),
             ],
             capture_output=True, text=True, timeout=180,

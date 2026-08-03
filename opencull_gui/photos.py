@@ -14,7 +14,7 @@ from typing import Any
 
 from PIL import Image, ImageOps
 
-from scan import open_preview
+from scan import open_preview, raw_decoder_status
 
 from .branding import PROJECT_DIRECTORY_NAME
 
@@ -26,6 +26,8 @@ class PhotoError(ValueError):
 class PhotoStore:
     SIZES = {"thumb": 520, "detail": 2400}
 
+    STATS_TTL = 5.0
+
     def __init__(self, root: Path, cache: Path):
         self.root = root.expanduser().resolve()
         if not self.root.is_dir():
@@ -34,6 +36,9 @@ class PhotoStore:
         self.cache.mkdir(parents=True, exist_ok=True)
         self._locks: dict[str, threading.Lock] = {}
         self._locks_guard = threading.Lock()
+        self._stats_guard = threading.Lock()
+        self._stats: dict[str, int] | None = None
+        self._stats_at = 0.0
 
     def resolve(self, name: str) -> Path:
         if not self.root.is_dir():
@@ -97,7 +102,32 @@ class PhotoStore:
             return None
         return destination
 
+    def _write_preview(
+        self, image: Image.Image, destination: Path, size_name: str
+    ) -> None:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        temporary = destination.with_suffix(
+            f".{os.getpid()}.{threading.get_ident()}.tmp")
+        try:
+            image.save(
+                temporary,
+                format="JPEG",
+                quality=88 if size_name == "detail" else 80,
+                optimize=True,
+            )
+            temporary.replace(destination)
+        except Exception:
+            temporary.unlink(missing_ok=True)
+            raise
+        self._record_generated(destination)
+
     def generate_preview(self, name: str, size_name: str) -> Path:
+        """Decode the source once and write every preview size from it.
+
+        Decoding a RAW dominates preview cost, so deriving the smaller sizes
+        from the largest downscale rather than re-decoding per size halves the
+        work for the grid-then-detail sequence the reviewer actually performs.
+        """
         if size_name not in self.SIZES:
             raise PhotoError(f"unsupported preview size: {size_name}")
         source = self.resolve(name)
@@ -105,43 +135,93 @@ class PhotoStore:
         cached = self.cached_preview(name, size_name)
         if cached:
             return cached
+        # Keyed by source, not by target: one decode now serves every size, so
+        # concurrent requests for thumb and detail must not both decode.
         with self._locks_guard:
-            lock = self._locks.setdefault(str(destination), threading.Lock())
+            lock = self._locks.setdefault(str(source), threading.Lock())
         with lock:
             cached = self.cached_preview(name, size_name)
             if cached:
                 return cached
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            temporary = destination.with_suffix(".tmp")
             try:
-                image = open_preview(source)
-                image = ImageOps.exif_transpose(image).convert("RGB")
-                image.thumbnail(
-                    (self.SIZES[size_name], self.SIZES[size_name]),
-                    Image.Resampling.LANCZOS,
-                )
-                image.save(
-                    temporary,
-                    format="JPEG",
-                    quality=88 if size_name == "detail" else 80,
-                    optimize=True,
-                )
-                temporary.replace(destination)
+                decoded = open_preview(source)
+                image = (ImageOps.exif_transpose(decoded) or decoded).convert("RGB")
             except Exception as exc:
-                temporary.unlink(missing_ok=True)
                 raise PhotoError(
                     f"could not create preview for {name}: {exc}") from exc
+            # Largest first, so each smaller size downscales the previous
+            # result in place instead of the full-resolution decode.
+            for other_name, edge in sorted(
+                self.SIZES.items(), key=lambda item: -item[1]
+            ):
+                image.thumbnail((edge, edge), Image.Resampling.LANCZOS)
+                target = self._cache_path(source, other_name)
+                if other_name != size_name and target.is_file():
+                    continue
+                try:
+                    self._write_preview(image, target, other_name)
+                except Exception as exc:
+                    if other_name == size_name:
+                        raise PhotoError(
+                            f"could not create preview for {name}: {exc}") from exc
+                    # A size the caller did not ask for is opportunistic.
         return destination
 
-    def cache_stats(self) -> dict[str, int]:
+    def _scan_cache_stats(self) -> dict[str, int]:
         files = list(self.cache.rglob("*.jpg")) if self.cache.exists() else []
-        return {
-            "files": len(files),
-            "bytes": sum(path.stat().st_size for path in files if path.is_file()),
-        }
+        total = 0
+        count = 0
+        for path in files:
+            try:
+                total += path.stat().st_size
+            except OSError:  # Removed between listing and stat.
+                continue
+            count += 1
+        return {"files": count, "bytes": total}
+
+    def _record_generated(self, destination: Path) -> None:
+        """Fold one new preview into the cached totals.
+
+        Keeps ``cache_stats`` off the filesystem in the common case; the
+        periodic rescan corrects any drift from external deletions.
+        """
+        try:
+            size = destination.stat().st_size
+        except OSError:
+            return
+        with self._stats_guard:
+            if self._stats is not None:
+                self._stats = {
+                    "files": self._stats["files"] + 1,
+                    "bytes": self._stats["bytes"] + size,
+                }
+
+    def cache_stats(self) -> dict[str, int]:
+        """Report generated-preview totals.
+
+        This is read by the preview status payload, which the interface polls
+        continuously, so a full directory walk per call cost O(library) on every
+        tick. Totals are maintained incrementally and rescanned on a timer.
+        """
+        now = time.monotonic()
+        with self._stats_guard:
+            fresh = (
+                self._stats is not None
+                and now - self._stats_at < self.STATS_TTL
+            )
+            if fresh:
+                return dict(self._stats or {})
+        scanned = self._scan_cache_stats()
+        with self._stats_guard:
+            self._stats = scanned
+            self._stats_at = now
+            return dict(scanned)
 
     def clear_cache(self) -> dict[str, int]:
         before = self.cache_stats()
+        with self._stats_guard:
+            self._stats = {"files": 0, "bytes": 0}
+            self._stats_at = time.monotonic()
         if self.cache.exists():
             for child in self.cache.iterdir():
                 if child.is_dir():
@@ -166,14 +246,26 @@ class PreviewTask:
 class PreviewManager:
     """Bounded priority scheduler for lazy preview generation."""
 
+    @staticmethod
+    def default_workers() -> int:
+        """Pick a worker count from the machine rather than a fixed 2.
+
+        Two was chosen when every RAW preview was a full decode holding a
+        full-resolution array. Reading the embedded preview costs far less
+        memory, so leaving cores idle only slows the first screen.
+        """
+        return max(2, min(6, (os.cpu_count() or 4) - 2))
+
     def __init__(
         self,
         store: PhotoStore,
-        workers: int = 2,
+        workers: int | None = None,
         max_pending: int = 256,
         stall_timeout: float = 60.0,
     ):
         self.store = store
+        if workers is None:
+            workers = self.default_workers()
         self.workers = max(1, min(8, int(workers)))
         self.max_pending = max(16, int(max_pending))
         self.stall_timeout = max(0.01, float(stall_timeout))
@@ -376,6 +468,10 @@ class PreviewManager:
                 "workers": self.workers,
                 "max_pending": self.max_pending,
                 "cache": self.store.cache_stats(),
+                # A degraded RAW decoder is the difference between previews
+                # that appear instantly and previews that take minutes, so the
+                # interface reports it instead of merely feeling slow.
+                "decoder": raw_decoder_status(),
             }
 
     def _worker(self, worker_id: int) -> None:

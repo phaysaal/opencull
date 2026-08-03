@@ -1,3 +1,9 @@
 numpy>=1.26
 Pillow>=10.0
 tifffile>=2023
+# rawpy reads the preview embedded in a RAW file. Without it, RAW previews fall
+# back to one macOS `sips` subprocess per photograph, which is slow enough to
+# read as a broken application, and unavailable on Linux and Windows.
+rawpy>=0.19
+# Face grouping (opencull_gui/faces.py) and the release smoke test import cv2.
+opencv-python-headless>=4.10

@@ -58,8 +58,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--preview-workers",
         type=int,
-        default=2,
-        help="bounded background preview workers (default: 2, maximum: 8)",
+        default=None,
+        help=(
+            "bounded background preview workers "
+            "(default: scaled to this machine, maximum: 8)"
+        ),
     )
     parser.add_argument(
         "--jobs",

@@ -43,6 +43,9 @@ hiddenimports = (
         "darktable_engine",
         "recipe_compiler",
         "cv2", "PIL._tkinter_finder",
+        # rawpy carries the LibRaw extension. Omitting it produced a bundle
+        # that silently fell back to one `sips` subprocess per photograph.
+        "rawpy", "rawpy._rawpy",
     ]
 )
 

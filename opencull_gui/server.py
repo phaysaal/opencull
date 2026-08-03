@@ -82,7 +82,7 @@ class ReviewServer(ThreadingHTTPServer):
         reviews: ReviewStore,
         measurements: dict | None = None,
         manifest_path: str | None = None,
-        preview_workers: int = 2,
+        preview_workers: int | None = None,
         jobs: JobManager | None = None,
         providers: ProviderStore | None = None,
         faces: FaceStore | None = None,

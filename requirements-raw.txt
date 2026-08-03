@@ -1,2 +1,3 @@
+# Retained for compatibility. rawpy is now a base requirement because RAW
+# preview decoding depends on it on every platform.
 -r requirements.txt
-rawpy>=0.19

@@ -23,11 +23,21 @@ fi
 # The build environment is intentionally reusable, but OpenCull's packaged
 # runtime grows as features are added.  Keep an existing environment in sync
 # instead of producing an application that only fails when a worker starts.
-if ! "$python_bin" -c 'import numpy, PIL, tifffile' 2>/dev/null; then
+#
+# Probe every runtime import the bundle needs, not only the ones that happened
+# to be declared first: an environment missing rawpy builds successfully and
+# then decodes every RAW through a `sips` subprocess.
+if ! "$python_bin" -c 'import numpy, PIL, tifffile, rawpy, cv2' 2>/dev/null; then
   echo "Synchronizing native runtime dependencies..."
   "$python_bin" -m pip install \
     --disable-pip-version-check \
     -r "$project_dir/requirements.txt"
+fi
+
+if ! "$python_bin" -c 'import numpy, PIL, tifffile, rawpy, cv2' 2>/dev/null; then
+  echo "error: runtime dependencies are still missing after installation." >&2
+  "$python_bin" -c 'import numpy, PIL, tifffile, rawpy, cv2' >&2 || true
+  exit 2
 fi
 
 compiler_version=$(swift --version | head -1)
