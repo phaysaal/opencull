@@ -4390,6 +4390,17 @@ dialog[open] { animation: dialog-enter 140ms ease-out; }
   background: #123427;
   border-color: #28684a;
 }
+/* A stored credential renders as dots in the placeholder. The field is still
+   empty, so the dots are styled to read as an existing value rather than as
+   the dimmed hint an ordinary placeholder would look like. */
+#provider-secret.has-stored-credential::placeholder {
+  color: #8fe4ba;
+  opacity: 1;
+  letter-spacing: .12em;
+}
+#provider-secret.has-stored-credential {
+  border-color: #28684a;
+}
 .provider-trust-badge.zdr {
   color: #b9dfff;
   background: #172f47;

@@ -1015,11 +1015,31 @@ function renderProviderTrust(profile = selectedProviderProfile()) {
   const credential = $("#provider-credential-badge");
   credential.textContent = credentialState;
   credential.className = `provider-trust-badge ${credentialTone}`;
+  // A stored key shows as dots in the placeholder, never as a value: a value
+  // would be submitted as though it were the secret itself. The field stays
+  // genuinely empty, so leaving it alone keeps what is stored.
+  const secretField = $("#provider-secret");
+  if (profile?.credential === "stored") {
+    secretField.placeholder = "•".repeat(24);
+    secretField.classList.add("has-stored-credential");
+  } else {
+    secretField.placeholder = $("#provider-credential-required").checked
+      ? "Paste the API key for this provider"
+      : "Optional for this provider";
+    secretField.classList.remove("has-stored-credential");
+  }
+  const storage = state.providers?.credential_storage;
+  const storageNote = storage
+    ? ` Stored in ${storage.label}.`
+      + (storage.protected ? "" : " No system keyring was found.")
+    : "";
   $("#provider-secret-help").textContent = profile?.credential === "stored"
-    ? "A credential is stored. Its value cannot be displayed; leave this blank to keep it."
+    ? "A credential is stored. Its value cannot be displayed;"
+      + " leave this blank to keep it." + storageNote
     : $("#provider-credential-required").checked
       ? "A credential must be supplied before this profile can be saved."
-      : "Optional credentials are still stored only in macOS Keychain.";
+        + storageNote
+      : "Optional." + (storageNote || " Credentials are never shown again once saved.");
   $("#provider-editor-title").textContent =
     $("#provider-name").value.trim() || "New provider profile";
 }
