@@ -16,6 +16,7 @@ import webbrowser
 from collections.abc import Sequence
 from pathlib import Path
 
+from opencull_gui import dialogs
 from opencull_gui.faces import FaceStore, default_face_db
 from opencull_gui.jobs import JobManager
 from opencull_gui.macos import InstanceLock, MacOSPaths, resource_root
@@ -780,8 +781,13 @@ class DesktopApp:
         job = self._selected_job()
         if not job:
             return
+        from tkinter import messagebox
+
         target = Path(job["output"]) if Path(job["output"]).exists() else Path(job["photos"])
-        subprocess.run(["open", "-R", str(target)], check=False)
+        try:
+            dialogs.reveal(target)
+        except dialogs.DialogError as exc:
+            messagebox.showerror("Darkimiya", str(exc))
 
     def _refresh(self) -> None:
         labels, _mapping = self._provider_choices()
