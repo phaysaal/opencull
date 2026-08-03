@@ -10,8 +10,6 @@ import os
 import re
 import secrets
 import shutil
-import subprocess
-import sys
 import tempfile
 import threading
 from datetime import UTC, datetime
@@ -28,6 +26,7 @@ from darktable_engine import render_darktable_default
 from development_engine import _srgb_to_linear_rec2020, render_recipe
 from recipe_compiler import compile_recipe
 
+from . import dialogs
 from .actions import ActionController, ActionError, export_bytes
 from .faces import FaceError, FaceStore
 from .jobs import JobError, JobManager
@@ -132,6 +131,10 @@ class ReviewServer(ThreadingHTTPServer):
             **report.public_payload(photos.root),
             "measurements": measurements or {},
             "manifest_path": manifest_path,
+            # Folder and file choosers depend on what the desktop provides.
+            # Reporting this lets the interface disable a button with a reason
+            # instead of offering one that fails when pressed.
+            "chooser": dialogs.status(),
             "raw_source": self.raw_sources.public(),
             "project": {**self.project, "path": str(self.project_path),
                          "sha256": project_sha256(self.project_path)},
@@ -363,21 +366,11 @@ class ReviewServer(ThreadingHTTPServer):
 
     def import_development_recipe(self) -> dict:
         """Choose and register a portable, executable local development recipe."""
-        if sys.platform != "darwin":
-            raise JobError("native recipe selection is available only on macOS")
-        result = subprocess.run(
-            [
-                "osascript", "-e",
-                'POSIX path of (choose file with prompt "Import a Darkimiya recipe" '
-                'of type {"public.json"})',
-            ],
-            capture_output=True, text=True, timeout=300, check=False,
-        )
-        if result.returncode != 0:
-            if "-128" in result.stderr:
-                raise JobError("recipe selection was cancelled")
-            raise JobError(f"recipe chooser failed: {result.stderr.strip()}")
-        path = Path(result.stdout.strip()).expanduser().resolve()
+        try:
+            chosen = dialogs.choose_files("Import a Darkimiya recipe")[0]
+        except dialogs.DialogError as exc:
+            raise JobError(str(exc)) from exc
+        path = Path(chosen).expanduser().resolve()
         if not path.is_file() or path.stat().st_size > 2 * 1024 * 1024:
             raise ValueError("recipe must be an available JSON file smaller than 2 MiB")
         try:
@@ -1166,19 +1159,15 @@ class ReviewHandler(BaseHTTPRequestHandler):
                 }
                 if str(requested) not in exports or not requested.is_file():
                     raise ValueError("exported file is not linked to this project")
-                if sys.platform != "darwin":
-                    raise ValueError("Finder reveal is available only on macOS")
-                subprocess.Popen(["open", "-R", str(requested)])
+                dialogs.reveal(requested)
                 self._json({"path": str(requested)})
                 return
             if parsed.path == "/api/export/pick-folder":
-                if sys.platform != "darwin":
-                    raise JobError("native destination selection is available only on macOS")
-                result = subprocess.run(["osascript", "-e", 'POSIX path of (choose folder with prompt "Choose export folder")'],
-                                        capture_output=True, text=True, timeout=300, check=False)
-                if result.returncode != 0:
-                    raise JobError("destination selection was cancelled")
-                self._json({"path": result.stdout.strip()})
+                try:
+                    chosen = dialogs.choose_folder("Choose export folder")
+                except dialogs.DialogError as exc:
+                    raise JobError(str(exc)) from exc
+                self._json({"path": chosen})
                 return
             if parsed.path == "/api/development/import-recipe":
                 self._json(self.server.import_development_recipe())
@@ -1411,107 +1400,48 @@ class ReviewHandler(BaseHTTPRequestHandler):
                 self._json(result)
                 return
             elif parsed.path == "/api/jobs/pick-folder":
-                if sys.platform != "darwin":
-                    raise JobError("native folder selection is available only on macOS")
-                result = subprocess.run(
-                    [
-                        "osascript", "-e",
-                        'POSIX path of (choose folder with prompt '
-                        '"Choose a folder of photographs to cull")',
-                    ],
-                    capture_output=True, text=True, timeout=300, check=False,
-                )
-                if result.returncode != 0:
-                    if "-128" in result.stderr:
-                        raise JobError("folder selection was cancelled")
-                    raise JobError(
-                        f"folder chooser failed: {result.stderr.strip()}")
-                self._json({"photos": result.stdout.strip().rstrip("/")})
+                try:
+                    chosen = dialogs.choose_folder(
+                        "Choose a folder of photographs to cull")
+                except dialogs.DialogError as exc:
+                    raise JobError(str(exc)) from exc
+                self._json({"photos": chosen})
                 return
             elif parsed.path == "/api/jobs/pick-style-photos":
-                if sys.platform != "darwin":
-                    raise JobError("native file selection is available only on macOS")
-                script = (
-                    'set picked to choose file with prompt "Add finished photographs" '
-                    'of type {"public.image"} with multiple selections allowed\n'
-                    'set output to ""\n'
-                    'repeat with itemRef in picked\n'
-                    'set output to output & (POSIX path of itemRef) & linefeed\n'
-                    'end repeat\n'
-                    'return output'
-                )
-                result = subprocess.run(
-                    ["osascript", "-e", script],
-                    capture_output=True, text=True, timeout=300, check=False,
-                )
-                if result.returncode != 0:
-                    if "-128" in result.stderr:
-                        raise JobError("file selection was cancelled")
-                    raise JobError(
-                        f"file chooser failed: {result.stderr.strip()}")
-                photos = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+                try:
+                    photos = dialogs.choose_files(
+                        "Add finished photographs",
+                        image_only=True, multiple=True)
+                except dialogs.DialogError as exc:
+                    raise JobError(str(exc)) from exc
                 self._json({"photos": photos})
                 return
             elif parsed.path == "/api/jobs/pick-style-profile":
-                if sys.platform != "darwin":
-                    raise JobError("native file selection is available only on macOS")
-                result = subprocess.run(
-                    [
-                        "osascript", "-e",
-                        'POSIX path of (choose file with prompt '
-                        '"Choose an existing personal style profile" of type '
-                        '{"public.json"})',
-                    ],
-                    capture_output=True, text=True, timeout=300, check=False,
-                )
-                if result.returncode != 0:
-                    if "-128" in result.stderr:
-                        raise JobError("file selection was cancelled")
-                    raise JobError(
-                        f"file chooser failed: {result.stderr.strip()}")
-                self._json({"existing": result.stdout.strip()})
+                try:
+                    chosen = dialogs.choose_files(
+                        "Choose an existing personal style profile")[0]
+                except dialogs.DialogError as exc:
+                    raise JobError(str(exc)) from exc
+                self._json({"existing": chosen})
                 return
             elif parsed.path == "/api/jobs/pick-style-output":
-                if sys.platform != "darwin":
-                    raise JobError("native file selection is available only on macOS")
-                result = subprocess.run(
-                    [
-                        "osascript", "-e",
-                        'POSIX path of (choose file name with prompt '
-                        '"Save the personal style profile" default name '
-                        '"personal-style-profile-v2.json")',
-                    ],
-                    capture_output=True, text=True, timeout=300, check=False,
-                )
-                if result.returncode != 0:
-                    if "-128" in result.stderr:
-                        raise JobError("file selection was cancelled")
-                    raise JobError(
-                        f"save chooser failed: {result.stderr.strip()}")
-                output = result.stdout.strip()
+                try:
+                    output = dialogs.choose_save_path(
+                        "Save the personal style profile",
+                        "personal-style-profile-v2.json")
+                except dialogs.DialogError as exc:
+                    raise JobError(str(exc)) from exc
                 if Path(output).suffix.casefold() != ".json":
                     output += ".json"
                 self._json({"output": output})
                 return
             elif parsed.path == "/api/raw-source/pick":
-                if sys.platform != "darwin":
-                    raise RawSourceError(
-                        "native folder selection is available only on macOS")
-                result = subprocess.run(
-                    [
-                        "osascript", "-e",
-                        'POSIX path of (choose folder with prompt '
-                        '"Choose the folder containing RAW originals")',
-                    ],
-                    capture_output=True, text=True, timeout=300, check=False,
-                )
-                if result.returncode != 0:
-                    if "-128" in result.stderr:
-                        raise RawSourceError("folder selection was cancelled")
-                    raise RawSourceError(
-                        f"folder chooser failed: {result.stderr.strip()}")
-                state = self.server.raw_sources.configure(
-                    Path(result.stdout.strip().rstrip("/")))
+                try:
+                    chosen = dialogs.choose_folder(
+                        "Choose the folder containing RAW originals")
+                except dialogs.DialogError as exc:
+                    raise RawSourceError(str(exc)) from exc
+                state = self.server.raw_sources.configure(Path(chosen))
                 self.server.payload["raw_source"] = state
                 self.server.project = register_file_artifact(
                     self.server.project_path, "raw_source_map",
@@ -1528,24 +1458,12 @@ class ReviewHandler(BaseHTTPRequestHandler):
                 self._json(state)
                 return
             elif parsed.path == "/api/action/pick-destination":
-                if sys.platform != "darwin":
-                    raise ActionError(
-                        "native folder selection is available only on macOS")
-                result = subprocess.run(
-                    [
-                        "osascript", "-e",
-                        'POSIX path of (choose folder with prompt '
-                        '"Choose a destination for selected photographs")',
-                    ],
-                    capture_output=True, text=True, timeout=300, check=False,
-                )
-                if result.returncode != 0:
-                    if "-128" in result.stderr:
-                        raise ActionError("folder selection was cancelled")
-                    raise ActionError(
-                        f"folder chooser failed: {result.stderr.strip()}")
-                self._json({
-                    "destination": result.stdout.strip().rstrip("/")})
+                try:
+                    chosen = dialogs.choose_folder(
+                        "Choose a destination for selected photographs")
+                except dialogs.DialogError as exc:
+                    raise ActionError(str(exc)) from exc
+                self._json({"destination": chosen})
                 return
             elif parsed.path == "/api/providers/save":
                 if self.server.providers is None:

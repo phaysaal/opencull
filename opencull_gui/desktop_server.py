@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import platform
 import secrets
-import subprocess
 from collections.abc import Callable
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -13,6 +12,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from . import dialogs
 from .jobs import JobError, JobManager
 from .project_catalog import ProjectCatalog, ProjectCatalogError
 from .providers import ProviderError, ProviderStore
@@ -246,7 +246,10 @@ class DesktopBridgeHandler(BaseHTTPRequestHandler):
                 target = Path(str(body.get("path", ""))).expanduser().resolve()
                 if not target.exists():
                     raise JobError("the item to reveal no longer exists")
-                subprocess.Popen(["open", "-R", str(target)])
+                try:
+                    dialogs.reveal(target)
+                except dialogs.DialogError as exc:
+                    raise JobError(str(exc)) from exc
                 result = {"ok": True}
             else:
                 self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)

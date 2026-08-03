@@ -9,6 +9,7 @@ import json
 import os
 import secrets
 import shutil
+import sys
 import tempfile
 import threading
 from copy import deepcopy
@@ -194,12 +195,47 @@ def _destination_for(
 
 
 def _trash_root_for(source: Path, batch_name: str) -> Path:
-    """Return the recoverable macOS Trash directory on the source volume."""
+    """Return a recoverable trash directory for the volume holding ``source``.
+
+    Each platform has its own convention, and using the wrong one puts
+    photographs somewhere the person cannot restore them from. macOS keeps
+    the behaviour that shipped. Linux follows the XDG trash specification.
+    Windows has no scriptable Recycle Bin without an extra dependency, so
+    files go to a clearly named, recoverable folder under the user profile
+    rather than pretending to reach the bin.
+    """
     resolved = source.resolve()
     parts = resolved.parts
-    if len(parts) >= 3 and parts[1] == "Volumes":
-        return Path("/Volumes") / parts[2] / ".Trashes" / str(os.getuid()) / batch_name
-    return Path.home() / ".Trash" / batch_name
+    if sys.platform == "darwin":
+        if len(parts) >= 3 and parts[1] == "Volumes":
+            return (
+                Path("/Volumes") / parts[2] / ".Trashes"
+                / str(os.getuid()) / batch_name
+            )
+        return Path.home() / ".Trash" / batch_name
+    if sys.platform == "win32":
+        return Path.home() / "Darkimiya Trash" / batch_name
+    # XDG: the home trash is ~/.local/share/Trash; a separate volume keeps its
+    # own .Trash-<uid> at the mount point so that a move stays on one device.
+    data_home = os.environ.get("XDG_DATA_HOME", "").strip()
+    home_trash = (
+        Path(data_home) / "Trash"
+        if data_home and Path(data_home).is_absolute()
+        else Path.home() / ".local" / "share" / "Trash"
+    )
+    mount = _mount_point_for(resolved)
+    if mount != _mount_point_for(Path.home()):
+        return mount / f".Trash-{os.getuid()}" / "files" / batch_name
+    return home_trash / "files" / batch_name
+
+
+def _mount_point_for(path: Path) -> Path:
+    """Return the mount point containing ``path``."""
+    candidate = path if path.exists() else _nearest_existing(path)
+    candidate = candidate.resolve()
+    while not os.path.ismount(candidate) and candidate != candidate.parent:
+        candidate = candidate.parent
+    return candidate
 
 
 def build_plan(

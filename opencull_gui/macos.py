@@ -1,4 +1,9 @@
-"""macOS application paths, bundled resources, and single-instance ownership."""
+"""Application paths, bundled resources, and single-instance ownership.
+
+The paths are resolved per platform by :mod:`opencull_gui.appdirs`; macOS
+keeps the locations that shipped. The module and class names are retained
+because they are referenced across the desktop launcher and its tests.
+"""
 
 from __future__ import annotations
 
@@ -9,11 +14,13 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-APP_NAME = "Darkimiya"
-APP_SUPPORT = Path.home() / "Library" / "Application Support" / APP_NAME
-APP_CACHE = Path.home() / "Library" / "Caches" / APP_NAME
-APP_LOGS = Path.home() / "Library" / "Logs" / APP_NAME
-LEGACY_APP_SUPPORT = Path.home() / "Library" / "Application Support" / "OpenCull"
+from .appdirs import APP_NAME as APP_NAME  # re-exported for existing importers
+from .appdirs import cache_dir, legacy_support_dir, logs_dir, support_dir
+
+APP_SUPPORT = support_dir()
+APP_CACHE = cache_dir()
+APP_LOGS = logs_dir()
+LEGACY_APP_SUPPORT = legacy_support_dir()
 
 
 def resource_root() -> Path:
