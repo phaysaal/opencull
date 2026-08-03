@@ -2,31 +2,35 @@
 
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 import os
 import re
-import signal
 import subprocess
 import sys
 import tempfile
 import threading
-import time
 import uuid
+from collections.abc import Callable
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from .project import (
-    ensure_project_layout, load_or_create_folder_project, load_project,
-    register_file_artifact, register_job_output, update_project,
+    ensure_project_layout,
+    load_or_create_folder_project,
+    load_project,
+    register_file_artifact,
+    register_job_output,
+    update_project,
 )
 from .providers import (
-    DEFAULT_JUDGMENT_POLICY, ProviderError, ProviderStore,
+    DEFAULT_JUDGMENT_POLICY,
+    ProviderError,
+    ProviderStore,
     normalize_judgment_policy,
 )
-
 
 QUEUE_FORMAT = "opencull-job-queue-v1"
 ACTIVE = {"running", "stopping", "detached"}
@@ -39,7 +43,7 @@ class JobError(ValueError):
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _atomic_json(path: Path, value: dict[str, Any]) -> None:
@@ -1113,7 +1117,8 @@ class JobManager:
                    "created_at": _now(), "started_at": None, "finished_at": None, "exit_code": None,
                    "provider_profile_name": "Local deterministic renderer", "provider_kind": "local",
                    "provider_privacy": "local"}
-            self._state["jobs"].append(job); self._save()
+            self._state["jobs"].append(job)
+            self._save()
         self._wake.set()
         return self.public()
 

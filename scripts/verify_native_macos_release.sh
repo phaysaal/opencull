@@ -17,8 +17,17 @@ mkdir -p "$receipt_dir"
 identifier=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$plist")
 version=$(/usr/libexec/PlistBuddy -c \
   "Print :CFBundleShortVersionString" "$plist")
-[[ "$identifier" == "org.darkimiya.Darkimiya" ]]
-[[ "$version" == "0.13.0" ]]
+expected_version=$(python3 -c \
+  'import tomllib,sys;print(tomllib.load(open(sys.argv[1],"rb"))["project"]["version"])' \
+  "$project_dir/pyproject.toml")
+if [[ "$identifier" != "org.darkimiya.Darkimiya" ]]; then
+  echo "Unexpected bundle identifier: $identifier" >&2
+  exit 3
+fi
+if [[ "$version" != "$expected_version" ]]; then
+  echo "Unexpected bundle version: $version (expected $expected_version)" >&2
+  exit 3
+fi
 
 file "$frontend" | grep -q "arm64"
 file "$backend" | grep -q "arm64"

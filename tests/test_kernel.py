@@ -5,7 +5,6 @@ from pathlib import Path
 
 import opencull_kernel as kernel
 
-
 GROUP = {
     "id": "group-0001",
     "candidates": [
@@ -78,10 +77,7 @@ class KernelTests(unittest.TestCase):
         self.assertTrue(kernel.valid_recommendation(normalized, GROUP, 1))
 
     def test_group_reading_requires_every_photo_and_all_layers(self):
-        reading = {
-            field: "A.CR3 and B.CR3: assessed"
-            for field in kernel.READING_FIELDS
-        }
+        reading = dict.fromkeys(kernel.READING_FIELDS, "A.CR3 and B.CR3: assessed")
         reading["confidence"] = 0.8
         self.assertTrue(kernel.valid_group_reading(reading, GROUP))
         reading["eyes_and_gaze"] = ""
@@ -95,10 +91,7 @@ class KernelTests(unittest.TestCase):
         self.assertEqual(frame["filename"], "A.CR3")
 
     def test_curation_prioritizes_hard_to_repair_human_moments(self):
-        reading = {
-            field: "A.CR3 and B.CR3 differ"
-            for field in kernel.READING_FIELDS
-        }
+        reading = dict.fromkeys(kernel.READING_FIELDS, "A.CR3 and B.CR3 differ")
         reading["confidence"] = 0.8
         prompt = kernel.curation_prompt(
             GROUP,

@@ -15,10 +15,10 @@ import json
 import os
 import re
 import urllib.request
-from datetime import datetime, timezone
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable
-
+from typing import Any
 
 FORMAT = "opencull-semantic-verification-v1"
 DEFAULT_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
@@ -189,7 +189,7 @@ def verify_triplet(
                 "developed": {"path": str(developed), "sha256": _sha256(developed)}}
     if thumbnail:
         evidence["thumbnail"] = {"path": str(thumbnail), "sha256": _sha256(thumbnail)}
-    return {"format": FORMAT, "created_at": datetime.now(timezone.utc).isoformat(),
+    return {"format": FORMAT, "created_at": datetime.now(UTC).isoformat(),
             "model": model, "endpoint": endpoint, "evidence": evidence,
             "suggestion": suggestion, "judgment": judgment}
 
@@ -241,7 +241,7 @@ def verify_consensus(
         "Individual judgments are retained for review."
     )
     first = certificates[0]
-    return {"format": FORMAT, "created_at": datetime.now(timezone.utc).isoformat(),
+    return {"format": FORMAT, "created_at": datetime.now(UTC).isoformat(),
             "model": "consensus", "models": selected, "endpoint": endpoint,
             "evidence": first["evidence"], "suggestion": suggestion,
             "judgment": aggregate, "judgments": judgments}

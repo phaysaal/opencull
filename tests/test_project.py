@@ -1,14 +1,23 @@
+import json
 import tempfile
 import unittest
-import json
 from pathlib import Path
 
 from opencull_gui.project import (
-    create_project, legacy_migration_preview, load_or_create,
-    import_legacy_development_artifacts, load_or_create_folder_project,
-    load_project, migrate_legacy_project,
-    preferred_project_path, project_manifest_path, project_sha256, register_file_artifact,
-    register_job_output, register_render, update_project,
+    create_project,
+    import_legacy_development_artifacts,
+    legacy_migration_preview,
+    load_or_create,
+    load_or_create_folder_project,
+    load_project,
+    migrate_legacy_project,
+    preferred_project_path,
+    project_manifest_path,
+    project_sha256,
+    register_file_artifact,
+    register_job_output,
+    register_render,
+    update_project,
 )
 
 

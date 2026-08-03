@@ -2,15 +2,31 @@
 set -euo pipefail
 
 project_dir=${0:A:h:h}
-app_path=${1:-"$project_dir/dist/OpenCull.app"}
+app_path=${1:-"$project_dir/dist/Darkimiya.app"}
 receipt_dir=${2:-"$project_dir/dist/release-receipts"}
-executable="$app_path/Contents/MacOS/OpenCull"
 resources="$app_path/Contents/Resources"
 
 if [[ ! -d "$app_path" ]]; then
   echo "Application bundle not found: $app_path" >&2
   exit 2
 fi
+
+# Read the executable and identifier from the bundle rather than restating
+# them. This script asserted the pre-rename OpenCull names and so could not
+# pass against any bundle the current spec produces.
+executable="$app_path/Contents/MacOS/$(/usr/libexec/PlistBuddy -c \
+  "Print :CFBundleExecutable" "$app_path/Contents/Info.plist")"
+expected_identifier=$(python3 - "$project_dir/OpenCull.spec" <<'PY'
+import re, sys
+from pathlib import Path
+spec = Path(sys.argv[1]).read_text(encoding="utf-8")
+match = re.search(r'bundle_identifier="([^"]+)"', spec)
+print(match.group(1) if match else "org.darkimiya.Darkimiya")
+PY
+)
+expected_version=$(python3 -c \
+  'import tomllib,sys;print(tomllib.load(open(sys.argv[1],"rb"))["project"]["version"])' \
+  "$project_dir/pyproject.toml")
 
 mkdir -p "$receipt_dir"
 
@@ -26,8 +42,12 @@ identifier=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" \
   "$app_path/Contents/Info.plist")
 version=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" \
   "$app_path/Contents/Info.plist")
-if [[ "$identifier" != "org.opencull.OpenCull" ]]; then
-  echo "Unexpected bundle identifier: $identifier" >&2
+if [[ "$identifier" != "$expected_identifier" ]]; then
+  echo "Unexpected bundle identifier: $identifier (expected $expected_identifier)" >&2
+  exit 4
+fi
+if [[ "$version" != "$expected_version" ]]; then
+  echo "Unexpected bundle version: $version (expected $expected_version)" >&2
   exit 4
 fi
 

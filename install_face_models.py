@@ -17,7 +17,6 @@ from opencull_gui.faces import (
     YUNET_SHA256,
 )
 
-
 MODELS = (
     (
         YUNET_NAME,

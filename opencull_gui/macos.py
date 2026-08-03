@@ -9,7 +9,6 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-
 APP_NAME = "Darkimiya"
 APP_SUPPORT = Path.home() / "Library" / "Application Support" / APP_NAME
 APP_CACHE = Path.home() / "Library" / "Caches" / APP_NAME
@@ -30,7 +29,7 @@ class MacOSPaths:
     logs: Path = APP_LOGS
 
     @classmethod
-    def create(cls, base: Path | None = None) -> "MacOSPaths":
+    def create(cls, base: Path | None = None) -> MacOSPaths:
         if base is None:
             value = cls()
         else:

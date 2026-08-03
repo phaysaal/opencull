@@ -7,13 +7,23 @@ import json
 import os
 from pathlib import Path
 
+from development_pipeline import calibrated_recipe
+from opencull_gui.project import register_render
+from recipe_compiler import compile_recipe
+from renderer_comparison import render_full_resolution_pair
+
 
 def _enter_background_export_lane() -> None:
-    """Lower this worker before importing native image-processing modules.
+    """Lower this worker's scheduling priority.
 
     ``nice`` is inherited by darktable-cli children.  The queue supplies the
     native thread limits through the environment, leaving interactive preview
     processes at normal priority with their own disposable Darktable state.
+
+    This is called from ``main``, not at import time. Running it at module
+    scope meant that merely importing this module -- which
+    delivery_export_pipeline does, and which any test collector does --
+    permanently lowered the priority of the importing process.
     """
     requested = os.environ.get("DARKIMIYA_EXPORT_NICE", "").strip()
     if not requested:
@@ -24,14 +34,6 @@ def _enter_background_export_lane() -> None:
         # Isolation and thread limits still apply if the OS declines a nice
         # adjustment (for example, under a constrained packaging sandbox).
         pass
-
-
-_enter_background_export_lane()
-
-from development_pipeline import calibrated_recipe
-from opencull_gui.project import register_render
-from recipe_compiler import compile_recipe
-from renderer_comparison import render_full_resolution_pair
 
 
 def run_renderer_export_pipeline(
@@ -62,6 +64,7 @@ def run_renderer_export_pipeline(
 
 
 def main(argv: list[str] | None = None) -> int:
+    _enter_background_export_lane()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--reference", type=Path, required=True)

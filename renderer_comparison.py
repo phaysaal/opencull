@@ -6,9 +6,10 @@ import argparse
 import hashlib
 import json
 import math
-from datetime import datetime, timezone
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import numpy as np
 import tifffile
@@ -17,7 +18,6 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps
 from darktable_engine import render_darktable_default
 from development_engine import _srgb_to_linear_rec2020, render_recipe
 from raw_developer import render_baseline
-
 
 COMPARISON_FORMAT = "opencull-renderer-comparison-v1"
 FULL_RESOLUTION_FORMAT = "opencull-renderer-export-v1"
@@ -146,7 +146,7 @@ def compare_renderers(
             raise ValueError(f"existing OpenCull render is unavailable: {existing}")
         opencull = {
             "format": "opencull-existing-render-reference-v1",
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": datetime.now(UTC).isoformat(),
             "recipe": recipe,
             "output": {"path": str(existing), "sha256": _sha256(existing)},
             "notice": "Reused completed OpenCull render for memory-safe comparison.",
@@ -198,7 +198,7 @@ def compare_renderers(
     }
     record = {
         "format": COMPARISON_FORMAT,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
         "research_notice": (
             "The native darktable image is a no-recipe control. The guided darktable "
             "image uses darktable for initial development and the current OpenCull "
@@ -285,7 +285,7 @@ def render_full_resolution_pair(
 
     native_project_render = {
         "format": "opencull-external-render-reference-v1",
-        "created_at": darktable.get("created_at", datetime.now(timezone.utc).isoformat()),
+        "created_at": darktable.get("created_at", datetime.now(UTC).isoformat()),
         "recipe": {
             "style": f"{original_style}-darktable-{demosaic_mode}-native-full",
             "source_photo": recipe.get("source_photo"),
@@ -297,7 +297,7 @@ def render_full_resolution_pair(
     }
     record = {
         "format": FULL_RESOLUTION_FORMAT,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
         "source": {"path": str(source), "sha256": _sha256(source)},
         "reference": {"path": str(reference), "sha256": _sha256(reference)},
         "recipe": {"path": str(recipe_path), "sha256": _sha256(recipe_path),

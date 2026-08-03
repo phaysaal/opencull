@@ -6,15 +6,20 @@ import hashlib
 import json
 import os
 import tempfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from scan import BITMAP_EXTENSIONS, image_files
 
 from .project import (
-    ensure_project_layout, load_or_create_folder_project, load_project,
-    project_manifest_path, project_sha256, register_file_artifact, update_project,
+    ensure_project_layout,
+    load_or_create_folder_project,
+    load_project,
+    project_manifest_path,
+    project_sha256,
+    register_file_artifact,
+    update_project,
 )
 from .report import ReportError, load_report
 
@@ -26,7 +31,7 @@ class ProjectCatalogError(ValueError):
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _atomic_json(path: Path, value: dict[str, Any]) -> None:

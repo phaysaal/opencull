@@ -10,10 +10,10 @@ import re
 import shutil
 import subprocess
 import tempfile
-from datetime import datetime, timezone
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable
-
+from typing import Any
 
 BASELINE_FORMAT = "opencull-raw-baseline-v1"
 Runner = Callable[..., subprocess.CompletedProcess[str]]
@@ -167,7 +167,7 @@ def render_baseline(
 
     record = {
         "format": BASELINE_FORMAT,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
         "source": {
             "path": str(raw),
             "sha256": source_hash,

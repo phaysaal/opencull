@@ -7,7 +7,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-
 FORMAT = "opencull-edit-directions-v1"
 CHECKPOINT_FORMAT = "opencull-edit-directions-checkpoint-v1"
 FIELDS = (

@@ -8,14 +8,13 @@ import json
 import math
 import os
 import tempfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import tifffile
 from PIL import Image, ImageEnhance
-
 
 ENGINE_FORMAT = "opencull-development-render-v1"
 
@@ -385,7 +384,7 @@ def render_recipe(
             os.unlink(temporary)
     record = {
         "format": ENGINE_FORMAT,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
         "source_baseline": {"path": str(source), "sha256": _sha256(source)},
         "calibration": calibration,
         "recipe": recipe,

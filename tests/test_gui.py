@@ -1,21 +1,23 @@
 import http.client
 import json
+import os
+import re
+import sys
 import tempfile
 import threading
 import time
 import unittest
 import zipfile
-from unittest.mock import patch
-from io import BytesIO
-import sys
-import os
-import re
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from io import BytesIO
 from pathlib import Path
+from unittest.mock import patch
 
-from PIL import Image
 import numpy as np
+from PIL import Image
 
+from delivery_export_pipeline import run_delivery_export
+from opencull_desktop import run_release_smoke_test
 from opencull_gui.actions import (
     ActionController,
     ActionError,
@@ -26,23 +28,25 @@ from opencull_gui.actions import (
     export_bytes,
     policy_clusters,
 )
+from opencull_gui.faces import FaceError, FaceStore
+from opencull_gui.jobs import JobError, JobManager
+from opencull_gui.macos import APP_NAME, InstanceLock, MacOSPaths
 from opencull_gui.measurements import ManifestError, load_measurements
 from opencull_gui.photos import PhotoError, PhotoStore, PreviewManager
+from opencull_gui.project import (
+    ensure_project_layout,
+    load_or_create,
+    load_or_create_folder_project,
+    load_project,
+    register_render,
+    update_project,
+)
+from opencull_gui.providers import ProviderError, ProviderStore
+from opencull_gui.raw_sources import RawSourceStore
 from opencull_gui.report import ReportError, load_report
 from opencull_gui.reviews import ReviewError, ReviewStore
 from opencull_gui.server import ReviewServer
 from opencull_gui.xmp import xmp_zip
-from opencull_gui.jobs import JobError, JobManager
-from opencull_gui.macos import APP_NAME, InstanceLock, MacOSPaths
-from opencull_gui.providers import ProviderError, ProviderStore
-from opencull_gui.faces import FaceError, FaceStore
-from opencull_gui.raw_sources import RawSourceStore
-from opencull_gui.project import (
-    ensure_project_layout, load_or_create, load_or_create_folder_project,
-    load_project, register_render, update_project,
-)
-from opencull_desktop import run_release_smoke_test
-from delivery_export_pipeline import run_delivery_export
 
 
 def report_data(names=("A.JPG", "B.JPG")):

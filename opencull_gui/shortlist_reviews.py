@@ -2,18 +2,17 @@
 
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 import os
 import tempfile
 import threading
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from .shortlist import ShortlistIndex, TIERS
-
+from .shortlist import TIERS, ShortlistIndex
 
 SHORTLIST_REVIEW_FORMAT = "opencull-professional-review-v1"
 MAX_HISTORY = 4000
@@ -24,7 +23,7 @@ class ShortlistReviewError(ValueError):
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def default_shortlist_review_path(shortlist_path: Path) -> Path:

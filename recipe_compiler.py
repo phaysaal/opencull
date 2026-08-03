@@ -9,7 +9,6 @@ import re
 from pathlib import Path
 from typing import Any
 
-
 IR_FORMAT = "opencull-development-recipe-v1"
 CORPUS_FORMAT = "opencull-development-corpus-v1"
 STYLES = ("standard", "signature", "creative", "personal")
@@ -59,7 +58,6 @@ def _amount_for(text: str, token: str) -> float | None:
     if not match:
         return None
     first_text = match.group(1)
-    separator = match.group(2)
     second_text = match.group(3)
     first = float(first_text)
     if second_text is not None:

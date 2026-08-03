@@ -9,12 +9,14 @@ import shutil
 import tempfile
 import uuid
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from .branding import (
-    CULLING_ENGINE_NAME, PRODUCT_NAME, PROJECT_DIRECTORY_NAME,
+    CULLING_ENGINE_NAME,
+    PRODUCT_NAME,
+    PROJECT_DIRECTORY_NAME,
     PROJECT_MANIFEST_NAME,
 )
 
@@ -37,7 +39,7 @@ ARTIFACT_KEYS = (
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _atomic_write(path: Path, value: dict[str, Any]) -> None:
@@ -238,7 +240,7 @@ def legacy_migration_preview(
     missing = sorted({str(path) for path in artifact_paths if not path.exists()})
     legacy_hash = project_sha256(legacy)
     identity = hashlib.sha256(
-        f"{legacy_hash}\0{source}\0{destination}".encode("utf-8")
+        f"{legacy_hash}\0{source}\0{destination}".encode()
     ).hexdigest()
     return {
         "format": MIGRATION_FORMAT,

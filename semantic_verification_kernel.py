@@ -9,7 +9,6 @@ from typing import Any
 
 from semantic_verifier import build_prompt, normalize_judgment
 
-
 FORMAT = "opencull-semantic-verification-request-v1"
 
 

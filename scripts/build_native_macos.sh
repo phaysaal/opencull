@@ -78,11 +78,14 @@ chmod 755 \
   "$app_path/Contents/MacOS/Darkimiya" \
   "$app_path/Contents/MacOS/DarkimiyaBackend"
 
+version=$("$python_bin" -c \
+  'import tomllib,sys;print(tomllib.load(open(sys.argv[1],"rb"))["project"]["version"])' \
+  "$project_dir/pyproject.toml")
 /usr/libexec/PlistBuddy -c \
-  "Set :CFBundleShortVersionString 0.13.0" \
+  "Set :CFBundleShortVersionString $version" \
   "$app_path/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c \
-  "Set :CFBundleVersion 14" \
+  "Set :CFBundleVersion $version" \
   "$app_path/Contents/Info.plist"
 
 codesign --force --sign - "$app_path/Contents/MacOS/DarkimiyaBackend"
@@ -92,7 +95,7 @@ codesign --verify --deep --strict --verbose=0 "$app_path"
 "$project_dir/scripts/verify_native_macos_release.sh" \
   "$app_path" "$output_root/receipts"
 
-archive="$output_root/Darkimiya-0.13.0-arm64.zip"
+archive="$output_root/Darkimiya-$version-arm64.zip"
 rm -f "$archive"
 ditto -c -k --sequesterRsrc --keepParent "$app_path" "$archive"
 shasum -a 256 "$archive" > "$archive.sha256"

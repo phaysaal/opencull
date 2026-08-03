@@ -7,9 +7,8 @@ import json
 from pathlib import Path
 from typing import Any
 
-from scan import BITMAP_EXTENSIONS, RAW_EXTENSIONS, measure
 from opencull_gui.assets import index_asset_families
-
+from scan import BITMAP_EXTENSIONS, RAW_EXTENSIONS, measure
 
 SHORTLIST_CHECKPOINT_FORMAT = "opencull-professional-checkpoint-v1"
 ASSESSMENT_FIELDS = (

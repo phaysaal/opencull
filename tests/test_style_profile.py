@@ -6,7 +6,9 @@ from pathlib import Path
 from PIL import Image
 
 from style_profile_kernel import (
-    build_style_request, style_profile_json, valid_style_profile,
+    build_style_request,
+    style_profile_json,
+    valid_style_profile,
 )
 
 

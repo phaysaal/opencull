@@ -8,10 +8,9 @@ import math
 import os
 import sqlite3
 import threading
-import time
 import uuid
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -23,7 +22,6 @@ from scan import open_preview
 from .photos import PhotoStore
 from .report import ReportIndex
 from .reviews import ReviewStore
-
 
 FACE_DB_FORMAT = "opencull-private-faces-v1"
 YUNET_NAME = "face_detection_yunet_2023mar.onnx"
@@ -38,7 +36,7 @@ class FaceError(ValueError):
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _sha256(path: Path) -> str:

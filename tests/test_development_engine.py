@@ -1,4 +1,3 @@
-import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -7,7 +6,12 @@ import numpy as np
 import tifffile
 from PIL import Image
 
-from development_engine import DevelopmentError, _apply_global, apply_adjustment_draft, render_recipe
+from development_engine import (
+    DevelopmentError,
+    _apply_global,
+    apply_adjustment_draft,
+    render_recipe,
+)
 
 
 def write_baseline(path: Path, array: np.ndarray) -> Path:

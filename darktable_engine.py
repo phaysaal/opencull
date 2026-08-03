@@ -10,10 +10,10 @@ import shutil
 import struct
 import subprocess
 import tempfile
-from datetime import datetime, timezone
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable
-
+from typing import Any
 
 DARKTABLE_FORMAT = "opencull-darktable-render-v1"
 DARKTABLE_MACOS_CLI = Path(
@@ -229,7 +229,7 @@ def render_darktable_default(
 
     record: dict[str, Any] = {
         "format": DARKTABLE_FORMAT,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
         "source": {"path": str(source), "sha256": _sha256(source)},
         "engine": {
             "name": "darktable", "version": version,

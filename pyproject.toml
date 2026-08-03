@@ -1,0 +1,97 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "darkimiya"
+version = "0.13.0"
+description = "Local-first computational darkroom with an agent-assisted culling engine"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+dependencies = [
+    "numpy>=1.26",
+    "Pillow>=10.0",
+    "tifffile>=2023",
+    # RAW previews are embedded in the file; rawpy reads them directly. Without
+    # it, decoding falls back to one macOS `sips` subprocess per photograph.
+    "rawpy>=0.19",
+    # opencull_gui/faces.py and the release smoke test import cv2.
+    "opencv-python-headless>=4.10",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.6"]
+# The desktop launcher and the PyInstaller bundle. Both are macOS-oriented
+# today; see docs for the cross-platform shell plan.
+build = ["pyinstaller>=6.0", "certifi"]
+
+[project.scripts]
+darkimiya-review = "gui:main"
+
+[project.urls]
+Homepage = "https://github.com/mfaisalalameen/opencull"
+
+[tool.setuptools]
+# Flat layout: the audited kernels are top-level modules because Kimiya loads
+# them by path, and the pipelines are invoked as scripts.
+py-modules = [
+    "scan",
+    "gui",
+    "opencull_desktop",
+    "opencull_kernel",
+    "shortlist_kernel",
+    "edit_suggestion_kernel",
+    "style_profile_kernel",
+    "semantic_verification_kernel",
+    "semantic_verifier",
+    "recipe_compiler",
+    "development_engine",
+    "development_pipeline",
+    "comparison_pipeline",
+    "renderer_comparison",
+    "renderer_batch_comparison",
+    "renderer_export_pipeline",
+    "delivery_export_pipeline",
+    "darktable_engine",
+    "raw_developer",
+    "move_selected",
+    "install_face_models",
+]
+
+[tool.setuptools.packages.find]
+include = ["opencull_gui*"]
+
+[tool.setuptools.package-data]
+opencull_gui = ["static/*"]
+
+[tool.pytest.ini_options]
+# Tests import the top-level kernels directly; without this they resolve only
+# when pytest happens to be invoked from the repository root.
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["native-macos", ".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4"]
+ignore = [
+    # Long lines are widespread in the prompt-building kernels; the formatter
+    # is not being introduced in the same change as the linter.
+    "E501",
+    # Kernel functions are deliberately broad at the Kimiya boundary.
+    "B008",
+    # zip(..., strict=) changes behaviour on length mismatch rather than being
+    # a pure cleanup, so each of the 11 sites needs deciding individually.
+    # Tracked as follow-up work rather than silenced permanently.
+    "B905",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests insert the repository root on sys.path before importing, and use
+# semicolon-compressed fixture setup throughout.
+"tests/*" = ["E402", "E702", "B007"]
+"OpenCull.spec" = ["F821"]

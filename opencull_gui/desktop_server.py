@@ -6,16 +6,16 @@ import json
 import platform
 import secrets
 import subprocess
-import threading
+from collections.abc import Callable
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 from urllib.parse import urlparse
 
 from .jobs import JobError, JobManager
-from .providers import ProviderError, ProviderStore
 from .project_catalog import ProjectCatalog, ProjectCatalogError
+from .providers import ProviderError, ProviderStore
 
 
 class DesktopBridgeServer(ThreadingHTTPServer):

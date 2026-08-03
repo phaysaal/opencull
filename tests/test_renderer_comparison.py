@@ -7,7 +7,9 @@ from unittest.mock import patch
 from PIL import Image
 
 from renderer_comparison import (
-    compare_renderers, image_metrics, render_full_resolution_pair,
+    compare_renderers,
+    image_metrics,
+    render_full_resolution_pair,
 )
 
 

@@ -12,7 +12,7 @@ import shutil
 import tempfile
 import threading
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -22,12 +22,14 @@ from scan import BITMAP_EXTENSIONS, RAW_EXTENSIONS, open_preview
 
 from .photos import PhotoError, PhotoStore
 from .project import (
-    ensure_project_layout, load_project, register_file_artifact, update_project,
+    ensure_project_layout,
+    load_project,
+    register_file_artifact,
+    update_project,
 )
 from .raw_sources import RawSourceStore
 from .report import ReportIndex
 from .reviews import ReviewStore
-
 
 PLAN_FORMAT = "opencull-operation-plan-v1"
 JOURNAL_FORMAT = "opencull-operation-journal-v1"
@@ -48,7 +50,7 @@ class ActionError(ValueError):
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _sha256(path: Path) -> str:
@@ -892,12 +894,12 @@ class Operation:
                     source.parent.mkdir(parents=True, exist_ok=True)
                     try:
                         os.replace(destination, source)
-                    except OSError:
+                    except OSError as exc:
                         shutil.copy2(destination, source)
                         if _sha256(source) != item["sha256"]:
                             source.unlink(missing_ok=True)
                             raise ActionError(
-                                f"rollback verification failed: {source}")
+                                f"rollback verification failed: {source}") from exc
                         destination.unlink()
                 with self._lock:
                     item["status"] = "rolled-back"

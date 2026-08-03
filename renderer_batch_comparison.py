@@ -11,7 +11,7 @@ import argparse
 import html
 import json
 import shutil
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -27,7 +27,6 @@ from renderer_comparison import (
     pair_metrics,
     render_full_resolution_pair,
 )
-
 
 FORMAT = "darkimiya-renderer-comparison-batch-v1"
 JPEG_SUFFIXES = {".jpg", ".jpeg"}
@@ -180,7 +179,7 @@ def render_batch(
 
     manifest: dict[str, Any] = {
         "format": FORMAT,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
         "directions": str(directions),
         "preferred_style": style,
         "darktable_demosaic": demosaic,
@@ -292,7 +291,7 @@ def render_batch(
             print(f"BATCH_FAILURE {photo}: {exc}", flush=True)
         (output_dir / "manifest.json").write_text(
             json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-    manifest["completed_at"] = datetime.now(timezone.utc).isoformat()
+    manifest["completed_at"] = datetime.now(UTC).isoformat()
     manifest["summary"] = {
         "requested": total,
         "completed": len(manifest["items"]),

@@ -10,7 +10,6 @@ from xml.sax.saxutils import escape
 from .actions import ActionError, policy_clusters
 from .reviews import ReviewStore
 
-
 LABEL_NAMES = {
     "": "",
     "red": "Red",

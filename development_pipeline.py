@@ -15,7 +15,6 @@ from opencull_gui.project import register_render
 from raw_developer import render_baseline
 from recipe_compiler import compile_recipe
 
-
 STYLES = {"calibrated", "standard", "signature", "creative", "personal"}
 
 

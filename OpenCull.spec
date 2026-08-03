@@ -1,6 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 """Reproducible Apple Silicon Darkimiya application bundle."""
 
+import tomllib
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_submodules
@@ -9,6 +10,18 @@ from PyInstaller.utils.hooks import collect_submodules
 ROOT = Path(SPECPATH).resolve()
 KIMIYA = ROOT.parent / "kimiya-lang"
 MODELS = ROOT / ".opencull-models"
+
+# pyproject.toml is the single source of the version. It previously appeared in
+# five places across the spec and the build and verify scripts, and had already
+# drifted between them.
+with (ROOT / "pyproject.toml").open("rb") as handle:
+    VERSION = tomllib.load(handle)["project"]["version"]
+
+if not KIMIYA.is_dir():
+    raise SystemExit(
+        f"kimiya-lang is required to build but was not found at {KIMIYA}. "
+        "Check it out beside this repository, or symlink it there."
+    )
 
 datas = [
     (str(ROOT / "opencull_gui" / "static"), "opencull_gui/static"),
@@ -94,12 +107,12 @@ app = BUNDLE(
     name="Darkimiya.app",
     icon=str(ROOT / "assets" / "OpenCull.icns"),
     bundle_identifier="org.darkimiya.Darkimiya",
-    version="0.13.0",
+    version=VERSION,
     info_plist={
         "CFBundleDisplayName": "Darkimiya",
         "CFBundleName": "Darkimiya",
-        "CFBundleShortVersionString": "0.13.0",
-        "CFBundleVersion": "12",
+        "CFBundleShortVersionString": VERSION,
+        "CFBundleVersion": VERSION,
         "LSMinimumSystemVersion": "13.0",
         "NSHighResolutionCapable": True,
         "NSRequiresAquaSystemAppearance": False,

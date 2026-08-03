@@ -13,19 +13,21 @@ import sys
 import tempfile
 import threading
 import webbrowser
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence
 
 from opencull_gui.faces import FaceStore, default_face_db
 from opencull_gui.jobs import JobManager
 from opencull_gui.macos import InstanceLock, MacOSPaths, resource_root
 from opencull_gui.measurements import load_measurements
 from opencull_gui.photos import PhotoStore
-from opencull_gui.providers import ProviderStore
 from opencull_gui.project import (
-    ensure_project_layout, legacy_migration_preview,
-    load_or_create_folder_project, migrate_legacy_project,
+    ensure_project_layout,
+    legacy_migration_preview,
+    load_or_create_folder_project,
+    migrate_legacy_project,
 )
+from opencull_gui.providers import ProviderStore
 from opencull_gui.report import load_report
 from opencull_gui.reviews import ReviewStore, default_review_path
 from opencull_gui.server import ReviewServer

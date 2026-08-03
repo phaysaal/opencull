@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-
 
 FORMAT = "opencull-personal-style-profile-v1"
 STYLE_FIELDS = (
@@ -126,7 +125,7 @@ def normalize_style_profile(value: Any) -> dict[str, Any]:
 def style_profile_json(request: str, value: Any, mode: str = "update") -> str:
     request_value = json.loads(request)
     profile = normalize_style_profile(value)
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     prior = request_value.get("existing_profile") or {}
     history = list(prior.get("history", [])) if isinstance(prior, dict) else []
     history.append({"updated_at": now, "mode": mode,

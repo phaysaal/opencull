@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import http.client
 import json
-import threading
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 

@@ -8,16 +8,16 @@ import threading
 import webbrowser
 from pathlib import Path
 
-from opencull_gui.photos import PhotoError, PhotoStore
+from opencull_gui.faces import FaceError, FaceStore, default_face_db
+from opencull_gui.jobs import JobError, JobManager
 from opencull_gui.measurements import ManifestError, load_measurements
+from opencull_gui.photos import PhotoError, PhotoStore
+from opencull_gui.project import ensure_project_layout, load_or_create_folder_project
+from opencull_gui.providers import ProviderError, ProviderStore
 from opencull_gui.report import ReportError, load_report
 from opencull_gui.reviews import ReviewStore, default_review_path
 from opencull_gui.server import ReviewServer
-from opencull_gui.jobs import JobError, JobManager
-from opencull_gui.providers import ProviderError, ProviderStore
-from opencull_gui.faces import FaceError, FaceStore, default_face_db
 from opencull_gui.shortlist import ShortlistError
-from opencull_gui.project import ensure_project_layout, load_or_create_folder_project
 
 
 def parse_args() -> argparse.Namespace:

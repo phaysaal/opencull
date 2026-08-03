@@ -2,26 +2,26 @@
 
 from __future__ import annotations
 
-import json
 import hashlib
-import mimetypes
-import re
-import subprocess
-import secrets
-import sys
 import io
-import shutil
+import json
+import mimetypes
 import os
+import re
+import secrets
+import shutil
+import subprocess
+import sys
 import tempfile
 import threading
-import numpy as np
-import tifffile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+import numpy as np
+import tifffile
 from PIL import Image, ImageOps
 
 from darktable_engine import render_darktable_default
@@ -29,26 +29,31 @@ from development_engine import _srgb_to_linear_rec2020, render_recipe
 from recipe_compiler import compile_recipe
 
 from .actions import ActionController, ActionError, export_bytes
+from .faces import FaceError, FaceStore
+from .jobs import JobError, JobManager
 from .photos import PhotoError, PhotoStore, PreviewManager
+from .project import (
+    ensure_project_layout,
+    import_legacy_development_artifacts,
+    legacy_migration_preview,
+    load_or_create_folder_project,
+    load_project,
+    migrate_legacy_project,
+    project_sha256,
+    register_file_artifact,
+    update_project,
+)
+from .providers import ProviderError, ProviderStore
+from .raw_sources import RawSourceError, RawSourceStore
 from .report import ReportIndex
 from .reviews import ReviewError, ReviewStore
-from .xmp import xmp_zip
-from .jobs import JobError, JobManager
-from .providers import ProviderError, ProviderStore
-from .faces import FaceError, FaceStore
 from .shortlist import ShortlistError, ShortlistIndex, load_shortlist
 from .shortlist_reviews import (
-    default_shortlist_review_path,
     ShortlistReviewError,
     ShortlistReviewStore,
+    default_shortlist_review_path,
 )
-from .raw_sources import RawSourceError, RawSourceStore
-from .project import (
-    ensure_project_layout, legacy_migration_preview, load_or_create_folder_project,
-    import_legacy_development_artifacts, load_project, migrate_legacy_project, project_sha256,
-    register_file_artifact, update_project,
-)
-
+from .xmp import xmp_zip
 
 STATIC_ROOT = Path(__file__).with_name("static")
 
@@ -401,7 +406,7 @@ class ReviewServer(ThreadingHTTPServer):
             "origin": "imported",
             "source_path": str(path),
             "source_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-            "imported_at": datetime.now(timezone.utc).isoformat(),
+            "imported_at": datetime.now(UTC).isoformat(),
             "photo": str(imported.get("photo", "")),
             "recipe": recipe,
         }
@@ -449,7 +454,7 @@ class ReviewServer(ThreadingHTTPServer):
             "provenance": str(portable.get("source_path", "")),
             "recipe_revision": 1,
             "sha256": digest,
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": datetime.now(UTC).isoformat(),
         }
         renders = list(
             self.project.get("artifacts", {}).get("renders", []) or [])
@@ -531,7 +536,7 @@ class ReviewServer(ThreadingHTTPServer):
         shutil.copy2(source_path, destination_path)
         record = {"source": source_path, "destination": str(destination_path),
                   "requested_destination": str(requested_path),
-                  "created_at": datetime.now(timezone.utc).isoformat(),
+                  "created_at": datetime.now(UTC).isoformat(),
                   "sha256": hashlib.sha256(destination_path.read_bytes()).hexdigest()}
         exports = list(self.project.get("artifacts", {}).get("exports", []) or [])
         exports.append(record)

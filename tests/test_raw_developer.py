@@ -10,7 +10,6 @@ from raw_developer import (
     render_baseline,
 )
 
-
 IDENTITY = """Camera: Fujifilm X-S10 ID: 0x26f12
 ISO speed: 800
 Number of raw images: 1

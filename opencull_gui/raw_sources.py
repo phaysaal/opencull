@@ -11,9 +11,8 @@ from typing import Any
 
 from scan import RAW_EXTENSIONS
 
-from .report import ReportIndex
 from .project import is_managed_project_path
-
+from .report import ReportIndex
 
 RAW_SOURCE_FORMAT = "opencull-raw-source-v1"
 

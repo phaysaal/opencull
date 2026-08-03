@@ -13,11 +13,10 @@ import urllib.error
 import urllib.request
 import uuid
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
-
 
 PROVIDER_FORMAT = "opencull-provider-profiles-v1"
 KINDS = {"openrouter", "openai", "ollama"}
@@ -102,7 +101,7 @@ def apply_judgment_policy(
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _atomic_text(path: Path, text: str, mode: int = 0o600) -> None:

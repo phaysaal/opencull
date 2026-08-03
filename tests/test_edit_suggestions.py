@@ -6,18 +6,18 @@ from pathlib import Path
 from PIL import Image
 
 from edit_suggestion_kernel import (
+    RECIPE_SECTIONS,
     build_edit_report,
     build_edit_request,
     edit_direction_json,
-    edit_direction_repair_prompt,
     edit_direction_needs_validation,
+    edit_direction_repair_prompt,
     mark_edit_direction_validation,
     normalize_edit_direction,
     parse_edit_candidates,
     rejected_edit_direction_json,
     valid_edit_direction,
     valid_edit_report,
-    RECIPE_SECTIONS,
 )
 
 

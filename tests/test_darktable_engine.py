@@ -8,8 +8,11 @@ from unittest.mock import patch
 from PIL import Image
 
 from darktable_engine import (
-    DarktableError, _demosaic_params, _xmp_with_demosaic,
-    find_darktable_cli, render_darktable_default,
+    DarktableError,
+    _demosaic_params,
+    _xmp_with_demosaic,
+    find_darktable_cli,
+    render_darktable_default,
 )
 
 

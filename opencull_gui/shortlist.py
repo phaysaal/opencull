@@ -12,7 +12,6 @@ from scan import RAW_EXTENSIONS
 from .assets import AssetIndex, index_asset_families
 from .report import ReportIndex
 
-
 SHORTLIST_FORMAT = "opencull-professional-shortlist-v1"
 TIERS = {"exceptional", "strong", "promising", "ordinary", "reject"}
 CANDIDATE_POLICIES = {"human_only", "effective", "ai_only", "all"}

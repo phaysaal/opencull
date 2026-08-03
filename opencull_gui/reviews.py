@@ -8,12 +8,11 @@ import shutil
 import tempfile
 import threading
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from .report import ReportIndex
-
 
 REVIEW_FORMAT = "opencull-review-v1"
 EXPORT_FORMAT = "opencull-reviewed-result-v1"
@@ -27,7 +26,7 @@ class ReviewError(ValueError):
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def default_review_path(report_path: Path) -> Path:

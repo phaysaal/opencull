@@ -1,25 +1,24 @@
-import json
 import hashlib
+import http.client
+import json
 import tempfile
 import threading
-import http.client
 import unittest
 from pathlib import Path
 
 from PIL import Image
 
 from opencull_gui.assets import AssetError, index_asset_families
+from opencull_gui.jobs import JobManager
+from opencull_gui.photos import PhotoStore
 from opencull_gui.report import load_report
-from opencull_gui.shortlist import ShortlistError, load_shortlist
-from opencull_gui.shortlist import ASSESSMENT_FIELDS
+from opencull_gui.reviews import ReviewStore
+from opencull_gui.server import ReviewServer
+from opencull_gui.shortlist import ASSESSMENT_FIELDS, ShortlistError, load_shortlist
 from opencull_gui.shortlist_reviews import (
     ShortlistReviewError,
     ShortlistReviewStore,
 )
-from opencull_gui.jobs import JobManager
-from opencull_gui.photos import PhotoStore
-from opencull_gui.reviews import ReviewStore
-from opencull_gui.server import ReviewServer
 from shortlist_kernel import (
     assessments_for_candidates,
     build_professional_candidates,
