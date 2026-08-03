@@ -391,20 +391,37 @@ class LauncherWindowTests(unittest.TestCase):
     def test_developing_an_unculled_folder_builds_a_selection_first(self):
         window, services = self.build(projects=[])
         services.projects.manual_selection_report.return_value = Path("/p/a/all.json")
-        with mock.patch("opencull_qt.launcher.webbrowser.open") as opened:
+        with mock.patch.object(window, "_open_workspace") as opened:
             window.develop({"id": "p1", "name": "A", "photos": "/p/a", "report": ""})
         services.projects.manual_selection_report.assert_called_once_with("p1")
-        opened.assert_called_once()
+        self.assertEqual(opened.call_args.kwargs["intent"], "develop")
 
     def test_developing_a_culled_folder_reuses_its_report(self):
         window, services = self.build(projects=[])
         report = Path(tempfile.mkdtemp()) / "report.json"
         report.write_text("{}", encoding="utf-8")
-        with mock.patch("opencull_qt.launcher.webbrowser.open"):
+        with mock.patch.object(window, "_open_workspace") as opened:
             window.develop(
                 {"id": "p1", "name": "A", "photos": "/p/a", "report": str(report)})
         services.projects.manual_selection_report.assert_not_called()
-        self.assertEqual(services.opened[0][0], report)
+        self.assertEqual(opened.call_args[0][1], report)
+
+    def test_develop_never_leaves_the_window(self):
+        # The browser hand-off was the thing this architecture removed.
+        source = Path("opencull_qt/launcher.py").read_text(encoding="utf-8")
+        self.assertNotIn("webbrowser", source)
+
+    def test_review_and_develop_open_the_same_page(self):
+        window, _ = self.build(projects=[])
+        report = Path(tempfile.mkdtemp()) / "report.json"
+        report.write_text("{}", encoding="utf-8")
+        with mock.patch.object(window, "_open_workspace") as opened:
+            window.open_review({"id": "p1", "name": "A", "photos": "/p/a",
+                                "report": str(report)})
+            window.develop({"id": "p1", "name": "A", "photos": "/p/a",
+                            "report": str(report)})
+        intents = [call.kwargs["intent"] for call in opened.call_args_list]
+        self.assertEqual(intents, ["review", "develop"])
 
     def test_closing_the_window_shuts_the_services_down(self):
         window, services = self.build()

@@ -7,7 +7,6 @@ and the folder chooser is Qt's own.
 
 from __future__ import annotations
 
-import webbrowser
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer
@@ -495,50 +494,54 @@ class Launcher(QMainWindow):
         return box.clickedButton() is again
 
     def develop(self, project: dict) -> None:
-        """Open the treatment workspace for a folder.
+        """Open a folder's frames for development, in this window.
 
         Development works from a selection. A folder that has been culled
         already has one; a folder that has not gets a deterministic
-        everything-included selection so the treatment can proceed without
-        paying for a cull first.
+        everything-included selection, so a treatment does not require paying
+        for a cull first.
         """
-        photos = Path(str(project.get("photos", "")))
-        report = Path(str(project.get("report", "")))
+        report_path = Path(str(project.get("report", "")))
         try:
-            if not report.is_file():
-                report = self.services.projects.manual_selection_report(
+            if not report_path.is_file():
+                report_path = self.services.projects.manual_selection_report(
                     str(project.get("id", "")))
-            opened = self.services.open_review(report, photos)
         except (ProjectCatalogError, ValueError, OSError) as exc:
             self.report(str(exc), "alarm")
             return
-        webbrowser.open(str(opened["url"]))
-        contents = self.folder_contents(project)
-        self.report(
-            f"Opened {project.get('name', 'the folder')} for "
-            f"{treatment_label(contents['kind']).lower()} in your browser.")
+        self._open_workspace(project, report_path, intent="develop")
 
     def open_review(self, project: dict) -> None:
-        """Show the folder's review on the second page of this window."""
+        """Show the folder's culling decisions, in this window."""
         report_path = Path(str(project.get("report", "")))
-        photos_path = Path(str(project.get("photos", "")))
         if not report_path.is_file():
             self.report("That report is no longer on disk.", "alarm")
             return
+        self._open_workspace(project, report_path, intent="review")
+
+    def _open_workspace(
+        self, project: dict, report_path: Path, intent: str,
+    ) -> None:
+        """Both Review and Develop land on the same page of the same window."""
+        photos_path = Path(str(project.get("photos", "")))
         try:
             report = load_report(report_path)
-            photos = PhotoStore(photos_path, self.services.paths.cache / "previews")
+            photos = PhotoStore(
+                photos_path, self.services.paths.cache / "previews")
             reviews = ReviewStore(
                 default_review_path(report_path), report, photos.root)
         except Exception as exc:
-            self.report(f"The review could not be opened: {exc}", "alarm")
+            name = project.get("name", "That folder")
+            self.report(f"{name} could not be opened: {exc}", "alarm")
             return
-        self.show_review(report, photos, reviews)
+        self.show_review(report, photos, reviews, intent=intent)
 
-    def show_review(self, report, photos, reviews) -> None:
+    def show_review(
+        self, report, photos, reviews, intent: str = "review",
+    ) -> None:
         self._close_review()
         self._loader = PreviewLoader(photos, self)
-        page = ReviewPage(report, reviews, self._loader)
+        page = ReviewPage(report, reviews, self._loader, intent=intent)
         page.closed.connect(self.show_projects)
         self.review_page = page
         self.pages.addWidget(page)

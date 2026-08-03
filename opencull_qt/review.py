@@ -117,11 +117,13 @@ class ReviewPage(QWidget):
     closed = Signal()
 
     def __init__(self, report: ReportIndex, reviews: ReviewStore,
-                 loader: PreviewLoader, parent: QWidget | None = None):
+                 loader: PreviewLoader, parent: QWidget | None = None,
+                 intent: str = "review"):
         super().__init__(parent)
         self.report = report
         self.reviews = reviews
         self.loader = loader
+        self.intent = intent
         self.frames: dict[str, Frame] = {}
         self.cluster_ids = list(report.cluster_by_id)
         self.current = self.cluster_ids[0] if self.cluster_ids else ""
@@ -166,6 +168,15 @@ class ReviewPage(QWidget):
         self.rationale.setWordWrap(True)
         self.rationale.setFont(theme.body(10))
         column.addWidget(self.rationale)
+
+        self.pending = QLabel(
+            "Development controls are not in this window yet. This is the "
+            "selection they will work from.")
+        self.pending.setObjectName("hint")
+        self.pending.setWordWrap(True)
+        self.pending.setFont(theme.body(9))
+        self.pending.setVisible(self.intent == "develop")
+        column.addWidget(self.pending)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
