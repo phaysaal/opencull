@@ -27,6 +27,8 @@ dev = ["pytest>=8.0", "ruff>=0.6"]
 build = ["pyinstaller>=6.0", "certifi"]
 # Native application window; falls back to the browser when absent.
 shell = ["pywebview>=5.0"]
+# Spike: the launcher as a native Qt window (spike/qt_launcher.py).
+qt = ["PySide6-Essentials>=6.6"]
 
 [project.scripts]
 # The desktop launcher: queue, projects and providers. This is what a menu
