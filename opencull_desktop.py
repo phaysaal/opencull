@@ -439,11 +439,13 @@ def run_native_server(
         services.close()
 
 
-def run_launcher(paths: MacOSPaths) -> int:
+def run_launcher(
+    paths: MacOSPaths, diagnose: bool = False, screen: str = "",
+) -> int:
     """Open the native launcher and run until its window closes."""
     import opencull_qt
 
-    return opencull_qt.run(paths)
+    return opencull_qt.run(paths, diagnose=diagnose, screen=screen)
 
 
 def _check_native_program(program: Path) -> None:
@@ -921,6 +923,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--release-smoke-test", metavar="REPORT_PATH")
     parser.add_argument("--native-server", action="store_true")
     parser.add_argument(
+        "--screen", default="",
+        help="open on a named monitor, for example eDP-1 (default: primary)")
+    parser.add_argument(
+        "--diagnose", action="store_true",
+        help="report the display, screens and window placement at startup")
+    parser.add_argument(
         "--tk-launcher", action="store_true",
         help="use the previous Tk launcher instead of the application window")
     parser.add_argument("finder_items", nargs="*")
@@ -968,11 +976,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     lock = InstanceLock(paths.support / "desktop.lock")
     if not lock.acquire():
         logging.info("Darkimiya desktop is already running")
+        print(
+            "Darkimiya is already running. Its window may be on another "
+            "screen or workspace; close it before starting a second copy.",
+            flush=True)
         return 0
     try:
         if args.tk_launcher:
             return DesktopApp(paths, args.finder_items).run()
-        return run_launcher(paths)
+        return run_launcher(
+            paths, diagnose=args.diagnose, screen=args.screen or "")
     finally:
         lock.release()
 

@@ -11,7 +11,7 @@ import webbrowser
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QCursor, QGuiApplication, QIcon
+from PySide6.QtGui import QGuiApplication, QIcon
 from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
@@ -65,15 +65,26 @@ def short_path(value: str) -> str:
     return f"~{value[len(home):]}" if value.startswith(home) else value
 
 
-def place_on_active_screen(window: QWidget) -> None:
-    """Centre the window on the screen the person is actually looking at.
+def place_on_active_screen(window: QWidget, prefer: str = "") -> None:
+    """Centre the window on the primary screen.
 
     Left to the window manager, a new window can land on whichever monitor
     the layout puts first. On a desktop with a second display that is off,
-    asleep, or simply not the one being used, that reads as the application
-    failing to open: an icon appears in the taskbar and nothing else.
+    asleep, or simply not the one being watched, that reads as the
+    application failing to open: an icon appears in the dock and nothing
+    else does.
+
+    The primary screen is chosen deliberately over the one under the
+    pointer. The pointer can be resting on a monitor that is powered down,
+    whereas the primary screen is the one carrying the panel and dock -- the
+    screen a person is looking at when they start an application.
     """
-    screen = QGuiApplication.screenAt(QCursor.pos()) or QGuiApplication.primaryScreen()
+    screen = None
+    if prefer:
+        screen = next(
+            (item for item in QGuiApplication.screens()
+             if item.name() == prefer), None)
+    screen = screen or QGuiApplication.primaryScreen()
     if screen is None:
         return
     available = screen.availableGeometry()
@@ -85,9 +96,10 @@ def place_on_active_screen(window: QWidget) -> None:
 
 
 class Launcher(QMainWindow):
-    def __init__(self, services, poll_interval: int = 1500):
+    def __init__(self, services, poll_interval: int = 1500, screen: str = ""):
         super().__init__()
         self.services = services
+        self.preferred_screen = screen
         self.setWindowTitle("Darkimiya")
         self.resize(1040, 720)
         self.setMinimumSize(760, 540)
@@ -343,7 +355,7 @@ class Launcher(QMainWindow):
         super().showEvent(event)
         if not self._placed:
             self._placed = True
-            place_on_active_screen(self)
+            place_on_active_screen(self, self.preferred_screen)
             # A window the manager put behind others is as invisible as one on
             # a monitor that is off.
             self.raise_()
