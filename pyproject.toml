@@ -18,6 +18,8 @@ dependencies = [
     "rawpy>=0.19",
     # opencull_gui/faces.py and the release smoke test import cv2.
     "opencv-python-headless>=4.10",
+    # The desktop interface.
+    "PySide6-Essentials>=6.6",
 ]
 
 [project.optional-dependencies]
@@ -25,10 +27,6 @@ dev = ["pytest>=8.0", "ruff>=0.6"]
 # The desktop launcher and the PyInstaller bundle. Both are macOS-oriented
 # today; see docs for the cross-platform shell plan.
 build = ["pyinstaller>=6.0", "certifi"]
-# Native application window; falls back to the browser when absent.
-shell = ["pywebview>=5.0"]
-# Spike: the launcher as a native Qt window (spike/qt_launcher.py).
-qt = ["PySide6-Essentials>=6.6"]
 
 [project.scripts]
 # The desktop launcher: queue, projects and providers. This is what a menu
@@ -69,10 +67,10 @@ py-modules = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["opencull_gui*"]
+include = ["opencull_gui*", "opencull_qt*"]
 
 [tool.setuptools.package-data]
-opencull_gui = ["static/*", "launcher/*"]
+opencull_gui = ["static/*"]
 
 [tool.pytest.ini_options]
 # Tests import the top-level kernels directly; without this they resolve only

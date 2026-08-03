@@ -97,6 +97,10 @@ ln -s /path/to/kimiya-lang ../kimiya-lang
 export PYTHONPATH=$PWD/../kimiya-lang
 ```
 
+The launcher is a native Qt window. The review workspace is still the local
+web interface, which the launcher opens in your browser; that part is being
+moved to Qt next.
+
 ### Linux
 
 `scripts/install_linux.sh` installs into a private virtual environment under
@@ -109,11 +113,9 @@ deletion of `~/.local/share/darkimiya`.
 ./scripts/install_linux.sh
 ```
 
-Set `PREFIX` to install elsewhere. Two optional components are reported if
-absent: `zenity` or `kdialog` for the folder and file choosers, and
-`darktable` for guided RAW development. Without a chooser you can still type
-paths directly; the interface says so rather than offering a button that
-fails.
+Set `PREFIX` to install elsewhere. `darktable` is reported if absent; it is
+needed only for guided RAW development. File and folder choosers come from Qt
+itself, so no `zenity` or `kdialog` is required.
 
 Application state follows the XDG base directories:
 

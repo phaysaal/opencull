@@ -43,6 +43,8 @@ jobs:
           python -c "import scan; s = scan.raw_decoder_status(); print(s); raise SystemExit(0 if s['decoder'] == 'rawpy' else 1)"
 
       - name: Test
+        env:
+          QT_QPA_PLATFORM: offscreen
         run: python -m pytest -q
 
   lint:

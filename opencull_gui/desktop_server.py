@@ -18,8 +18,6 @@ from .jobs import JobError, JobManager
 from .project_catalog import ProjectCatalog, ProjectCatalogError
 from .providers import ProviderError, ProviderStore
 
-LAUNCHER_ROOT = Path(__file__).with_name("launcher")
-
 
 class DesktopBridgeServer(ThreadingHTTPServer):
     """Own the queue engine while exposing only authenticated local requests."""
@@ -84,49 +82,10 @@ class DesktopBridgeHandler(BaseHTTPRequestHandler):
             raise ValueError("request body must be an object")
         return value
 
-    def _serve_launcher_asset(self, path: str) -> bool:
-        """Serve the launcher's own files, which carry no secrets.
-
-        The page is what obtains the session token, so it cannot present one
-        yet. Only these three names are reachable, and the session is bound to
-        loopback, so this widens nothing an attacker could not already read
-        from the installed package.
-        """
-        names = {
-            "/": ("index.html", "text/html; charset=utf-8"),
-            "/launcher.css": ("launcher.css", "text/css; charset=utf-8"),
-            "/launcher.js": ("launcher.js", "text/javascript; charset=utf-8"),
-        }
-        if path not in names:
-            return False
-        name, content_type = names[path]
-        body = (LAUNCHER_ROOT / name).read_bytes()
-        if name == "index.html":
-            # The token goes into the document rather than the URL, where it
-            # would survive in history and in any logged request line.
-            token = json.dumps(self.server.token)
-            body = body.replace(
-                b"<script src=\"/launcher.js\">",
-                f"<script>window.__DARKIMIYA_TOKEN__={token};</script>"
-                "<script src=\"/launcher.js\">".encode())
-        self.send_response(HTTPStatus.OK)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
-        self.send_header(
-            "Content-Security-Policy",
-            "default-src 'none'; script-src 'self' 'unsafe-inline'; "
-            "style-src 'self'; connect-src 'self'; img-src 'self' data:")
-        self.end_headers()
-        self.wfile.write(body)
-        return True
-
     def do_GET(self) -> None:
-        path = urlparse(self.path).path
-        if self._serve_launcher_asset(path):
-            return
         if not self._authorized():
             return
+        path = urlparse(self.path).path
         if path == "/health":
             self._json({"ok": True, "service": "opencull-native-bridge-v1"})
         elif path == "/state":

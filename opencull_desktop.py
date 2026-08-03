@@ -14,6 +14,7 @@ import tempfile
 import threading
 import webbrowser
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 from opencull_gui import dialogs
@@ -28,6 +29,7 @@ from opencull_gui.project import (
     load_or_create_folder_project,
     migrate_legacy_project,
 )
+from opencull_gui.project_catalog import ProjectCatalog
 from opencull_gui.providers import ProviderStore
 from opencull_gui.report import load_report
 from opencull_gui.reviews import ReviewStore, default_review_path
@@ -260,13 +262,41 @@ def run_release_smoke_test(output_path: Path) -> int:
     return 0 if checks["passed"] else 1
 
 
-def run_native_server(
-    paths: MacOSPaths, present: Callable[[str], None] | None = None,
-) -> int:
-    """Run the queue service, either headless or behind a window we present."""
-    from opencull_gui.desktop_server import serve_desktop_bridge
-    from opencull_gui.project_catalog import ProjectCatalog
+@dataclass
+class DesktopServices:
+    """The application's long-lived services, independent of any interface."""
 
+    jobs: JobManager
+    providers: ProviderStore
+    projects: ProjectCatalog
+    open_review: Callable[..., dict[str, object]]
+    review_servers: list[ReviewServer]
+    paths: MacOSPaths
+
+    def diagnostics(self) -> dict[str, object]:
+        return {
+            "resource_root": str(resource_root()),
+            "queue_path": str(self.paths.jobs),
+            "provider_path": str(self.paths.providers),
+            "log_path": str(self.paths.launcher_log),
+            "results_path": str(self.paths.results),
+            "frozen": bool(getattr(sys, "frozen", False)),
+        }
+
+    def close(self) -> None:
+        for server in self.review_servers:
+            server.shutdown()
+            server.server_close()
+        self.review_servers.clear()
+        self.jobs.shutdown()
+
+
+def build_desktop_services(paths: MacOSPaths) -> DesktopServices:
+    """Construct the queue, providers, project library and review opener.
+
+    Shared so the Qt launcher and the headless bridge wire the application
+    the same way rather than each assembling their own.
+    """
     providers = ProviderStore(
         paths.providers, resource_root(),
         generated_root=paths.generated / "providers")
@@ -388,47 +418,32 @@ def run_native_server(
                 report.stem.removesuffix("-results") or photos.name),
         }
 
+    return DesktopServices(
+        jobs=jobs, providers=providers, projects=projects,
+        open_review=open_review, review_servers=review_servers, paths=paths)
+
+
+def run_native_server(
+    paths: MacOSPaths, present: Callable[[str], None] | None = None,
+) -> int:
+    """Run the queue service, either headless or behind a window we present."""
+    from opencull_gui.desktop_server import serve_desktop_bridge
+
+    services = build_desktop_services(paths)
     try:
         return serve_desktop_bridge(
-            jobs, providers, open_review,
-            diagnostics={
-                "resource_root": str(resource_root()),
-                "queue_path": str(paths.jobs),
-                "provider_path": str(paths.providers),
-                "log_path": str(paths.launcher_log),
-                "results_path": str(paths.results),
-                "frozen": bool(getattr(sys, "frozen", False)),
-            }, projects=projects, present=present)
+            services.jobs, services.providers, services.open_review,
+            diagnostics=services.diagnostics(), projects=services.projects,
+            present=present)
     finally:
-        for server in review_servers:
-            server.shutdown()
-            server.server_close()
+        services.close()
 
 
-def run_launcher(paths: MacOSPaths, prefer_native: bool = True) -> int:
-    """Open the launcher in a native window with the queue service behind it."""
-    from opencull_gui import shell
+def run_launcher(paths: MacOSPaths) -> int:
+    """Open the native launcher and run until its window closes."""
+    import opencull_qt
 
-    def present(url: str) -> None:
-        available, reason = shell.native_window_available()
-        if not available:
-            print(reason)
-        # Always announce the address, including when a window is expected.
-        # A web view that fails to map its window leaves no other way in, and
-        # that failure is silent: the process runs, the window exists, and
-        # nothing appears. A printed address costs one line and removes the
-        # possibility of the application starting with nothing to show for it.
-        print(f"Darkimiya: {url}", flush=True)
-        used = shell.open_launcher(url, prefer_native=prefer_native)
-        if used == "native":
-            return
-        print("Press Ctrl-C to stop.", flush=True)
-        try:
-            threading.Event().wait()
-        except KeyboardInterrupt:
-            print()
-
-    return run_native_server(paths, present=present)
+    return opencull_qt.run(paths)
 
 
 def _check_native_program(program: Path) -> None:
@@ -906,9 +921,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--release-smoke-test", metavar="REPORT_PATH")
     parser.add_argument("--native-server", action="store_true")
     parser.add_argument(
-        "--browser", action="store_true",
-        help="open the launcher in the browser instead of its own window")
-    parser.add_argument(
         "--tk-launcher", action="store_true",
         help="use the previous Tk launcher instead of the application window")
     parser.add_argument("finder_items", nargs="*")
@@ -960,7 +972,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if args.tk_launcher:
             return DesktopApp(paths, args.finder_items).run()
-        return run_launcher(paths, prefer_native=not args.browser)
+        return run_launcher(paths)
     finally:
         lock.release()
 
