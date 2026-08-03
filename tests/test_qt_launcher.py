@@ -229,6 +229,29 @@ class LauncherWindowTests(unittest.TestCase):
         self.assertIn("no longer on disk", window.notice_text.text())
         self.assertEqual(services.opened, [])
 
+    def test_the_window_lands_on_the_screen_being_used(self):
+        # A second monitor that is off or unwatched makes a window there
+        # indistinguishable from one that never opened: a taskbar icon and
+        # nothing else.
+        from PySide6.QtGui import QGuiApplication
+
+        window, _ = self.build()
+        screen = QGuiApplication.primaryScreen()
+        self.assertIsNotNone(screen)
+        available = screen.availableGeometry()
+        self.assertTrue(
+            available.contains(window.frameGeometry().center()),
+            f"window centre {window.frameGeometry().center()} is outside "
+            f"the screen {available}")
+
+    def test_a_window_larger_than_the_screen_is_shrunk_to_fit(self):
+        window, _ = self.build()
+        from PySide6.QtGui import QGuiApplication
+
+        available = QGuiApplication.primaryScreen().availableGeometry()
+        self.assertLessEqual(window.width(), available.width())
+        self.assertLessEqual(window.height(), available.height())
+
     def test_closing_the_window_shuts_the_services_down(self):
         window, services = self.build()
         window.close()

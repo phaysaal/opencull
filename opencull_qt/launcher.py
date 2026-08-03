@@ -11,6 +11,7 @@ import webbrowser
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QCursor, QGuiApplication, QIcon
 from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
@@ -64,6 +65,25 @@ def short_path(value: str) -> str:
     return f"~{value[len(home):]}" if value.startswith(home) else value
 
 
+def place_on_active_screen(window: QWidget) -> None:
+    """Centre the window on the screen the person is actually looking at.
+
+    Left to the window manager, a new window can land on whichever monitor
+    the layout puts first. On a desktop with a second display that is off,
+    asleep, or simply not the one being used, that reads as the application
+    failing to open: an icon appears in the taskbar and nothing else.
+    """
+    screen = QGuiApplication.screenAt(QCursor.pos()) or QGuiApplication.primaryScreen()
+    if screen is None:
+        return
+    available = screen.availableGeometry()
+    size = window.frameGeometry().size().boundedTo(available.size())
+    window.resize(size)
+    frame = window.frameGeometry()
+    frame.moveCenter(available.center())
+    window.move(frame.topLeft())
+
+
 class Launcher(QMainWindow):
     def __init__(self, services, poll_interval: int = 1500):
         super().__init__()
@@ -71,7 +91,11 @@ class Launcher(QMainWindow):
         self.setWindowTitle("Darkimiya")
         self.resize(1040, 720)
         self.setMinimumSize(760, 540)
+        self._placed = False
         self.setStyleSheet(theme.STYLESHEET)
+        icon = Path(__file__).resolve().parent.parent / "assets" / "opencull-icon.svg"
+        if icon.is_file():
+            self.setWindowIcon(QIcon(str(icon)))
         self._build()
         self.refresh()
 
@@ -314,6 +338,16 @@ class Launcher(QMainWindow):
         dialog = ProvidersDialog(self.services.providers, self)
         dialog.exec()
         self.refresh()
+
+    def showEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        super().showEvent(event)
+        if not self._placed:
+            self._placed = True
+            place_on_active_screen(self)
+            # A window the manager put behind others is as invisible as one on
+            # a monitor that is off.
+            self.raise_()
+            self.activateWindow()
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt naming
         self._timer.stop()
