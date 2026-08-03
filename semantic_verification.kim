@@ -1,0 +1,56 @@
+-- OpenCull semantic verification of an edit suggestion and developed image.
+
+param original: text
+param developed: text
+param thumbnail: text = ""
+param suggestion: text
+param consensus: bool = false
+param output: text = "semantic-verification.json"
+
+use "agents.kim"
+use python "semantic_verification_kernel.py"
+
+context k_semantic_review:
+    domain = "semantic photographic edit verification"
+    preserve = [subject_dignity, expression, scene_identity, believable_light]
+    allow_loss = [camera_jpeg_processing, exact_pixel_identity]
+
+schema SemanticJudgment:
+    satisfactory: bool
+    confidence: num
+    follows_suggestion: num
+    preserves_subject: num
+    preserves_composition: num
+    photographic_quality: num
+    concerns: text
+    reasoning: text
+
+request := build_verification_request(original, developed, suggestion, thumbnail)
+orig := observe image(original)
+developed_image := observe image(developed)
+check orig.exists
+check developed_image.exists
+images := [orig, developed_image]
+if check thumbnail != "":
+    thumb := observe image(thumbnail)
+    check thumb.exists
+    images := [orig, thumb, developed_image]
+
+raw_a := memo gen<SemanticJudgment>(verification_prompt(request), images=images) by A
+judgment_a := normalize_verification(raw_a)
+if check consensus == true:
+    raw_b := memo gen<SemanticJudgment>(verification_prompt(request), images=images) by B
+    raw_c := memo gen<SemanticJudgment>(verification_prompt(request), images=images) by D
+    judgment_b := normalize_verification(raw_b)
+    judgment_c := normalize_verification(raw_c)
+    all_judgments := [judgment_a, judgment_b, judgment_c]
+    judgment := consensus_judgment(all_judgments)
+    report := consensus_verification_json(request, judgment, all_judgments, ["A", "B", "D"])
+else:
+    judgment := judgment_a
+    report := verification_json(request, judgment, "A")
+check valid_verification(judgment)
+check len(report) > 0
+act file.overwrite(output, report)
+settle until check file_exists(output) within 5
+commit(report)

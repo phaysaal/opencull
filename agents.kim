@@ -1,0 +1,49 @@
+-- OpenCull's model interface. Edit this module to choose the agents.
+--
+-- All inference uses OpenRouter with zero-data-retention routing. Only A
+-- receives image pixels; B and C receive the textual report and evidence.
+
+agent A:
+    backend  = "openrouter"
+    model    = "openai/gpt-5.6-luna-pro"
+    key_file = "../apis/opencull.api"
+    zdr      = true
+    vision  = true
+
+-- Comparative photographer-curator after A's per-frame observations.
+agent B:
+    backend  = "openrouter"
+    model    = "openai/gpt-5.6-luna-pro"
+    key_file = "../apis/opencull.api"
+    zdr      = true
+    vision   = true
+
+agent C:
+    backend  = "openrouter"
+    model    = "openai/gpt-4.1-mini"
+    key_file = "../apis/opencull.api"
+    zdr      = true
+
+-- Independent vision tuner for ambiguous cluster boundaries.
+agent D:
+    backend  = "openrouter"
+    model    = "openai/gpt-5.6-luna-pro"
+    key_file = "../apis/opencull.api"
+    zdr      = true
+    vision   = true
+
+-- OpenRouter example:
+--
+-- agent B:
+--     backend = "openrouter"
+--     model   = "google/gemini-2.5-flash"
+--     key_env = "OPENROUTER_API_KEY"
+--
+-- vast.ai / vLLM / any OpenAI-compatible endpoint:
+--
+-- agent C:
+--     backend = "openai"
+--     model   = "Qwen/Qwen3-32B"
+--     url     = "http://YOUR_POD_IP:8000/v1"
+--     key_env = "VAST_API_KEY"
+--     family  = "qwen"

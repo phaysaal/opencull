@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="1024" height="1024" viewBox="0 0 1024 1024"
+     role="img" aria-labelledby="title description">
+  <title id="title">OpenCull application icon</title>
+  <desc id="description">
+    A camera aperture surrounding an open center, with a green keeper check.
+  </desc>
+
+  <!-- macOS-safe rounded tile and inset rim -->
+  <rect x="48" y="48" width="928" height="928" rx="214" fill="#111827"/>
+  <rect x="72" y="72" width="880" height="880" rx="190"
+        fill="none" stroke="#263449" stroke-width="12"/>
+
+  <!-- aperture housing -->
+  <circle cx="512" cy="492" r="328" fill="#0A101C"
+          stroke="#40506A" stroke-width="18"/>
+
+  <!-- six aperture blades; slight tonal changes preserve the iris at 32 px -->
+  <path d="M512 174 A318 318 0 0 1 781 322 L603 426
+           A118 118 0 0 0 512 374 Z" fill="#75A7D9"/>
+  <path d="M781 322 A318 318 0 0 1 781 632 L603 530
+           A118 118 0 0 0 603 426 Z" fill="#5E91C8"/>
+  <path d="M781 632 A318 318 0 0 1 512 810 L512 610
+           A118 118 0 0 0 603 530 Z" fill="#497CB5"/>
+  <path d="M512 810 A318 318 0 0 1 243 632 L421 530
+           A118 118 0 0 0 512 610 Z" fill="#386AA2"/>
+  <path d="M243 632 A318 318 0 0 1 243 322 L421 426
+           A118 118 0 0 0 421 530 Z" fill="#4F82B8"/>
+  <path d="M243 322 A318 318 0 0 1 512 174 L512 374
+           A118 118 0 0 0 421 426 Z" fill="#679ACC"/>
+
+  <!-- open, transparent-looking lens center -->
+  <circle cx="512" cy="492" r="116" fill="#111827"
+          stroke="#B8D6F0" stroke-width="12"/>
+  <circle cx="479" cy="455" r="28" fill="#D9F0FF" opacity=".78"/>
+
+  <!-- keeper badge -->
+  <circle cx="744" cy="742" r="154" fill="#0B1220"
+          stroke="#111827" stroke-width="28"/>
+  <circle cx="744" cy="742" r="128" fill="#25C57A"/>
+  <path d="M650 742 L681 709 L724 751 L806 665
+           L838 697 L726 815 Z" fill="#FFFFFF"/>
+</svg>
