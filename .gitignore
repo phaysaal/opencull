@@ -24,3 +24,7 @@ opencull-results.json
 /opencull.py
 fixtures/generated/
 /realtests/
+
+# Personal culling reports must not be committed; see 600_Fuji_01.json
+# removed in this branch. The *-results.json rule below missed that name.
+600_*.json

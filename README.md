@@ -77,23 +77,24 @@ operations through a narrow, versioned adapter.
 Python 3.11 or newer is required.
 
 ```bash
-cd /Users/faisal/code/opencull
+cd /path/to/opencull
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install -r requirements.txt
+python -m pip install -e ".[dev]"
 ```
 
-On macOS, Fujifilm RAF previews use the system `sips` decoder. To use LibRaw
-through Python instead (or on a system without `sips`):
+RAW previews are decoded by `rawpy`, which is a base requirement and works
+on Linux, macOS and Windows. It reads the preview already embedded in the
+RAW file. On macOS the system `sips` tool remains as a fallback if `rawpy`
+is unavailable, but it decodes the whole frame in a separate process per
+photograph and is much slower; the interface reports when it is in use.
+
+Kimiya runs from a checkout beside this repository. Either clone it there
+or symlink it:
 
 ```bash
-python -m pip install -r requirements-raw.txt
-```
-
-Kimiya itself currently runs from the neighboring source checkout:
-
-```bash
-export PYTHONPATH=/Users/faisal/code/kimiya-lang
+ln -s /path/to/kimiya-lang ../kimiya-lang
+export PYTHONPATH=$PWD/../kimiya-lang
 ```
 
 ## Choose agents
@@ -267,8 +268,8 @@ photographs as immutable evidence while storing human decisions separately:
 
 ```bash
 python gui.py \
-  600_Fuji-results.json \
-  "/Volumes/NVMeF1/RawPhotos/Luvre/600_FUJI"
+  opencull-results.json \
+  /path/to/shoot
 ```
 
 The server binds only to `127.0.0.1` and opens the browser automatically. It
