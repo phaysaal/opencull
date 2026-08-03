@@ -155,6 +155,33 @@ def _announce_sips_fallback() -> None:
     warnings.warn(raw_decoder_status()["detail"], RuntimeWarning, stacklevel=3)
 
 
+def classify_folder(directory: Path, recursive: bool = True) -> dict[str, Any]:
+    """Count what kinds of photograph a folder holds.
+
+    Which treatment a folder can receive follows from this: RAW files can be
+    developed, rendered bitmaps can only be edited, and a folder holding both
+    can do either. Counting extensions is a directory walk with no decoding,
+    so it stays cheap on a large shoot.
+    """
+    raw = 0
+    bitmap = 0
+    for path in image_files(directory, recursive):
+        suffix = path.suffix.lower()
+        if suffix in RAW_EXTENSIONS:
+            raw += 1
+        elif suffix in BITMAP_EXTENSIONS:
+            bitmap += 1
+    if raw and bitmap:
+        kind = "mixed"
+    elif raw:
+        kind = "raw"
+    elif bitmap:
+        kind = "bitmap"
+    else:
+        kind = "empty"
+    return {"raw": raw, "bitmap": bitmap, "total": raw + bitmap, "kind": kind}
+
+
 def raw_preview(path: Path) -> Image.Image:
     if rawpy is None:
         _announce_sips_fallback()

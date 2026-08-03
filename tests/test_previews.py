@@ -168,6 +168,55 @@ class WorkerDefaultTests(unittest.TestCase):
             finally:
                 manager.shutdown()
 
+class FolderClassificationTests(unittest.TestCase):
+    """What a folder holds decides what can be done to it."""
+
+    def setUp(self):
+        self._temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self._temporary.name)
+
+    def tearDown(self):
+        self._temporary.cleanup()
+
+    def make(self, *names):
+        for name in names:
+            path = self.root / name
+            if path.suffix.lower() in {".jpg", ".jpeg", ".png"}:
+                write_photo(path, size=(40, 30))
+            else:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"\0")
+        return scan.classify_folder(self.root)
+
+    def test_only_raw_is_a_raw_folder(self):
+        result = self.make("A.RAF", "B.CR3", "C.NEF")
+        self.assertEqual(result["kind"], "raw")
+        self.assertEqual(result["raw"], 3)
+        self.assertEqual(result["bitmap"], 0)
+
+    def test_only_rendered_files_is_a_bitmap_folder(self):
+        result = self.make("A.JPG", "B.jpeg", "C.png")
+        self.assertEqual(result["kind"], "bitmap")
+        self.assertEqual(result["bitmap"], 3)
+
+    def test_both_kinds_is_mixed(self):
+        result = self.make("A.RAF", "A.JPG")
+        self.assertEqual(result["kind"], "mixed")
+        self.assertEqual((result["raw"], result["bitmap"]), (1, 1))
+
+    def test_a_folder_with_no_photographs_is_empty(self):
+        (self.root / "notes.txt").write_text("x", encoding="utf-8")
+        result = scan.classify_folder(self.root)
+        self.assertEqual(result["kind"], "empty")
+        self.assertEqual(result["total"], 0)
+
+    def test_case_does_not_decide_the_kind(self):
+        self.assertEqual(self.make("a.raf", "B.RaF")["kind"], "raw")
+
+    def test_nested_folders_are_counted(self):
+        write_photo(self.root / "day2" / "A.JPG", size=(40, 30))
+        self.assertEqual(scan.classify_folder(self.root)["kind"], "bitmap")
+
 
 if __name__ == "__main__":
     unittest.main()

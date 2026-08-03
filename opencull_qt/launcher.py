@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 )
 
 from opencull_gui.project_catalog import ProjectCatalogError
+from scan import classify_folder
 
 from . import theme
 from .providers import ProvidersDialog
@@ -54,10 +55,32 @@ def project_state(project: dict) -> tuple[str, str]:
     if status == "failed":
         return "Failed", "failed"
     if project.get("report_available"):
-        return "Reviewed", "ready"
+        return "Culled", "ready"
     if not project.get("available"):
         return "Folder offline", "failed"
     return "Not culled", ""
+
+
+def treatment_label(kind: str) -> str:
+    """Name the treatment a folder's contents can receive.
+
+    RAW files are developed. Rendered bitmaps can only be edited. A folder
+    holding both can do either, so it offers both.
+    """
+    return {
+        "raw": "Develop",
+        "bitmap": "Edit",
+        "mixed": "Develop / Edit",
+    }.get(kind, "")
+
+
+RECULL_WARNING = (
+    "Culling {name} again discards the current selection and asks the models "
+    "to choose from scratch. It costs another full run.\n\n"
+    "Your own keeper and reject marks are kept, but the AI recommendations "
+    "they sit beside will change.\n\n"
+    "Only do this if the previous cull was wrong in a large way. To disagree "
+    "with a few frames, open the review and change them there.")
 
 
 def short_path(value: str) -> str:
@@ -100,6 +123,7 @@ class Launcher(QMainWindow):
         super().__init__()
         self.services = services
         self.preferred_screen = screen
+        self._contents: dict[str, dict] = {}
         self.setWindowTitle("Darkimiya")
         self.resize(1040, 720)
         self.setMinimumSize(760, 540)
@@ -203,11 +227,11 @@ class Launcher(QMainWindow):
 
         actions = QHBoxLayout()
         actions.setSpacing(10)
-        self.cull_button = QPushButton("Cull a folder")
+        self.cull_button = QPushButton("Open a folder")
         self.cull_button.setObjectName("primary")
         self.cull_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.cull_button.setFont(theme.body(10))
-        self.cull_button.clicked.connect(self.cull_folder)
+        self.cull_button.clicked.connect(self.open_folder)
         actions.addWidget(self.cull_button)
         actions.addStretch(1)
         layout.addLayout(actions)
@@ -248,8 +272,9 @@ class Launcher(QMainWindow):
         self.library_band.setVisible(not empty)
         if empty:
             self.summary.setText(
-                "Point Darkimiya at a shoot. It groups the near-duplicate "
-                "frames and proposes keepers. Nothing is moved or deleted.")
+                "Open a folder of photographs. Darkimiya can cull it, "
+                "grouping the near-duplicate frames and proposing keepers, or "
+                "develop it directly. Nothing is moved or deleted.")
         else:
             self.count.setText(f"{len(projects):,}")
             reviewed = sum(1 for item in projects if item.get("report_available"))
@@ -276,51 +301,130 @@ class Launcher(QMainWindow):
             for index, job in enumerate(active)
         ])
 
+    def folder_contents(self, project: dict) -> dict:
+        """Classify a folder's photographs, walking it at most once."""
+        photos = str(project.get("photos", ""))
+        if photos not in self._contents:
+            if not project.get("available"):
+                self._contents[photos] = {"kind": "empty", "total": 0}
+            else:
+                try:
+                    self._contents[photos] = classify_folder(Path(photos))
+                except OSError:
+                    self._contents[photos] = {"kind": "empty", "total": 0}
+        return self._contents[photos]
+
     def _folder_row(self, project: dict, last: bool) -> Row:
         label, tone = project_state(project)
+        culled = bool(project.get("report_available"))
+        running = tone == "running"
         actions: list[tuple[str, object]] = []
-        if project.get("report_available"):
+
+        if culled:
             actions.append(
                 ("Open review", lambda p=project: self.open_review(p)))
-        if tone != "running" and project.get("available"):
+
+        # What a folder holds decides what can be done to it.
+        treatment = treatment_label(self.folder_contents(project)["kind"])
+        if treatment and not running and project.get("available"):
+            actions.append(
+                (treatment, lambda p=project: self.develop(p)))
+
+        if not running and project.get("available"):
             actions.append((
-                "Cull again" if project.get("report_available") else "Cull",
-                lambda p=project: self.cull_project(p)))
+                "Re-cull" if culled else "Cull",
+                lambda p=project, again=culled: self.cull_project(p, again)))
+
         return Row(
             str(project.get("name", "")),
             short_path(str(project.get("photos", ""))),
             label, tone, actions,
-            progress=job_progress(project["culling"]) if tone == "running" else None,
+            progress=job_progress(project["culling"]) if running else None,
             last=last)
 
     # --- actions --------------------------------------------------------
 
-    def cull_folder(self) -> None:
+    def open_folder(self) -> None:
+        """Add a folder to the library. Choosing what to do with it comes next."""
         folder = QFileDialog.getExistingDirectory(
-            self, "Choose a folder of photographs to cull", str(Path.home()))
+            self, "Open a folder of photographs", str(Path.home()))
         if not folder:
             return
         try:
-            record = self.services.projects.add(folder)
-            self.report("")
+            self.services.projects.add(folder)
         except (ProjectCatalogError, ValueError) as exc:
             self.report(str(exc), "alarm")
             self.refresh()
             return
-        project = (record.get("projects") or [{}])[-1] if isinstance(
-            record, dict) else {}
-        self.cull_project(project or {"photos": folder})
+        try:
+            contents = classify_folder(Path(folder))
+        except OSError:
+            contents = {"kind": "empty", "total": 0}
+        self._contents[folder] = contents
+        name = Path(folder).name
+        if contents["total"] == 0:
+            self.report(
+                f"{name} holds no photographs Darkimiya can read.", "alarm")
+        else:
+            treatment = treatment_label(contents["kind"])
+            self.report(
+                f"Added {name}: {contents['total']} photographs. "
+                f"Cull it, or go straight to {treatment.lower()}.")
+        self.refresh()
 
-    def cull_project(self, project: dict) -> None:
+    def cull_project(self, project: dict, again: bool = False) -> None:
+        name = str(project.get("name") or Path(str(project.get("photos", ""))).name)
+        if again and not self.confirm_recull(name):
+            return
         photos = str(project.get("photos", ""))
         try:
             self.services.jobs.add(photos, "", 2, True, "family", "", None, 5, 4)
-            self.report(f"Culling {Path(photos).name}.")
         except Exception as exc:
-            # A missing provider credential surfaces here; it is the most
+            # A missing provider credential surfaces here, and is the most
             # common reason a cull cannot start, so say so plainly.
-            self.report(f"{exc}", "alarm")
+            self.report(str(exc), "alarm")
+            self.refresh()
+            return
+        self.report(
+            f"Culling {name}. It will be marked Culled when the run finishes.")
         self.refresh()
+
+    def confirm_recull(self, name: str) -> bool:
+        """Ask before discarding a selection that already exists."""
+        box = QMessageBox(self)
+        box.setWindowTitle("Cull again?")
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setText(f"{name} has already been culled.")
+        box.setInformativeText(RECULL_WARNING.format(name=name))
+        again = box.addButton("Cull again", QMessageBox.ButtonRole.DestructiveRole)
+        keep = box.addButton("Keep the current cull", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(keep)
+        box.exec()
+        return box.clickedButton() is again
+
+    def develop(self, project: dict) -> None:
+        """Open the treatment workspace for a folder.
+
+        Development works from a selection. A folder that has been culled
+        already has one; a folder that has not gets a deterministic
+        everything-included selection so the treatment can proceed without
+        paying for a cull first.
+        """
+        photos = Path(str(project.get("photos", "")))
+        report = Path(str(project.get("report", "")))
+        try:
+            if not report.is_file():
+                report = self.services.projects.manual_selection_report(
+                    str(project.get("id", "")))
+            opened = self.services.open_review(report, photos)
+        except (ProjectCatalogError, ValueError, OSError) as exc:
+            self.report(str(exc), "alarm")
+            return
+        webbrowser.open(str(opened["url"]))
+        contents = self.folder_contents(project)
+        self.report(
+            f"Opened {project.get('name', 'the folder')} for "
+            f"{treatment_label(contents['kind']).lower()} in your browser.")
 
     def open_review(self, project: dict) -> None:
         report = Path(str(project.get("report", "")))
