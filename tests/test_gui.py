@@ -980,8 +980,8 @@ class GuiFaceTests(unittest.TestCase):
             reviews,
         )
 
-    def wait_faces(self, store):
-        deadline = time.time() + 3
+    def wait_faces(self, store, timeout=3):
+        deadline = time.time() + timeout
         while time.time() < deadline:
             state = store.public()
             if state["status"]["state"] in {"completed", "failed", "paused"}:
@@ -1186,7 +1186,9 @@ class GuiFaceTests(unittest.TestCase):
                 root / "models", engine=ScaleEngine())
             try:
                 store.start()
-                state = self.wait_faces(store)
+                # 1,500 photographs is a throughput test, not a latency one;
+                # the default deadline is sized for the small fixtures.
+                state = self.wait_faces(store, timeout=60)
                 self.assertEqual(state["status"]["processed"], 1500)
                 self.assertEqual(state["status"]["faces"], 1500)
                 self.assertEqual(state["status"]["people"], 1)
@@ -1538,6 +1540,10 @@ class GuiMacOSAppTests(unittest.TestCase):
             self.assertTrue(second.acquire())
             second.release()
 
+    @unittest.skipUnless(
+        sys.platform == "darwin",
+        "the release smoke test validates a macOS bundle layout",
+    )
     def test_release_smoke_validates_runtime_and_writes_receipt(self):
         with tempfile.TemporaryDirectory() as temporary:
             receipt = Path(temporary) / "release-smoke.json"

@@ -4,9 +4,21 @@ import unittest
 from pathlib import Path
 
 import numpy as np
+import tifffile
 from PIL import Image
 
 from development_engine import DevelopmentError, _apply_global, apply_adjustment_draft, render_recipe
+
+
+def write_baseline(path: Path, array: np.ndarray) -> Path:
+    """Write a 16-bit linear baseline the way the renderer writes one.
+
+    Pillow cannot represent 16-bit RGB, so building these fixtures through
+    Image.fromarray both failed and diverged from renderer_comparison, which
+    writes baselines with tifffile and reads them back the same way.
+    """
+    tifffile.imwrite(path, np.ascontiguousarray(array, dtype=np.uint16))
+    return path
 
 
 class DevelopmentEngineTests(unittest.TestCase):
@@ -24,7 +36,7 @@ class DevelopmentEngineTests(unittest.TestCase):
             root = Path(temporary)
             baseline = root / "baseline.tiff"
             array = np.full((32, 48, 3), 12000, dtype=np.uint16)
-            Image.fromarray(array, "RGB").save(baseline)
+            write_baseline(baseline, array)
             result = render_recipe(baseline, self.recipe(), root / "out")
             output = Path(result["output"]["path"])
             self.assertTrue(output.is_file())
@@ -83,7 +95,7 @@ class DevelopmentEngineTests(unittest.TestCase):
             root = Path(temporary)
             baseline = root / "baseline.tiff"
             reference = root / "camera.jpg"
-            Image.fromarray(np.full((12, 16, 3), 7000, dtype=np.uint16), "RGB").save(baseline)
+            write_baseline(baseline, np.full((12, 16, 3), 7000, dtype=np.uint16))
             Image.new("RGB", (16, 12), (180, 150, 120)).save(reference)
             result = render_recipe(
                 baseline, self.recipe(), root / "out",
@@ -98,7 +110,7 @@ class DevelopmentEngineTests(unittest.TestCase):
             gradient = np.linspace(2000, 50000, 48, dtype=np.uint16)
             array = np.repeat(gradient[None, :, None], 32, axis=0)
             array = np.repeat(array, 3, axis=2)
-            Image.fromarray(array, "RGB").save(baseline)
+            write_baseline(baseline, array)
             standard = self.recipe()
             standard["style"] = "standard"
             standard["operations"] = [{

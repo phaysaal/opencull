@@ -802,9 +802,12 @@ class Operation:
                         self._save()
                     return
                 self._execute_item(item)
-            with self._lock:
-                self.journal["status"] = "completed"
-                self._save()
+            # Integration registers this operation's journal and its moved
+            # files as project artifacts. It runs before the journal reports
+            # completion so that anything observing "completed" -- the polling
+            # interface, or recovery reading the journal after a restart --
+            # can rely on those artifacts already existing. Per-item statuses
+            # are what the finalizers read, and those are already durable.
             if self.on_complete is not None:
                 try:
                     self.on_complete(self.public())
@@ -812,6 +815,9 @@ class Operation:
                     with self._lock:
                         self.journal["integration_error"] = str(exc)
                         self._save()
+            with self._lock:
+                self.journal["status"] = "completed"
+                self._save()
         except Exception as exc:
             with self._lock:
                 self.journal["status"] = "failed"
