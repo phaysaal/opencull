@@ -27,6 +27,11 @@ dev = ["pytest>=8.0", "ruff>=0.6"]
 build = ["pyinstaller>=6.0", "certifi"]
 
 [project.scripts]
+# The desktop launcher: queue, projects and providers. This is what a menu
+# entry or icon starts.
+darkimiya = "opencull_desktop:main"
+# The review interface for an existing report, which needs a report and a
+# photograph folder as arguments.
 darkimiya-review = "gui:main"
 
 [project.urls]

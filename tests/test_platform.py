@@ -193,6 +193,35 @@ class RevealTests(unittest.TestCase):
                 dialogs.reveal(Path("/a/b.jpg"))
 
 
+class DarktableDiscoveryTests(unittest.TestCase):
+    def test_path_is_preferred_over_the_platform_defaults(self):
+        import darktable_engine
+
+        with mock.patch.object(
+            darktable_engine.shutil, "which", return_value="/usr/bin/darktable-cli"
+        ), mock.patch.object(Path, "is_file", return_value=True), \
+                mock.patch.object(darktable_engine.os, "access", return_value=True):
+            self.assertEqual(
+                darktable_engine.find_darktable_cli(),
+                Path("/usr/bin/darktable-cli"))
+
+    def test_defaults_cover_linux_and_windows_not_only_macos(self):
+        import darktable_engine
+
+        defaults = {str(path) for path in darktable_engine.DARKTABLE_FALLBACK_CLI}
+        self.assertTrue(any("Applications" in item for item in defaults))
+        self.assertTrue(any(item.startswith("/usr/") for item in defaults))
+        self.assertTrue(any("Program Files" in item for item in defaults))
+
+    def test_a_missing_darktable_is_an_explained_error(self):
+        import darktable_engine
+
+        with mock.patch.object(darktable_engine.shutil, "which", return_value=None), \
+                mock.patch.object(Path, "is_file", return_value=False):
+            with self.assertRaises(darktable_engine.DarktableError):
+                darktable_engine.find_darktable_cli()
+
+
 class TrashLocationTests(unittest.TestCase):
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()

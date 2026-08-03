@@ -97,6 +97,46 @@ ln -s /path/to/kimiya-lang ../kimiya-lang
 export PYTHONPATH=$PWD/../kimiya-lang
 ```
 
+### Linux
+
+`scripts/install_linux.sh` installs into a private virtual environment under
+`~/.local`, puts `darkimiya` and `darkimiya-review` on `PATH`, and registers a
+desktop entry so the application appears in the menu. It writes nothing
+outside your own directories, so it needs no privileges and uninstalling is a
+deletion of `~/.local/share/darkimiya`.
+
+```bash
+./scripts/install_linux.sh
+```
+
+Set `PREFIX` to install elsewhere. Two optional components are reported if
+absent: `zenity` or `kdialog` for the folder and file choosers, and
+`darktable` for guided RAW development. Without a chooser you can still type
+paths directly; the interface says so rather than offering a button that
+fails.
+
+Application state follows the XDG base directories:
+
+| Purpose | Location |
+| --- | --- |
+| Queue, providers, results | `$XDG_DATA_HOME/Darkimiya` (`~/.local/share/Darkimiya`) |
+| Generated previews | `$XDG_CACHE_HOME/Darkimiya` (`~/.cache/Darkimiya`) |
+| Logs | `$XDG_STATE_HOME/Darkimiya` (`~/.local/state/Darkimiya`) |
+| Trashed photographs | the XDG trash for the volume holding them |
+
+Photographs removed by a filter or cleanup go to the XDG trash, so the
+desktop's own Restore works on them. A photograph on a separate volume goes to
+that volume's `.Trash-$UID`, because a move must stay on one device.
+
+### Windows
+
+Windows is not yet supported. The test suite runs against it in CI and is
+reported but not enforced, so the remaining gaps are visible. Application
+state resolves to `%LOCALAPPDATA%\Darkimiya` and the choosers fall back to Tk,
+but there is no installer and no Recycle Bin integration: files a filter
+removes go to a `Darkimiya Trash` folder in the user profile rather than the
+bin.
+
 ## Choose agents
 
 Edit `agents.kim`. The checked-in default sends each observed image to

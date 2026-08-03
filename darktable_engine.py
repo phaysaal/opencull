@@ -18,6 +18,16 @@ from typing import Any
 DARKTABLE_FORMAT = "opencull-darktable-render-v1"
 DARKTABLE_MACOS_CLI = Path(
     "/Applications/darktable.app/Contents/MacOS/darktable-cli")
+# Consulted after PATH. A packaged Linux darktable is normally on PATH
+# already; these cover a Flatpak or a default Windows installation, where it
+# is not.
+DARKTABLE_FALLBACK_CLI = (
+    DARKTABLE_MACOS_CLI,
+    Path("/usr/bin/darktable-cli"),
+    Path("/usr/local/bin/darktable-cli"),
+    Path("/var/lib/flatpak/exports/bin/org.darktable.Darktable"),
+    Path(r"C:\Program Files\darktable\bin\darktable-cli.exe"),
+)
 DemosaicMode = str
 DEMOSAIC_METHODS: dict[DemosaicMode, tuple[str, int]] = {
     "markesteijn-1-pass": ("Markesteijn 1-pass", 1024 | 1),
@@ -49,7 +59,7 @@ def find_darktable_cli(explicit: str | Path | None = None) -> Path:
     discovered = shutil.which("darktable-cli")
     if discovered:
         candidates.append(Path(discovered))
-    candidates.append(DARKTABLE_MACOS_CLI)
+    candidates.extend(DARKTABLE_FALLBACK_CLI)
     for candidate in candidates:
         resolved = candidate.resolve()
         if resolved.is_file() and os.access(resolved, os.X_OK):

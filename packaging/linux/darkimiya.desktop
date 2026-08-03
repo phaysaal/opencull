@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Darkimiya
+GenericName=Photo Culling and Development
+Comment=Review AI-assisted photograph selections and develop RAW files locally
+Exec=darkimiya %f
+Icon=darkimiya
+Terminal=false
+Categories=Graphics;Photography;X-RawGraphics;
+Keywords=photo;raw;cull;culling;darkroom;photography;
+MimeType=inode/directory;
+StartupNotify=true
+StartupWMClass=Darkimiya
