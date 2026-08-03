@@ -1,12 +1,33 @@
 """Darkimiya's visual language, expressed for Qt.
 
-The palette is a darkroom rather than the usual blue-black application
-chrome: a warm near-black wall, warm paper white, and a single safelight
-amber that means "work in flight" wherever it appears.
+The palette is a darkroom rather than the usual blue-black application chrome:
+a warm near-black wall, warm paper white, and a single safelight amber that
+means "work in flight" wherever it appears.
+
+A darkroom is also an alchemical space -- one dark room, one non-actinic light,
+chemical baths, a latent image transmuted into a visible one -- which is the
+other half of the name. The accents happen to trace the stages of the magnum
+opus, and are kept in that order:
+
+    INK       nigredo     the blackening; the wall everything sits on
+    PAPER     albedo      the whitening; the print, and all primary text
+    SAFELIGHT citrinitas  the yellowing; the light that is on while you work
+    ALARM     rubedo      the reddening; failure, and the irreversible
+    FIXED     verdigris   oxidised copper; the patina of a finished thing
+
+FIXED keeps its name because fixing is the darkroom step that makes an image
+permanent, which is exactly what it marks. Its value is verdigris rather than
+the interface-library green it started as: that was the one colour in the
+palette belonging to neither the darkroom nor the alchemy.
 
 Qt differs from CSS in one way that matters here: a ``font-size`` in a
 stylesheet rule cascades to child widgets and silently overrides any font set
 with ``setFont``. Sizes are therefore set on widgets, never in the sheet.
+
+Contrast is measured, not judged by eye. Every colour used for text clears
+WCAG AA (4.5:1) against INK, SURFACE and RAISED. The state badges are
+separated by hue rather than by luminance, so each one always carries its word
+as well as its colour.
 """
 
 from __future__ import annotations
@@ -20,11 +41,12 @@ EDGE = "#302C29"
 EDGE_SOFT = "#262322"
 PAPER = "#EDE7DE"
 MUTED = "#98908A"
-FAINT = "#6B645F"
+# Lightened from #6B645F, which read at 2.76:1 on RAISED and failed AA.
+FAINT = "#908880"
 SAFELIGHT = "#FF9B47"
 SAFELIGHT_BRIGHT = "#FFAC63"
 SAFELIGHT_DEEP = "#F08D3B"
-FIXED = "#86CFA6"
+FIXED = "#5CB39E"
 ALARM = "#E8735A"
 
 DISPLAY_FAMILIES = [
