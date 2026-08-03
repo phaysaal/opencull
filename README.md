@@ -123,10 +123,23 @@ Application state follows the XDG base directories:
 | Generated previews | `$XDG_CACHE_HOME/Darkimiya` (`~/.cache/Darkimiya`) |
 | Logs | `$XDG_STATE_HOME/Darkimiya` (`~/.local/state/Darkimiya`) |
 | Trashed photographs | the XDG trash for the volume holding them |
+| Provider API keys | the system keyring, or an owner-only file |
 
 Photographs removed by a filter or cleanup go to the XDG trash, so the
 desktop's own Restore works on them. A photograph on a separate volume goes to
 that volume's `.Trash-$UID`, because a move must stay on one device.
+
+Provider API keys saved from the interface go to the system keyring through
+`secret-tool` when libsecret is installed and a Secret Service is running.
+Otherwise they go to an owner-only file (`0600`) under the application support
+directory. The interface reports which of the two is in use, because a key
+protected only by file permissions is readable by anything running as you.
+Install `libsecret-tools` for keyring storage:
+
+```bash
+sudo apt install libsecret-tools     # Debian and Ubuntu
+sudo dnf install libsecret           # Fedora
+```
 
 ### Windows
 

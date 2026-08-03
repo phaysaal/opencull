@@ -6,7 +6,6 @@ import hashlib
 import json
 import os
 import re
-import subprocess
 import tempfile
 import threading
 import urllib.error
@@ -17,6 +16,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
+
+from . import credentials
 
 PROVIDER_FORMAT = "opencull-provider-profiles-v1"
 KINDS = {"openrouter", "openai", "ollama"}
@@ -122,68 +123,9 @@ def _atomic_text(path: Path, text: str, mode: int = 0o600) -> None:
         raise
 
 
-class MacOSKeychain:
-    """Minimal generic-password adapter; secret values are never returned publicly."""
-
-    account = "opencull"
-    prefix = "org.opencull.provider."
-
-    def _service(self, profile_id: str) -> str:
-        return self.prefix + profile_id
-
-    def has(self, profile_id: str) -> bool:
-        result = subprocess.run(
-            [
-                "security", "find-generic-password",
-                "-a", self.account, "-s", self._service(profile_id),
-            ],
-            capture_output=True, text=True, check=False)
-        return result.returncode == 0
-
-    def get(self, profile_id: str) -> str:
-        result = subprocess.run(
-            [
-                "security", "find-generic-password", "-w",
-                "-a", self.account, "-s", self._service(profile_id),
-            ],
-            capture_output=True, text=True, check=False)
-        if result.returncode != 0:
-            raise ProviderError("provider credential is missing from macOS Keychain")
-        secret = result.stdout.strip()
-        if not secret:
-            raise ProviderError("provider credential in macOS Keychain is empty")
-        return secret
-
-    def set(self, profile_id: str, secret: str) -> None:
-        if not secret or len(secret) > 8192:
-            raise ProviderError("credential must contain between 1 and 8192 characters")
-        # `security -w value` exposes value in the process argument list.
-        # Interactive mode accepts the command on stdin; -X avoids shell-like
-        # quoting entirely while storing the exact UTF-8 password bytes.
-        command = (
-            "add-generic-password -U "
-            f"-a {self.account} -s {self._service(profile_id)} "
-            f"-X {secret.encode('utf-8').hex()}\n"
-        )
-        result = subprocess.run(
-            ["security", "-i"],
-            input=command,
-            capture_output=True, text=True, check=False)
-        if result.returncode != 0:
-            raise ProviderError(
-                f"could not save credential in macOS Keychain: "
-                f"{result.stderr.strip()}")
-
-    def delete(self, profile_id: str) -> None:
-        result = subprocess.run(
-            [
-                "security", "delete-generic-password",
-                "-a", self.account, "-s", self._service(profile_id),
-            ],
-            capture_output=True, text=True, check=False)
-        if result.returncode not in {0, 44}:
-            raise ProviderError(
-                f"could not remove Keychain credential: {result.stderr.strip()}")
+# Retained under its original name for existing importers and tests; the
+# implementation and the other backends live in opencull_gui.credentials.
+MacOSKeychain = credentials.MacOSKeychain
 
 
 class ProviderStore:
@@ -199,7 +141,7 @@ class ProviderStore:
         self.generated_root = (
             generated_root.expanduser().resolve() if generated_root
             else self.project_root / ".opencull-generated" / "providers")
-        self.keychain = keychain or MacOSKeychain()
+        self.keychain = keychain or credentials.default_store()
         self._lock = threading.RLock()
         self._state = self._load()
         self._upgrade_default_openrouter_models()
@@ -365,6 +307,10 @@ class ProviderStore:
                 "path": str(self.path),
                 "profiles": profiles,
                 "secrets_returned": False,
+                # Where a key is kept is something the person is entitled to
+                # know, particularly when no keyring is available and it is
+                # protected only by file permissions.
+                "credential_storage": credentials.describe(self.keychain),
             }
 
     def save(
