@@ -145,7 +145,7 @@ forall group in pending_groups:
     settle until check file_exists(checkpoint_file) within 5
 
 check len(decisions) == len(groups)
-report := build_report(hash(manifest), groups, decisions, tuning)
+report := build_report(hash(manifest), groups, decisions, tuning, manifest)
 check report_covers_all_groups(report, groups)
 evidence := report_evidence(manifest, report)
 

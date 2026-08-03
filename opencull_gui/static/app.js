@@ -3429,6 +3429,16 @@ function renderRecoveryCenter(loadError = "") {
       missing ? `${missing} source photographs are unavailable. Reconnect the original volume.`
         : `${payload.summary.photos} source photographs are available.`,
       missing ? "attention" : "passed"));
+    const unreadable = Number(payload.summary?.unreadable_photos || 0);
+    if (unreadable) {
+      attention = true;
+    }
+    checks.append(recoveryCheck(
+      "Scanner coverage",
+      unreadable
+        ? `${unreadable} photograph${unreadable === 1 ? "" : "s"} could not be decoded and ${unreadable === 1 ? "was" : "were"} not culled. They appear in the report under scan_errors.`
+        : "Every photograph in the source folder was decoded and culled.",
+      unreadable ? "attention" : "passed"));
     checks.append(recoveryCheck(
       "Human review binding",
       compatible ? "The review sidecar matches this report."

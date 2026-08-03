@@ -838,11 +838,37 @@ def singleton_decision(group: dict[str, Any]) -> str:
     )
 
 
+def scan_errors(manifest: str) -> list[dict[str, str]]:
+    """Return the photographs the scanner could not read.
+
+    The scanner records a per-photograph failure and continues, so without
+    this the frame simply disappears from the cull: absent from every
+    cluster, absent from the report, and absent from the interface, under a
+    notice saying originals were not modified. A photograph that could not be
+    decoded is exactly the one a reviewer needs told about.
+    """
+    try:
+        value = json.loads(str(manifest))
+    except (TypeError, json.JSONDecodeError):
+        return []
+    if not isinstance(value, dict):
+        return []
+    errors = value.get("errors")
+    if not isinstance(errors, list):
+        return []
+    return [
+        {"name": str(item.get("name", "")), "error": str(item.get("error", ""))}
+        for item in errors
+        if isinstance(item, dict) and item.get("name")
+    ]
+
+
 def build_report(
     manifest_sha: str,
     groups: list[dict[str, Any]],
     decisions: list[str],
     adaptive_clustering: str = "{}",
+    manifest: str = "",
 ) -> str:
     """Build the two-part report: clusters, then per-cluster keep choices."""
     try:
@@ -880,6 +906,16 @@ def build_report(
         tuning = json.loads(adaptive_clustering)
     except (TypeError, json.JSONDecodeError):
         tuning = {}
+    unreadable = scan_errors(manifest)
+    notice = (
+        "Recommendations only. Originals were not modified or deleted. "
+        "Review every choice before moving files."
+    )
+    if unreadable:
+        notice += (
+            f" {len(unreadable)} photograph(s) could not be read and were not "
+            "culled; see scan_errors."
+        )
     return json.dumps(
         {
             "format": "opencull-report-v2",
@@ -887,11 +923,9 @@ def build_report(
             "clusters": clusters,
             "keep": keep,
             "warnings": warnings,
+            "scan_errors": unreadable,
             "adaptive_clustering": tuning,
-            "notice": (
-                "Recommendations only. Originals were not modified or deleted. "
-                "Review every choice before moving files."
-            ),
+            "notice": notice,
         },
         indent=2,
         sort_keys=True,

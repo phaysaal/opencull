@@ -52,6 +52,9 @@ class ReportIndex:
                 "selected": selected,
                 "not_selected": len(self.photo_names) - selected,
                 "warnings": len(self.data.get("warnings", [])),
+                # Photographs the scanner could not decode never reach a
+                # cluster, so without a count here they are invisible.
+                "unreadable_photos": len(self.data.get("scan_errors", []) or []),
                 "fallback_clusters": sum(
                     bool(item.get("fallback"))
                     for item in self.decision_by_id.values()

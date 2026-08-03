@@ -65,6 +65,35 @@ class KernelTests(unittest.TestCase):
         self.assertEqual(report["keep"][0]["photos"], [])
         self.assertEqual(report["warnings"][0]["cluster_id"], "group-0001")
 
+    def test_undecodable_photographs_reach_the_report(self):
+        manifest = json.dumps({
+            "errors": [
+                {"name": "BROKEN.RAF", "error": "RuntimeError: decode failed"},
+            ],
+        })
+        decision = kernel.decision_json(
+            {"keepers": "A.JPG", "rationale": "Sharpest frame.",
+             "confidence": 0.9}, GROUP, 2)
+        report = json.loads(
+            kernel.build_report("abc", [GROUP], [decision], "{}", manifest))
+        self.assertEqual(
+            [item["name"] for item in report["scan_errors"]], ["BROKEN.RAF"])
+        self.assertIn("could not be read", report["notice"])
+
+    def test_a_clean_scan_reports_no_unreadable_photographs(self):
+        decision = kernel.decision_json(
+            {"keepers": "A.JPG", "rationale": "Sharpest frame.",
+             "confidence": 0.9}, GROUP, 2)
+        report = json.loads(
+            kernel.build_report("abc", [GROUP], [decision], "{}",
+                                json.dumps({"errors": []})))
+        self.assertEqual(report["scan_errors"], [])
+        self.assertNotIn("could not be read", report["notice"])
+
+    def test_scan_errors_tolerates_a_malformed_manifest(self):
+        for manifest in ("", "not json", "[]", json.dumps({"errors": "no"})):
+            self.assertEqual(kernel.scan_errors(manifest), [])
+
     def test_invalid_curator_falls_back_to_conservative_preservation(self):
         invalid = {
             "keepers": "",
