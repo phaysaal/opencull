@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import threading
 import unittest
@@ -117,6 +118,42 @@ class ShellTests(unittest.TestCase):
         ), mock.patch.object(shell.webbrowser, "open", opened.append):
             used = shell.open_launcher("http://127.0.0.1:1/")
         self.assertEqual(used, "browser")
+
+    def test_the_window_frame_follows_the_desktop_theme_in_its_dark_variant(self):
+        completed = mock.Mock(returncode=0, stdout="'Yaru-blue'\n", stderr="")
+        with mock.patch.object(sys, "platform", "linux"), \
+                mock.patch.dict(os.environ, {}, clear=True), \
+                mock.patch.object(
+                    shell.subprocess, "run", return_value=completed):
+            shell._prefer_dark_window_frame()
+            self.assertEqual(os.environ["GTK_THEME"], "Yaru-blue:dark")
+
+    def test_a_theme_the_person_chose_is_left_alone(self):
+        with mock.patch.object(sys, "platform", "linux"), \
+                mock.patch.dict(os.environ, {"GTK_THEME": "Mine"}, clear=True):
+            shell._prefer_dark_window_frame()
+            self.assertEqual(os.environ["GTK_THEME"], "Mine")
+
+    def test_an_unreadable_desktop_setting_falls_back_to_adwaita(self):
+        with mock.patch.object(sys, "platform", "linux"), \
+                mock.patch.dict(os.environ, {}, clear=True), \
+                mock.patch.object(
+                    shell.subprocess, "run", side_effect=OSError("no gsettings")):
+            shell._prefer_dark_window_frame()
+            self.assertEqual(os.environ["GTK_THEME"], "Adwaita:dark")
+
+    def test_the_frame_preference_never_initialises_gtk(self):
+        # Reading Gtk.Settings starts the toolkit, after which pywebview finds
+        # it already running and the window never appears.
+        with mock.patch.object(sys, "platform", "linux"), \
+                mock.patch.dict(os.environ, {}, clear=True), \
+                mock.patch.dict(sys.modules):
+            sys.modules.pop("gi", None)
+            sys.modules.pop("gi.repository", None)
+            shell._prefer_dark_window_frame()
+            self.assertNotIn(
+                "gi", sys.modules,
+                "the frame preference imported gi, which starts GTK")
 
     def test_a_native_window_is_preferred_when_available(self):
         webview = mock.Mock()

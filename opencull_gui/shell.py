@@ -12,6 +12,8 @@ interface, so a missing dependency degrades the frame rather than the product.
 
 from __future__ import annotations
 
+import os
+import subprocess
 import sys
 import threading
 import webbrowser
@@ -43,6 +45,33 @@ def native_window_available() -> tuple[bool, str]:
     return True, ""
 
 
+def _prefer_dark_window_frame() -> None:
+    """Ask GTK for the dark variant of the window frame.
+
+    The interface is dark, so a light titlebar and border read as a mismatched
+    frame around it. GTK reads this from the environment at startup.
+
+    This deliberately does not touch Gtk.Settings: reading it implicitly
+    initialises GTK, and pywebview then finds the toolkit already started and
+    the window never appears.
+    """
+    if not sys.platform.startswith("linux") or "GTK_THEME" in os.environ:
+        return
+    # Prefer the dark variant of whatever theme the person is using, so the
+    # frame still looks like their desktop rather than a different one.
+    theme = "Adwaita"
+    try:
+        result = subprocess.run(
+            ["gsettings", "get", "org.gnome.desktop.interface", "gtk-theme"],
+            capture_output=True, text=True, timeout=5, check=False)
+        current = result.stdout.strip().strip("'\"")
+        if result.returncode == 0 and current:
+            theme = current
+    except (OSError, subprocess.SubprocessError):
+        pass
+    os.environ["GTK_THEME"] = f"{theme}:dark"
+
+
 def open_launcher(url: str, *, on_close=None, prefer_native: bool = True) -> str:
     """Show the launcher. Returns the shell that was actually used.
 
@@ -51,6 +80,7 @@ def open_launcher(url: str, *, on_close=None, prefer_native: bool = True) -> str
     """
     available, _reason = native_window_available()
     if prefer_native and available:
+        _prefer_dark_window_frame()
         import webview
 
         window = webview.create_window(
