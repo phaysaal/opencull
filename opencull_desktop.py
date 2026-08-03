@@ -405,21 +405,24 @@ def run_native_server(
             server.server_close()
 
 
-def run_launcher(paths: MacOSPaths) -> int:
+def run_launcher(paths: MacOSPaths, prefer_native: bool = True) -> int:
     """Open the launcher in a native window with the queue service behind it."""
     from opencull_gui import shell
 
     def present(url: str) -> None:
-        used = shell.open_launcher(url)
-        if used == "native":
-            return
-        # The browser is a separate process, so this one has to stay alive to
-        # keep serving the page it just opened.
         available, reason = shell.native_window_available()
         if not available:
             print(reason)
-        print(f"Darkimiya: {url}")
-        print("Press Ctrl-C to stop.")
+        # Always announce the address, including when a window is expected.
+        # A web view that fails to map its window leaves no other way in, and
+        # that failure is silent: the process runs, the window exists, and
+        # nothing appears. A printed address costs one line and removes the
+        # possibility of the application starting with nothing to show for it.
+        print(f"Darkimiya: {url}", flush=True)
+        used = shell.open_launcher(url, prefer_native=prefer_native)
+        if used == "native":
+            return
+        print("Press Ctrl-C to stop.", flush=True)
         try:
             threading.Event().wait()
         except KeyboardInterrupt:
@@ -903,6 +906,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--release-smoke-test", metavar="REPORT_PATH")
     parser.add_argument("--native-server", action="store_true")
     parser.add_argument(
+        "--browser", action="store_true",
+        help="open the launcher in the browser instead of its own window")
+    parser.add_argument(
         "--tk-launcher", action="store_true",
         help="use the previous Tk launcher instead of the application window")
     parser.add_argument("finder_items", nargs="*")
@@ -954,7 +960,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if args.tk_launcher:
             return DesktopApp(paths, args.finder_items).run()
-        return run_launcher(paths)
+        return run_launcher(paths, prefer_native=not args.browser)
     finally:
         lock.release()
 
