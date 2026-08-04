@@ -2396,11 +2396,30 @@ class GuiJobTests(unittest.TestCase):
             self.assertNotIn("signature", offered)
             self.assertNotIn("creative", offered)
 
-    def test_a_photograph_without_directions_has_no_treatments(self):
+    def test_a_photograph_without_directions_still_has_the_baseline(self):
+        # A folder that has only been culled has no edit directions, and that
+        # is the ordinary case. Develop must still mean something there: the
+        # baseline interprets nothing, so it needs nothing suggested first.
         with tempfile.TemporaryDirectory() as temporary:
             photos = Path(temporary) / "photos"; photos.mkdir()
             workspace = development_workspace(photos)
-            self.assertEqual(workspace.treatments("A.JPG"), [])
+            self.assertEqual(
+                [item["id"] for item in workspace.treatments("A.JPG")],
+                ["calibrated"])
+
+    def test_the_baseline_renders_without_any_edit_direction(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            photos = Path(temporary) / "photos"; photos.mkdir()
+            Image.new("RGB", (240, 160), (90, 120, 80)).save(photos / "A.JPG")
+            workspace = development_workspace(photos)
+            rendered = workspace.recipe_preview(
+                "A.JPG", "calibrated", "default", "markesteijn-3-pass", 80)
+            self.assertTrue(rendered.is_file())
+            # Everything else does still need one, because it would be
+            # inventing an intent nobody expressed.
+            with self.assertRaises(ValueError):
+                workspace.recipe_preview(
+                    "A.JPG", "signature", "default", "markesteijn-3-pass", 80)
 
     def test_full_resolution_darktable_job_uses_delivery_pipeline(self):
         manager = JobManager.__new__(JobManager)

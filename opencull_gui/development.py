@@ -32,6 +32,7 @@ from PIL import Image, ImageOps
 from darktable_engine import render_darktable_default
 from development_engine import _srgb_to_linear_rec2020, render_recipe
 from recipe_compiler import compile_recipe
+from scan import open_preview
 
 from . import dialogs
 from .jobs import JobError
@@ -92,18 +93,12 @@ class DevelopmentWorkspace:
                 directions_path = str(direction_payload.get("path", ""))
         except ShortlistError:
             directions = []
-        raw = self.raw_sources.public()
-        raw_root = Path(raw["root"]) if raw.get("configured") else None
         candidates = []
         for entry in directions:
             if not isinstance(entry, dict) or not entry.get("photo"):
                 continue
             photo = str(entry["photo"])
-            raw_files = [
-                str((raw_root / relative).resolve())
-                for relative in raw.get("matches", {}).get(photo, [])
-            ] if raw_root else []
-            candidates.append({**entry, "raw_files": raw_files})
+            candidates.append({**entry, "raw_files": self.raw_files(photo)})
         return {"format": "opencull-development-workspace-v1",
                 "variants": artifacts.get("renders", []) or [],
                 "renderer_comparisons": artifacts.get("renderer_comparisons", []) or [],
@@ -119,6 +114,17 @@ class DevelopmentWorkspace:
                 },
                 "project_sha256": project_sha256(self.project_path)}
 
+    def raw_files(self, photo: str) -> list[str]:
+        """The external RAW files that were matched to one photograph."""
+        raw = self.raw_sources.public()
+        if not raw.get("configured"):
+            return []
+        root = Path(raw["root"])
+        return [
+            str((root / relative).resolve())
+            for relative in raw.get("matches", {}).get(photo, [])
+        ]
+
     def treatments(self, photo: str) -> list[dict]:
         """The treatments that can actually be rendered for one photograph.
 
@@ -129,15 +135,16 @@ class DevelopmentWorkspace:
         workspace = self.payload()
         entry = next((item for item in workspace.get("candidates", [])
                       if item.get("photo") == photo), None)
-        available: list[dict] = []
+        # The calibrated baseline is the photograph as the camera and the
+        # demosaic saw it, with no interpretation on top. It needs no recipe
+        # and no edit direction, so every photograph has it. This is what
+        # develop means for a folder that has only been culled: see the
+        # picture properly, before anything has been suggested about it.
+        available: list[dict] = [{
+            "id": "calibrated", "name": "Calibrated baseline",
+            "intent": "Neutral technical rendering, nothing interpreted.",
+            "kind": "builtin"}]
         if entry is not None:
-            # The calibrated baseline is the photograph as the camera and the
-            # demosaic saw it, with no interpretation on top. It needs no
-            # recipe, so it is always available.
-            available.append({
-                "id": "calibrated", "name": "Calibrated baseline",
-                "intent": "Neutral technical rendering, nothing interpreted.",
-                "kind": "builtin"})
             for style in BUILTIN_STYLES:
                 if style == "calibrated" or not entry.get(f"{style}_recipe"):
                     continue
@@ -176,7 +183,11 @@ class DevelopmentWorkspace:
         entry = next((item for item in workspace.get("candidates", [])
                       if item.get("photo") == photo), None)
         if entry is None:
-            raise ValueError("photograph has no edit direction")
+            if style != "calibrated":
+                raise ValueError("photograph has no edit direction")
+            # The baseline interprets nothing, so it needs no direction. Only
+            # the RAW match matters, and that is indexed separately.
+            entry = {"photo": photo, "raw_files": self.raw_files(photo)}
         reference = (Path(str(workspace["source_folder"])) / photo).resolve()
         if not reference.is_file():
             raise ValueError("reference photograph is unavailable")
@@ -246,11 +257,14 @@ class DevelopmentWorkspace:
             prefix=".develop-preview-", dir=destination.parent,
         ) as temporary:
             work = Path(temporary)
-            with Image.open(reference) as opened:
-                small = ImageOps.exif_transpose(opened).convert("RGB")
-                small.thumbnail((maximum, maximum), Image.Resampling.LANCZOS)
-                small_reference = work / "reference.jpg"
-                small.save(small_reference, "JPEG", quality=94)
+            # open_preview, not Image.open: the photographs in the folder may
+            # themselves be RAW, which Pillow cannot read. For those it is the
+            # camera's own embedded rendering, which is what "the reference"
+            # honestly means when no demosaic has been run.
+            small = open_preview(reference)
+            small.thumbnail((maximum, maximum), Image.Resampling.LANCZOS)
+            small_reference = work / "reference.jpg"
+            small.save(small_reference, "JPEG", quality=94)
             if engine == "darktable":
                 native_identity = hashlib.sha256(
                     f"{source}|{source_stat.st_mtime_ns}|{source_stat.st_size}|"
@@ -360,8 +374,7 @@ class DevelopmentWorkspace:
         reference = (Path(str(workspace["source_folder"])) / photo).resolve()
         if not reference.is_file():
             raise ValueError("reference photograph is unavailable")
-        with Image.open(reference) as opened:
-            maximum = max(opened.size)
+        maximum = max(open_preview(reference).size)
         preview = self.recipe_preview(photo, style, engine, demosaic, maximum)
         digest = hashlib.sha256(preview.read_bytes()).hexdigest()
         destination = self.project_layout["Developments"] / (
