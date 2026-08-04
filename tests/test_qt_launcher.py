@@ -391,7 +391,7 @@ class LauncherWindowTests(unittest.TestCase):
         self.assertNotIn("Edit", self.buttons(card))
         self.assertFalse(card.strip.opens())
 
-    def test_a_culled_folder_offers_review_and_recull(self):
+    def test_a_culled_folder_offers_review_assess_and_recull(self):
         window, _ = self.build(projects=[
             {"id": "p1", "name": "A", "photos": "/p/a", "available": True,
              "report_available": True, "report": "/p/a/report.json"}])
@@ -399,7 +399,76 @@ class LauncherWindowTests(unittest.TestCase):
         window.refresh()
         self.assertEqual(
             self.buttons(self.cards(window)[0]),
-            ["Review", "Develop", "Re-cull"])
+            ["Review", "Assess", "Develop", "Re-cull"])
+
+    def test_an_uncalled_folder_is_not_offered_an_assessment(self):
+        # The assessment reads the cull and its review. There is nothing for
+        # it to read yet.
+        window, _ = self.build(projects=[
+            {"id": "p1", "name": "A", "photos": "/p/a", "available": True}])
+        self.folder(window, "raw")
+        window.refresh()
+        self.assertNotIn("Assess", self.buttons(self.cards(window)[0]))
+
+    def test_an_assessed_folder_offers_to_open_it_rather_than_redo_it(self):
+        window, _ = self.build(projects=[
+            {"id": "p1", "name": "A", "photos": "/p/a", "available": True,
+             "report_available": True, "report": "/p/a/report.json",
+             "shortlist_available": True, "shortlist": "/p/a/s.json"}])
+        self.folder(window, "raw")
+        window.refresh()
+        buttons = self.buttons(self.cards(window)[0])
+        self.assertIn("Assessment", buttons)
+        self.assertNotIn("Assess", buttons)
+
+    def test_an_assessed_folder_says_so(self):
+        window, _ = self.build(projects=[
+            {"id": "p1", "name": "A", "photos": "/p/a", "available": True,
+             "report_available": True, "report": "/p/a/report.json",
+             "shortlist_available": True, "shortlist": "/p/a/s.json"}])
+        self.folder(window, "raw")
+        window.refresh()
+        self.assertEqual(self.cards(window)[0].badge.text(), "ASSESSED")
+
+    def test_an_assessment_in_flight_is_what_the_card_reports(self):
+        window, _ = self.build(projects=[
+            {"id": "p1", "name": "A", "photos": "/p/a", "available": True,
+             "report_available": True, "report": "/p/a/report.json",
+             "assessment": {"status": "running", "log_tail": "40 %"}}])
+        self.folder(window, "raw")
+        window.refresh()
+        card = self.cards(window)[0]
+        self.assertEqual(card.badge.text(), "ASSESSING")
+        # And it is not offered a second one while the first is running.
+        self.assertNotIn("Assess", self.buttons(card))
+
+    def test_opening_an_assessed_folder_goes_to_the_page_not_the_queue(self):
+        window, services = self.build(projects=[])
+        with mock.patch.object(window, "open_shortlist") as opened:
+            window.assess_project({
+                "id": "p1", "name": "A", "photos": "/p/a",
+                "shortlist_available": True, "shortlist": "/p/a/s.json"})
+        opened.assert_called_once()
+        services.jobs.add_professional.assert_not_called()
+
+    def test_assessing_queues_the_shortlist_with_the_culling_review(self):
+        window, services = self.build(projects=[])
+        shoot = Path(tempfile.mkdtemp())
+        report_path, photos_path = build_shoot(shoot)
+        window.assess_project({
+            "id": "p1", "name": "A", "photos": str(photos_path),
+            "report": str(report_path)})
+        services.jobs.add_professional.assert_called_once()
+        arguments = services.jobs.add_professional.call_args
+        self.assertEqual(arguments[0][0], str(report_path))
+        self.assertIn("mark", window.notice_text.text())
+
+    def test_a_missing_report_cannot_be_assessed(self):
+        window, services = self.build(projects=[])
+        window.assess_project(
+            {"id": "p1", "name": "A", "photos": "/p/a", "report": "/gone.json"})
+        services.jobs.add_professional.assert_not_called()
+        self.assertIn("no longer on disk", window.notice_text.text())
 
     def test_a_running_folder_offers_no_second_cull(self):
         window, _ = self.build(projects=[

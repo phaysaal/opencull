@@ -188,6 +188,28 @@ QLabel#frameName {{ color: {FAINT}; }}
 QLabel#frameNumber {{ color: {MUTED}; }}
 QLabel#frameAi {{ color: {SAFELIGHT}; letter-spacing: 1px; }}
 
+/* --- assessment page --- */
+QFrame#decision {{
+    background: {SURFACE}; border: 1px solid {EDGE_SOFT}; border-radius: 10px;
+}}
+QLabel#axisName {{ color: {FAINT}; letter-spacing: 2px; }}
+QLabel#axisBody {{ color: {MUTED}; }}
+QPlainTextEdit#note {{
+    background: {INK}; color: {PAPER};
+    border: 1px solid {EDGE}; border-radius: 8px; padding: 6px 8px;
+}}
+QPlainTextEdit#note:focus {{ border-color: {SAFELIGHT}; }}
+QCheckBox {{ spacing: 8px; }}
+QCheckBox::indicator {{
+    width: 15px; height: 15px;
+    border: 1px solid {EDGE}; border-radius: 4px; background: {INK};
+}}
+QCheckBox::indicator:hover {{ border-color: #3B3633; }}
+QCheckBox::indicator:checked {{
+    background: {SAFELIGHT}; border-color: {SAFELIGHT_BRIGHT};
+}}
+QCheckBox#gate {{ font-weight: 600; }}
+
 /* --- develop page --- */
 QFrame#panel {{ background: {SURFACE}; border-left: 1px solid {EDGE_SOFT}; }}
 QFrame#pane {{

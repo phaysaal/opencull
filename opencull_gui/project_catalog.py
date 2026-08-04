@@ -30,6 +30,23 @@ class ProjectCatalogError(ValueError):
     """A project-library request cannot be completed safely."""
 
 
+def _latest_artifact_path(manifest: dict[str, Any], key: str) -> str:
+    """The most recent path recorded under one artifact key.
+
+    Some artifacts are singletons and some are append-only history, so the
+    manifest holds either an object or a list. The newest of a list is the
+    one a person means when they say "the shortlist".
+    """
+    value = manifest.get("artifacts", {}).get(key)
+    if isinstance(value, dict):
+        return str(value.get("path", ""))
+    if isinstance(value, list):
+        for item in reversed(value):
+            if isinstance(item, dict) and item.get("path"):
+                return str(item["path"])
+    return ""
+
+
 def _now() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -281,6 +298,17 @@ class ProjectCatalog:
             report = str(report_record.get("path", "")) if isinstance(report_record, dict) else ""
             if not report:
                 report = str(record.get("historical_report") or "")
+            # The assessment is a second run over the same folder, so the
+            # library needs its state as well as the cull's: a card cannot
+            # offer to start one that is already in flight.
+            assessment_jobs = [
+                job for job in project_jobs
+                if job.get("kind") == "professional_shortlist"]
+            current_assessment = next(
+                (job for job in reversed(assessment_jobs)
+                 if job.get("status") not in {"completed", "cancelled"}),
+                assessment_jobs[-1] if assessment_jobs else None)
+            shortlist = _latest_artifact_path(manifest, "shortlist")
             projects.append({
                 **record,
                 "name": str(manifest.get("name") or record.get("name") or photos.name),
@@ -291,6 +319,10 @@ class ProjectCatalog:
                 "report": report,
                 "report_available": bool(report and Path(report).is_file()),
                 "culling": current_cull,
+                "assessment": current_assessment,
+                "shortlist": shortlist,
+                "shortlist_available": bool(
+                    shortlist and Path(shortlist).is_file()),
                 "activity_count": len(project_jobs),
             })
         return {

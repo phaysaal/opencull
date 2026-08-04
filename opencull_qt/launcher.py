@@ -30,6 +30,11 @@ from opencull_gui.photos import PhotoStore
 from opencull_gui.project_catalog import ProjectCatalogError
 from opencull_gui.report import load_report
 from opencull_gui.reviews import ReviewStore, default_review_path
+from opencull_gui.shortlist import load_shortlist
+from opencull_gui.shortlist_reviews import (
+    ShortlistReviewStore,
+    default_shortlist_review_path,
+)
 from scan import classify_folder
 
 from . import theme
@@ -37,6 +42,7 @@ from .develop import DevelopPage, workspace_for
 from .previews import LibraryPreviewLoader, PreviewLoader
 from .providers import ProvidersDialog
 from .review import ReviewPage
+from .shortlist import ShortlistPage
 from .widgets import ProjectCard, Row, band, replace_rows, short_path
 
 ACTIVE = {"running", "queued"}
@@ -52,15 +58,54 @@ def job_progress(job: dict) -> int | None:
     return 0 if job.get("status") == "running" else None
 
 
+JOB_TITLES = {
+    "culling": "Culling",
+    "professional_shortlist": "Assessing",
+    "edit_suggestions": "Suggesting edits",
+    "style_profile": "Reading your style",
+    "semantic_verification": "Verifying",
+}
+
+
+def job_title(job: dict) -> str:
+    """Name a queued job the way the person who started it would."""
+    kind = str(job.get("kind") or "culling")
+    return JOB_TITLES.get(kind, kind.replace("_", " ").capitalize())
+
+
+def active_job(project: dict) -> dict:
+    """The job a folder is currently waiting on, if any.
+
+    A folder can be assessed as well as culled, so the meter has to follow
+    whichever run is actually in flight rather than assuming the cull.
+    """
+    for key in ("assessment", "culling"):
+        job = project.get(key) or {}
+        if str(job.get("status")) in ACTIVE:
+            return job
+    return {}
+
+
 def project_state(project: dict) -> tuple[str, str]:
-    """Return the label and tone for one folder."""
+    """Return the label and tone for one folder.
+
+    The stage furthest along that is still in flight wins, because that is
+    the thing the person is waiting for.
+    """
     status = str((project.get("culling") or {}).get("status", ""))
+    assessing = str((project.get("assessment") or {}).get("status", ""))
+    if assessing in {"running", "queued"}:
+        return "Assessing", "running"
     if status == "running":
         return "Culling", "running"
     if status == "queued":
         return "Queued", "running"
+    if assessing == "failed":
+        return "Assessment failed", "failed"
     if status == "failed":
         return "Failed", "failed"
+    if project.get("shortlist_available"):
+        return "Assessed", "ready"
     if project.get("report_available"):
         return "Culled", "ready"
     if not project.get("available"):
@@ -177,7 +222,7 @@ class Launcher(QMainWindow):
         self.pages.addWidget(central)
         self.setCentralWidget(self.pages)
         self.projects_page = central
-        self.review_page: ReviewPage | DevelopPage | None = None
+        self.review_page: ReviewPage | DevelopPage | ShortlistPage | None = None
 
     @staticmethod
     def _card_band(title: str) -> tuple[QWidget, QGridLayout]:
@@ -321,9 +366,10 @@ class Launcher(QMainWindow):
         self._fill_library(projects)
         self.queue_band.setVisible(bool(active))
         replace_rows(self.queue_rows, [
-            Row(str(job.get("name") or job.get("kind") or "Job"),
+            Row(str(job.get("name") or Path(str(job.get("photos", ""))).name
+                    or "Job"),
                 short_path(str(job.get("photos", ""))),
-                "Culling" if job.get("status") == "running" else "Queued",
+                job_title(job) if job.get("status") == "running" else "Queued",
                 "running",
                 [("Cancel", lambda job=job: self.cancel(job))],
                 progress=job_progress(job),
@@ -347,9 +393,12 @@ class Launcher(QMainWindow):
     def _fill_library(self, projects: list[dict]) -> None:
         while self.library_grid.count():
             item = self.library_grid.takeAt(0)
-            if item.widget():
-                item.widget().setParent(None)
-                item.widget().deleteLater()
+            # Held once: reparenting can release the layout item's own
+            # reference, so asking it a second time can answer None.
+            widget = item.widget()
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
         self._cards.clear()
         # Three across matches the window's default width; the grid rewraps
         # rather than scrolling sideways when it is narrower.
@@ -366,6 +415,12 @@ class Launcher(QMainWindow):
         actions: list[tuple[str, object]] = []
         if culled:
             actions.append(("Review", lambda p=project: self.open_review(p)))
+        # Assessment reads the cull and its review, so it is only offered
+        # once there is a cull to read.
+        if culled and not running:
+            actions.append((
+                "Assessment" if project.get("shortlist_available") else "Assess",
+                lambda p=project: self.assess_project(p)))
         contents = self.folder_contents(project)
         treatment = treatment_label(contents["kind"])
         name = str(project.get("name", ""))
@@ -385,7 +440,7 @@ class Launcher(QMainWindow):
             name,
             short_path(str(project.get("photos", ""))),
             subtitle, label, tone, actions,
-            progress=job_progress(project["culling"]) if running else None,
+            progress=job_progress(active_job(project)) if running else None,
             on_remove=lambda p=project: self.remove_project(p),
             # The strip is a second way to the folder's own treatment, never
             # a way to something the card is not otherwise offering.
@@ -433,7 +488,7 @@ class Launcher(QMainWindow):
             str(project.get("name", "")),
             short_path(str(project.get("photos", ""))),
             label, tone, actions,
-            progress=job_progress(project["culling"]) if running else None,
+            progress=job_progress(active_job(project)) if running else None,
             last=last)
 
     # --- actions --------------------------------------------------------
@@ -513,6 +568,55 @@ class Launcher(QMainWindow):
             self.report(str(exc), "alarm")
             return
         self._open_workspace(project, report_path, intent="develop")
+
+    def assess_project(self, project: dict) -> None:
+        """Open the assessment if there is one, and otherwise ask for it."""
+        if project.get("shortlist_available"):
+            self.open_shortlist(project)
+            return
+        report_path = Path(str(project.get("report", "")))
+        if not report_path.is_file():
+            self.report("That report is no longer on disk.", "alarm")
+            return
+        photos = str(project.get("photos", ""))
+        review = default_review_path(report_path)
+        try:
+            self.services.jobs.add_professional(
+                str(report_path), photos,
+                review=str(review) if review.is_file() else "")
+        except Exception as exc:
+            self.report(str(exc), "alarm")
+            self.refresh()
+            return
+        name = str(project.get("name") or Path(photos).name)
+        self.report(
+            f"Assessing {name}. Every frame the cull kept is read for its "
+            "editing potential; the frames you then mark are the ones that "
+            "get editing suggestions.")
+        self.refresh()
+
+    def open_shortlist(self, project: dict) -> None:
+        """Show the assessment and the marks made against it."""
+        shortlist_path = Path(str(project.get("shortlist", "")))
+        report_path = Path(str(project.get("report", "")))
+        photos_path = Path(str(project.get("photos", "")))
+        try:
+            report = load_report(report_path)
+            photos = PhotoStore(
+                photos_path, self.services.paths.cache / "previews")
+            shortlist = load_shortlist(shortlist_path, report, photos.root)
+            reviews = ShortlistReviewStore(
+                default_shortlist_review_path(shortlist_path), shortlist)
+        except Exception as exc:
+            name = project.get("name", "That folder")
+            self.report(f"{name}'s assessment could not be opened: {exc}",
+                        "alarm")
+            return
+        self.show_shortlist(shortlist, reviews, photos)
+
+    def show_shortlist(self, shortlist, reviews, photos) -> None:
+        self._show_workspace(
+            photos, lambda loader: ShortlistPage(shortlist, reviews, loader))
 
     def open_review(self, project: dict) -> None:
         """Show the folder's culling decisions, in this window."""

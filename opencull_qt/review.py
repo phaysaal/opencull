@@ -274,9 +274,12 @@ class ReviewPage(QWidget):
 
         while self.grid.count():
             item = self.grid.takeAt(0)
-            if item.widget():
-                item.widget().setParent(None)
-                item.widget().deleteLater()
+            # Held once: reparenting can release the layout item's own
+            # reference, so asking it a second time can answer None.
+            widget = item.widget()
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
         self.frames.clear()
 
         for index, name in enumerate(cluster["photos"]):
