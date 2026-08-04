@@ -715,10 +715,38 @@ class Launcher(QMainWindow):
         self._show_workspace(
             photos, lambda loader: ReviewPage(report, reviews, loader))
 
-    def show_develop(self, report, photos) -> None:
+    def show_develop(self, report, photos):
         workspace = workspace_for(report, photos.root)
-        self._show_workspace(
+        page = self._show_workspace(
             photos, lambda loader: DevelopPage(report, workspace, loader))
+        page.verification_wanted.connect(
+            lambda request: self.verify_render(workspace, request))
+        return page
+
+    def verify_render(self, workspace, request: dict) -> None:
+        """Ask a model whether one rendering did what it promised."""
+        page = self.review_page
+        try:
+            self.services.jobs.add_semantic_verification(
+                original=str(request["original"]),
+                developed=str(request["developed"]),
+                suggestion=str(request["suggestion"]),
+                project=str(workspace.project_path),
+                provider_profile_id=self.provider_id())
+        except Exception as exc:
+            if page is not None and hasattr(page, "_report"):
+                page._report(str(exc), "alarm")
+            return
+        if page is not None and hasattr(page, "_report"):
+            page._report(
+                f"Verifying {request['photo']}. The certificate covers the "
+                "full-size render and appears here when it finishes.", "ok")
+
+    def provider_id(self) -> str:
+        providers = getattr(self.services, "providers", None)
+        profiles = (providers.public().get("profiles") or []
+                    if providers is not None else [])
+        return str(profiles[0]["id"]) if profiles else ""
 
     def _show_workspace(self, photos, build) -> None:
         self._close_review()

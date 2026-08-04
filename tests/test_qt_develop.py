@@ -184,6 +184,156 @@ class SuggestedTreatmentTests(unittest.TestCase):
 
 
 @unittest.skipUnless(QApplication is not None, "PySide6 is not installed")
+class VerificationTests(unittest.TestCase):
+    """Checking that a rendering did what its treatment said it would."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.application = QApplication.instance() or QApplication([])
+
+    def setUp(self):
+        self._temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self._temporary.name)
+        self.report_path, self.photos_path = build_shoot(self.root)
+        self.report = load_report(self.report_path)
+        self.photos = PhotoStore(self.photos_path, self.root / "cache")
+        assess_and_suggest(self.root, self.report_path, self.photos_path)
+        self.addCleanup(self._temporary.cleanup)
+
+    def workspace(self):
+        from opencull_qt.develop import workspace_for
+
+        return workspace_for(self.report, self.photos.root, decoders=set())
+
+    def page(self):
+        from opencull_qt.develop import DevelopPage
+        from opencull_qt.previews import PreviewLoader
+
+        loader = PreviewLoader(self.photos)
+        page = DevelopPage(self.report, self.workspace(), loader)
+        page.show()
+        self.addCleanup(page.shutdown)
+        self.addCleanup(loader.shutdown)
+        self.addCleanup(page.deleteLater)
+        return page
+
+    def wait_for(self, condition, timeout=30.0):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            self.application.processEvents()
+            if condition():
+                return True
+            time.sleep(0.02)
+        return False
+
+    def choose(self, page, treatment):
+        ids = [item["id"] for item in page.available]
+        page.choose_treatment(ids.index(treatment))
+
+    def test_the_baseline_has_no_claim_to_check(self):
+        # It is asked to interpret nothing, so there is nothing to verify
+        # against and the control says why rather than being offered.
+        page = self.page()
+        self.choose(page, "calibrated")
+        self.assertEqual(page.suggestion(), "")
+        self.assertFalse(page.verify_button.isEnabled())
+        self.assertIn("no claim to check", page.verify_button.toolTip())
+
+    def test_a_suggested_treatment_carries_what_it_promised(self):
+        page = self.page()
+        self.choose(page, "standard")
+        suggestion = page.suggestion()
+        self.assertIn("what standard is for", suggestion)
+        self.assertIn("keep skin believable", suggestion)
+        self.assertTrue(page.verify_button.isEnabled())
+
+    def test_verifying_asks_about_the_full_render_not_the_proof(self):
+        page = self.page()
+        self.choose(page, "standard")
+        asked = []
+        page.verification_wanted.connect(lambda request: asked.append(request))
+        page.verify_current()
+        self.assertTrue(
+            self.wait_for(lambda: asked), "the verification was never asked for")
+        request = asked[0]
+        self.assertEqual(request["photo"], "A.JPG")
+        developed = Path(request["developed"])
+        self.assertTrue(developed.is_file())
+        with Image.open(developed) as rendered:
+            # The proof is bounded; a delivery is the photograph's own size.
+            self.assertEqual(max(rendered.size), 160)
+        self.assertEqual(
+            Path(request["original"]).name, "A.JPG")
+        self.assertIn("what standard is for", request["suggestion"])
+
+    def test_a_certificate_is_bound_to_the_file_it_judged(self):
+        workspace = self.workspace()
+        result = workspace.render_full(
+            "A.JPG", "standard", "default", "markesteijn-3-pass")
+        developed = str(result["render"]["path"])
+        self.assertIsNone(workspace.verification_for(developed))
+
+        certificate = self.root / "A.semantic-verification.json"
+        certificate.write_text(json.dumps({
+            "format": "opencull-semantic-verification-v1",
+            "evidence": {"developed": {"path": developed, "sha256": "x"}},
+            "suggestion": "what standard is for",
+            "judgment": {"satisfactory": True, "confidence": 0.9,
+                         "concerns": [], "reasoning": "It did what it said."},
+        }), encoding="utf-8")
+        from opencull_gui.project import register_file_artifact
+
+        register_file_artifact(
+            workspace.project_path, "verifications", certificate,
+            stage="verify")
+
+        found = workspace.verification_for(developed)
+        self.assertIsNotNone(found)
+        self.assertTrue(found["judgment"]["satisfactory"])
+        # A different rendering is not covered by it.
+        self.assertIsNone(
+            workspace.verification_for(self.root / "somewhere-else.jpg"))
+
+    def test_the_verdict_is_shown_beside_the_treatment(self):
+        page = self.page()
+        self.choose(page, "standard")
+        self.assertFalse(page.verdict.isVisible())
+
+        workspace = page.workspace
+        result = workspace.render_full(
+            "A.JPG", "standard", "default", "markesteijn-3-pass")
+        certificate = self.root / "A.semantic-verification.json"
+        certificate.write_text(json.dumps({
+            "format": "opencull-semantic-verification-v1",
+            "evidence": {"developed": {
+                "path": str(result["render"]["path"]), "sha256": "x"}},
+            "suggestion": "s",
+            "judgment": {"satisfactory": False, "confidence": 0.4,
+                         "concerns": ["the sky has gone cyan"],
+                         "reasoning": "The tone moved further than asked."},
+        }), encoding="utf-8")
+        from opencull_gui.project import register_file_artifact
+
+        register_file_artifact(
+            workspace.project_path, "verifications", certificate,
+            stage="verify")
+
+        page._show_verdict()
+        self.assertTrue(page.verdict.isVisible())
+        self.assertIn("Not satisfied", page.verdict.text())
+        self.assertIn("the sky has gone cyan", page.verdict.text())
+        self.assertEqual(page.verdict.property("tone"), "alarm")
+
+    def test_a_failed_verification_says_why_and_frees_the_control(self):
+        page = self.page()
+        self.choose(page, "standard")
+        page._verify_failed("A.JPG", "the reference photograph is unavailable")
+        self.assertTrue(page.verify_button.isEnabled())
+        self.assertIn("unavailable", page.status.text())
+        self.assertEqual(page.status.property("tone"), "alarm")
+
+
+@unittest.skipUnless(QApplication is not None, "PySide6 is not installed")
 class DevelopPageTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

@@ -281,6 +281,81 @@ class DevelopmentWorkspace:
                 "kind": "imported"})
         return available
 
+    # --- what was asked for, and whether it was done --------------------
+
+    def suggestion_for(self, photo: str, style: str) -> str:
+        """What this treatment was told to do, in the words it was told in.
+
+        Verification asks whether a rendering did what was asked. The
+        calibrated baseline is asked to do nothing -- it interprets nothing
+        by definition -- so there is no claim to check and this answers
+        empty rather than inventing one.
+        """
+        if style == "calibrated":
+            return ""
+        entry = next((item for item in self.payload().get("candidates", [])
+                      if item.get("photo") == photo), None)
+        if entry is None:
+            return ""
+        parts = [
+            str(entry.get(f"{style}_intent") or "").strip(),
+            str(entry.get(f"{style}_instructions") or "").strip(),
+        ]
+        guardrails = str(entry.get("guardrails") or "").strip()
+        if guardrails:
+            parts.append(f"Guardrails: {guardrails}")
+        return "\n\n".join(part for part in parts if part)
+
+    def render_record(self, photo: str, variant: str) -> dict | None:
+        """The most recent registered render of one treatment of one frame.
+
+        Asked without rendering anything: the manifest already knows what
+        was made, and re-rendering to find out where a file is would cost
+        the thing it is trying to look up.
+        """
+        self.project = load_project(self.project_path)
+        found = None
+        for item in self.project.get("artifacts", {}).get("renders", []) or []:
+            if not isinstance(item, dict):
+                continue
+            if (item.get("source_photo") == photo
+                    and item.get("variant") == variant
+                    and item.get("path")):
+                found = item
+        return found
+
+    def verifications(self) -> list[dict]:
+        return [
+            item for item in
+            self.project.get("artifacts", {}).get("verifications", []) or []
+            if isinstance(item, dict)
+        ]
+
+    def verification_for(self, developed: str | Path) -> dict | None:
+        """The certificate covering one rendered file, if there is one.
+
+        A certificate is bound to the exact bytes it judged, so it belongs
+        to one render and not to the treatment in general. Re-rendering
+        produces a different file, which correctly has no certificate yet.
+        """
+        wanted = str(Path(str(developed)).expanduser().resolve())
+        self.project = load_project(self.project_path)
+        found = None
+        for item in self.verifications():
+            path = Path(str(item.get("path", "")))
+            if not path.is_file():
+                continue
+            try:
+                value = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if value.get("format") != "opencull-semantic-verification-v1":
+                continue
+            evidence = value.get("evidence", {}).get("developed", {})
+            if str(evidence.get("path", "")) == wanted:
+                found = value
+        return found
+
     # --- rendering ------------------------------------------------------
 
     def recipe_preview(

@@ -223,6 +223,9 @@ QLabel#paneHint {{ color: {FAINT}; }}
 /* Transparent, so the space a photograph does not fill reads as the frame
    around it rather than as a second empty box inside it. */
 QLabel#paneImage {{ background: transparent; color: {FAINT}; }}
+QLabel#verdict {{ color: {MUTED}; }}
+QLabel#verdict[tone="ok"] {{ color: {FIXED}; }}
+QLabel#verdict[tone="alarm"] {{ color: {ALARM}; }}
 QListWidget#treatmentList {{
     background: {INK}; border: 1px solid {EDGE_SOFT};
     border-radius: 8px; outline: none; padding: 4px 0;

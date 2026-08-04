@@ -154,6 +154,76 @@ class Exporter(QObject):
         self._pool.waitForDone(20000)
 
 
+class _VerifySignals(QObject):
+    ready = Signal(str, str, str)         # photo, variant, render path
+    failed = Signal(str, str)             # photo, reason
+
+
+class _VerifyJob(QRunnable):
+    def __init__(self, workspace: DevelopmentWorkspace, photo: str,
+                 treatment: str, engine: str, demosaic: str,
+                 signals: _VerifySignals):
+        super().__init__()
+        self.workspace = workspace
+        self.photo = photo
+        self.treatment = treatment
+        self.engine = engine
+        self.demosaic = demosaic
+        self.signals = signals
+        self.setAutoDelete(True)
+
+    def run(self) -> None:
+        try:
+            # The certificate is bound to the bytes it judged, so what is
+            # verified has to be the file that would be delivered rather
+            # than the bounded proof on screen.
+            result = self.workspace.render_full(
+                self.photo, self.treatment, self.engine, self.demosaic)
+        except Exception as exc:
+            self.signals.failed.emit(self.photo, str(exc))
+            return
+        self.signals.ready.emit(
+            self.photo, str(result["render"]["variant"]),
+            str(result["render"]["path"]))
+
+
+class Verifier(QObject):
+    """Prepare the file a verification will judge."""
+
+    ready = Signal(str, str, str)
+    failed = Signal(str, str)
+
+    def __init__(self, workspace: DevelopmentWorkspace,
+                 parent: QObject | None = None):
+        super().__init__(parent)
+        self.workspace = workspace
+        self.pending = 0
+        self._signals = _VerifySignals()
+        self._signals.ready.connect(self._done)
+        self._signals.failed.connect(self._failed)
+        self._pool = QThreadPool(self)
+        self._pool.setMaxThreadCount(1)
+
+    def prepare(self, photo: str, treatment: str, engine: str,
+                demosaic: str) -> None:
+        self.pending += 1
+        self._pool.start(_VerifyJob(
+            self.workspace, photo, treatment, engine, demosaic,
+            self._signals))
+
+    def _done(self, photo: str, variant: str, path: str) -> None:
+        self.pending = max(0, self.pending - 1)
+        self.ready.emit(photo, variant, path)
+
+    def _failed(self, photo: str, reason: str) -> None:
+        self.pending = max(0, self.pending - 1)
+        self.failed.emit(photo, reason)
+
+    def shutdown(self) -> None:
+        self._pool.clear()
+        self._pool.waitForDone(20000)
+
+
 class Renderer(QObject):
     """One render at a time, and never a stale one."""
 
@@ -349,6 +419,7 @@ class DevelopPage(QWidget):
     """Photographs on the left, the comparison in the middle, treatments right."""
 
     closed = Signal()
+    verification_wanted = Signal(dict)
 
     def __init__(self, report, workspace: DevelopmentWorkspace,
                  loader: PreviewLoader, parent: QWidget | None = None):
@@ -368,6 +439,9 @@ class DevelopPage(QWidget):
         self.exporter = Exporter(workspace, self)
         self.exporter.done.connect(self._exported)
         self.exporter.failed.connect(self._export_failed)
+        self.verifier = Verifier(workspace, self)
+        self.verifier.ready.connect(self._verification_ready)
+        self.verifier.failed.connect(self._verify_failed)
         self.loader.ready.connect(self._original_ready)
 
         self._build()
@@ -470,6 +544,13 @@ class DevelopPage(QWidget):
         self.intent.setFont(theme.body(9))
         layout.addWidget(self.intent)
 
+        self.verdict = QLabel("")
+        self.verdict.setObjectName("verdict")
+        self.verdict.setWordWrap(True)
+        self.verdict.setFont(theme.body(9))
+        self.verdict.setVisible(False)
+        layout.addWidget(self.verdict)
+
         self.engine_note = QLabel("")
         self.engine_note.setObjectName("hint")
         self.engine_note.setWordWrap(True)
@@ -493,6 +574,16 @@ class DevelopPage(QWidget):
             "copy where you choose.")
         self.export_button.clicked.connect(self.export_current)
         layout.addWidget(self.export_button)
+
+        self.verify_button = QPushButton("Verify…")
+        self.verify_button.setObjectName("ghost")
+        self.verify_button.setFont(theme.body(10))
+        self.verify_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.verify_button.setToolTip(
+            "Ask a model whether this rendering did what the treatment said "
+            "it would, without losing the subject.")
+        self.verify_button.clicked.connect(self.verify_current)
+        layout.addWidget(self.verify_button)
         return panel
 
     # --- photographs -----------------------------------------------------
@@ -586,6 +677,7 @@ class DevelopPage(QWidget):
         self.develop_button.setEnabled(True)
         self.engine_note.setText(self._engine_note())
         self._show_treated()
+        self._show_verdict()
 
     def decoder_for(self, photo: str) -> dict:
         # The workspace decides, so what this says and what the renderer then
@@ -636,6 +728,7 @@ class DevelopPage(QWidget):
         self.develop_button.setEnabled(True)
         if photo == self.current and treatment == self.treatment:
             self.stage.set_treated(pixmap, self._treatment_name())
+            self._show_verdict()
             self._report(
                 "Developed. Hold space to see it as shot; the photograph "
                 "itself is unchanged.", "ok")
@@ -644,6 +737,77 @@ class DevelopPage(QWidget):
         self.develop_button.setEnabled(True)
         if photo == self.current:
             self._report(reason, "alarm")
+
+    # --- verification ---------------------------------------------------
+
+    def suggestion(self) -> str:
+        if not self.current or not self.treatment:
+            return ""
+        return self.workspace.suggestion_for(self.current, self.treatment)
+
+    def _show_verdict(self) -> None:
+        """Say whether this rendering has been checked, and what was found."""
+        suggestion = self.suggestion()
+        self.verify_button.setEnabled(bool(suggestion))
+        self.verify_button.setToolTip(
+            "Ask a model whether this rendering did what the treatment said "
+            "it would, without losing the subject."
+            if suggestion else
+            "The baseline is asked to do nothing, so there is no claim to "
+            "check.")
+        certificate = None
+        if suggestion:
+            record = self.workspace.render_record(self.current, self._variant())
+            if record is not None:
+                certificate = self.workspace.verification_for(record["path"])
+        if certificate is None:
+            self.verdict.setVisible(False)
+            return
+        judgment = certificate.get("judgment", {}) or {}
+        satisfactory = bool(judgment.get("satisfactory"))
+        concerns = [str(item) for item in judgment.get("concerns", []) or []]
+        votes = ""
+        if judgment.get("votes_total"):
+            votes = (f"  ({judgment['votes_satisfactory']} of "
+                     f"{judgment['votes_total']} models)")
+        text = (
+            f"{'Verified' if satisfactory else 'Not satisfied'}{votes}. "
+            f"{str(judgment.get('reasoning') or '').strip()}")
+        if concerns:
+            text += "\n\nConcerns: " + "; ".join(concerns)
+        self.verdict.setText(text)
+        self.verdict.setProperty("tone", "ok" if satisfactory else "alarm")
+        self.verdict.style().unpolish(self.verdict)
+        self.verdict.style().polish(self.verdict)
+        self.verdict.setVisible(True)
+
+    def verify_current(self) -> None:
+        """Have this rendering judged against what the treatment promised."""
+        suggestion = self.suggestion()
+        if not suggestion:
+            return
+        self.verify_button.setEnabled(False)
+        self._report(
+            f"Rendering {self.current} at full size to verify it. The "
+            "certificate covers the file that would be delivered, not the "
+            "proof on screen.")
+        self.verifier.prepare(
+            self.current, self.treatment, self.engine_for(self.current),
+            self._demosaic())
+
+    def _verification_ready(self, photo: str, variant: str, path: str) -> None:
+        self.verify_button.setEnabled(True)
+        self.verification_wanted.emit({
+            "photo": photo,
+            "variant": variant,
+            "developed": path,
+            "original": str(self.workspace.source_for(photo)),
+            "suggestion": self.workspace.suggestion_for(photo, self.treatment),
+        })
+
+    def _verify_failed(self, photo: str, reason: str) -> None:
+        self.verify_button.setEnabled(True)
+        self._report(f"{photo} could not be verified: {reason}", "alarm")
 
     # --- export ---------------------------------------------------------
 
@@ -750,6 +914,7 @@ class DevelopPage(QWidget):
     def shutdown(self) -> None:
         self.renderer.shutdown()
         self.exporter.shutdown()
+        self.verifier.shutdown()
 
 
 
