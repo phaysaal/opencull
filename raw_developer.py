@@ -38,6 +38,21 @@ def _tool(name: str) -> str:
     return value
 
 
+def _image_tool() -> str:
+    """ImageMagick, under either of the names it ships as.
+
+    Version 7 installs `magick`; version 6, which is still what most Linux
+    distributions package, installs `convert`. Asking only for `magick` made
+    the baseline decoder unavailable on machines that had ImageMagick.
+    """
+    for name in ("magick", "convert"):
+        found = shutil.which(name)
+        if found:
+            return found
+    raise RawDevelopmentError(
+        "required tool is unavailable: ImageMagick (magick or convert)")
+
+
 def _run(
     command: list[str], runner: Runner = subprocess.run,
 ) -> subprocess.CompletedProcess[str]:
@@ -130,7 +145,7 @@ def render_baseline(
     destination.mkdir(parents=True, exist_ok=True)
     dcraw = dcraw_tool or _tool("dcraw_emu")
     identify = identify_tool or _tool("raw-identify")
-    magick = image_tool or _tool("magick")
+    magick = image_tool or _image_tool()
     metadata = identify_raw(raw, runner, identify)
     source_hash = sha256_file(raw)
     stem = raw.stem

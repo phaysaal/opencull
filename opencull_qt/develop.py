@@ -182,15 +182,11 @@ class DevelopPage(QWidget):
     closed = Signal()
 
     def __init__(self, report, workspace: DevelopmentWorkspace,
-                 loader: PreviewLoader, engines: set[str] | None = None,
-                 parent: QWidget | None = None):
+                 loader: PreviewLoader, parent: QWidget | None = None):
         super().__init__(parent)
         self.report = report
         self.workspace = workspace
         self.loader = loader
-        # Settled once here, so the page can say what it is about to do
-        # instead of finding out inside a render that then fails.
-        self.engines = engines if engines is not None else available_engines()
         self.photo_names = list(report.photo_names)
         self.current = self.photo_names[0] if self.photo_names else ""
         self.treatment = ""
@@ -407,24 +403,17 @@ class DevelopPage(QWidget):
         self.engine_note.setText(self._engine_note())
         self._show_treated()
 
+    def decoder_for(self, photo: str) -> dict:
+        # The workspace decides, so what this says and what the renderer then
+        # does are the same answer rather than two detections that can differ.
+        return self.workspace.decoder_for(photo)
+
     def engine_for(self, photo: str) -> str:
-        """Demosaic a RAW when we can, and fall back honestly when we cannot."""
-        if self.workspace.raw_files(photo) and "darktable" in self.engines:
-            return "darktable"
-        return "default"
+        return str(self.decoder_for(photo)["engine"])
 
     def _engine_note(self) -> str:
         """Say which rendering this actually is. They are not equivalent."""
-        if not self.workspace.raw_files(self.current):
-            return "No RAW is matched to this frame, so the rendered file is used."
-        if "darktable" in self.engines:
-            return "A matched RAW, demosaiced by darktable."
-        # darktable is what turns a RAW into an image. Without it the only
-        # rendering available is the one the camera embedded, which is a
-        # judgement already made rather than a development.
-        return (
-            "A RAW is matched to this frame, but darktable is not installed, "
-            "so the camera's own embedded rendering is used instead.")
+        return str(self.decoder_for(self.current)["note"])
 
     # --- rendering -------------------------------------------------------
 
@@ -502,25 +491,10 @@ class DevelopPage(QWidget):
         self.renderer.shutdown()
 
 
-def available_engines() -> set[str]:
-    """Which rendering engines this machine actually has.
-
-    Asked once, at the moment the page opens, so the page can say what it is
-    about to do rather than discovering it inside a failed render.
-    """
-    engines = {"default"}
-    try:
-        from darktable_engine import find_darktable_cli
-
-        find_darktable_cli()
-    except Exception:
-        # DarktableError when it is not installed, ImportError if the module
-        # itself is unavailable. Either way there is no darktable here.
-        return engines
-    return engines | {"darktable"}
 
 
-def workspace_for(report, photos_root: Path) -> DevelopmentWorkspace:
+def workspace_for(report, photos_root: Path,
+                  decoders: set[str] | None = None) -> DevelopmentWorkspace:
     """Build a develop stage for one folder, the way the server builds one."""
     from opencull_gui.project import (
         ensure_project_layout,
@@ -534,4 +508,5 @@ def workspace_for(report, photos_root: Path) -> DevelopmentWorkspace:
     layout = ensure_project_layout(photos_root)
     raw_sources = RawSourceStore(
         layout["Reports"] / f"{report.path.stem}.raw-source.json", report)
-    return DevelopmentWorkspace(project_path, layout, raw_sources)
+    return DevelopmentWorkspace(
+        project_path, layout, raw_sources, decoders=decoders)

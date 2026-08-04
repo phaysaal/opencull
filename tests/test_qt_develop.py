@@ -68,8 +68,10 @@ class DevelopPageTests(unittest.TestCase):
 
         loader = PreviewLoader(self.photos)
         page = DevelopPage(
-            self.report, workspace_for(self.report, self.photos.root), loader,
-            engines=engines if engines is not None else {"default"})
+            self.report,
+            workspace_for(self.report, self.photos.root,
+                          decoders=set() if engines is None else engines),
+            loader)
         page.resize(900, 600)
         page.show()
         self.addCleanup(page.shutdown)
@@ -143,17 +145,33 @@ class DevelopPageTests(unittest.TestCase):
         page = self.page()
         self.assertIn("No RAW", page.engine_note.text())
 
-    def test_a_raw_without_darktable_is_named_as_the_camera_rendering(self):
-        page = self.page()
-        page.workspace.raw_files = lambda photo: ["/somewhere/A.ARW"]
+    def match_a_raw(self, page):
+        """Point the first frame at a real RAW file beside the shoot."""
+        raw = self.photos_path.parent / "A.ARW"
+        raw.write_bytes(b"raw")
+        page.workspace.raw_files = lambda photo: [str(raw)]
+
+    def test_a_raw_falls_back_to_libraw_when_darktable_is_absent(self):
+        # OpenCull's own renderer, not the camera's rendering. It is the
+        # deterministic fallback, and it is a real decode.
+        page = self.page(engines={"libraw"})
+        self.match_a_raw(page)
         page._chose_treatment(0)
-        self.assertIn("darktable is not installed", page.engine_note.text())
-        # And the render must not claim to be a demosaic it cannot perform.
+        self.assertIn("LibRaw", page.engine_note.text())
+        self.assertEqual(page.engine_for("A.JPG"), "default")
+
+    def test_a_raw_with_neither_decoder_is_named_as_the_camera_rendering(self):
+        page = self.page(engines=set())
+        self.match_a_raw(page)
+        page._chose_treatment(0)
+        note = page.engine_note.text()
+        self.assertIn("camera's own embedded rendering", note)
+        self.assertIn("not a development", note)
         self.assertEqual(page.engine_for("A.JPG"), "default")
 
     def test_a_raw_with_darktable_is_demosaiced(self):
-        page = self.page(engines={"default", "darktable"})
-        page.workspace.raw_files = lambda photo: ["/somewhere/A.ARW"]
+        page = self.page(engines={"darktable", "libraw"})
+        self.match_a_raw(page)
         page._chose_treatment(0)
         self.assertIn("demosaiced by darktable", page.engine_note.text())
         self.assertEqual(page.engine_for("A.JPG"), "darktable")
@@ -184,14 +202,33 @@ class DevelopPageTests(unittest.TestCase):
         self.assertEqual(page.status.property("tone"), "alarm")
 
 
-@unittest.skipUnless(QApplication is not None, "PySide6 is not installed")
-class EngineDetectionTests(unittest.TestCase):
-    def test_default_is_always_there_and_darktable_is_not_assumed(self):
-        from opencull_qt.develop import available_engines
+class DecoderDetectionTests(unittest.TestCase):
+    def test_nothing_is_assumed_to_be_installed(self):
+        from opencull_gui.development import available_decoders
 
-        engines = available_engines()
-        self.assertIn("default", engines)
-        self.assertLessEqual(engines, {"default", "darktable"})
+        self.assertLessEqual(available_decoders(), {"darktable", "libraw"})
+
+    def test_libraw_needs_every_tool_it_shells_out_to(self):
+        from unittest import mock
+
+        from opencull_gui.development import raw_baseline_tools_present
+
+        with mock.patch("shutil.which", lambda name: None):
+            self.assertFalse(raw_baseline_tools_present())
+        with mock.patch("shutil.which", lambda name: "/usr/bin/" + name):
+            self.assertTrue(raw_baseline_tools_present())
+        # ImageMagick 6 installs `convert`, not `magick`, and that is what
+        # most Linux distributions still package.
+        with mock.patch(
+            "shutil.which",
+            lambda name: None if name == "magick" else "/usr/bin/" + name,
+        ):
+            self.assertTrue(raw_baseline_tools_present())
+        with mock.patch(
+            "shutil.which",
+            lambda name: None if name == "dcraw_emu" else "/usr/bin/" + name,
+        ):
+            self.assertFalse(raw_baseline_tools_present())
 
 
 if __name__ == "__main__":

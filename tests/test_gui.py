@@ -14,6 +14,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np
+import tifffile
 from PIL import Image
 
 from delivery_export_pipeline import run_delivery_export
@@ -50,20 +51,25 @@ from opencull_gui.server import ReviewServer
 from opencull_gui.xmp import xmp_zip
 
 
-def development_workspace(photos, entries=()):
+def development_workspace(photos, entries=(), raw_root="", raw_matches=None,
+                          decoders=frozenset()):
     """A develop stage over a real project, with no server around it.
 
     Edit directions arrive from the shortlist, which the develop stage does
     not own, so they are supplied here rather than produced.
     """
     project_path, _ = load_or_create_folder_project(photos, "Trip")
+    public = {
+        "configured": bool(raw_root), "root": str(raw_root),
+        "matches": dict(raw_matches or {}),
+    }
     return DevelopmentWorkspace(
         project_path, ensure_project_layout(photos),
-        type("RawSources", (),
-             {"public": lambda _self: {"configured": False}})(),
+        type("RawSources", (), {"public": lambda _self: public})(),
         directions=lambda: {
             "available": bool(entries), "path": "",
-            "directions": {"entries": list(entries)}})
+            "directions": {"entries": list(entries)}},
+        decoders=set(decoders))
 
 
 def report_data(names=("A.JPG", "B.JPG")):
@@ -2420,6 +2426,95 @@ class GuiJobTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 workspace.recipe_preview(
                     "A.JPG", "signature", "default", "markesteijn-3-pass", 80)
+
+    def test_the_three_decoders_are_ranked_and_named_honestly(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            photos = root / "photos"; photos.mkdir()
+            raws = root / "raws"; raws.mkdir()
+            (raws / "A.ARW").write_bytes(b"raw")
+            workspace = development_workspace(
+                photos, raw_root=raws, raw_matches={"A.JPG": ["A.ARW"]})
+
+            best = workspace.decoder_for("A.JPG", {"darktable", "libraw"})
+            self.assertEqual(best["id"], "darktable")
+            self.assertEqual(best["engine"], "darktable")
+
+            # Without darktable, OpenCull's own LibRaw renderer -- which is a
+            # real decode, not the camera's rendering.
+            fallback = workspace.decoder_for("A.JPG", {"libraw"})
+            self.assertEqual(fallback["id"], "libraw")
+            self.assertEqual(fallback["engine"], "default")
+            self.assertIn("scene-linear", fallback["note"])
+
+            last = workspace.decoder_for("A.JPG", set())
+            self.assertEqual(last["id"], "embedded")
+            self.assertIn("not a development", last["note"])
+
+            # A photograph with no RAW behind it is none of the above.
+            plain = workspace.decoder_for("B.JPG", {"darktable", "libraw"})
+            self.assertEqual(plain["id"], "rendered")
+
+    def test_a_raw_is_decoded_by_libraw_rather_than_read_from_the_camera(self):
+        from opencull_gui import development
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            photos = root / "photos"; photos.mkdir()
+            # A blue reference JPEG beside a RAW that decodes to red. If the
+            # render comes out blue, the decoder was never called.
+            Image.new("RGB", (120, 90), (30, 60, 200)).save(photos / "A.JPG")
+            raws = root / "raws"; raws.mkdir()
+            (raws / "A.ARW").write_bytes(b"raw")
+            workspace = development_workspace(
+                photos, raw_root=raws, raw_matches={"A.JPG": ["A.ARW"]},
+                decoders={"libraw"})
+
+            decoded = root / "decoded.tiff"
+
+            def fake_baseline(source, output_dir, **_kwargs):
+                red = np.zeros((90, 120, 3), dtype=np.uint16)
+                red[..., 0] = 40000
+                tifffile.imwrite(decoded, red)
+                return {"outputs": {"linear_tiff": {"path": str(decoded)}}}
+
+            with patch.object(development, "render_baseline", fake_baseline):
+                rendered = workspace.recipe_preview(
+                    "A.JPG", "calibrated", "default", "markesteijn-3-pass", 64)
+
+            with Image.open(rendered) as opened:
+                pixels = np.asarray(opened.convert("RGB"), dtype=np.float32)
+            self.assertGreater(pixels[..., 0].mean(), pixels[..., 2].mean())
+
+    def test_shrinking_a_baseline_bounds_it_and_keeps_it_linear(self):
+        from opencull_gui.development import shrink_linear
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "big.tiff"
+            # Half the frame at full white, half at black. Averaged in linear
+            # light the result is 0.5; averaged after display encoding it
+            # would land near 0.73, which is the mistake this avoids.
+            data = np.zeros((100, 200, 3), dtype=np.uint16)
+            data[:, :100] = 65535
+            tifffile.imwrite(source, data)
+            output = shrink_linear(source, 50, root / "small.tiff")
+            shrunk = np.asarray(tifffile.imread(output), dtype=np.float32)
+            self.assertEqual(shrunk.shape[:2], (25, 50))
+            self.assertAlmostEqual(
+                float(shrunk.mean()) / 65535.0, 0.5, places=2)
+
+    def test_a_baseline_smaller_than_the_proof_is_left_alone(self):
+        from opencull_gui.development import shrink_linear
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "small.tiff"
+            tifffile.imwrite(
+                source, np.full((40, 60, 3), 12345, dtype=np.uint16))
+            output = shrink_linear(source, 400, root / "out.tiff")
+            self.assertEqual(
+                np.asarray(tifffile.imread(output)).shape[:2], (40, 60))
 
     def test_full_resolution_darktable_job_uses_delivery_pipeline(self):
         manager = JobManager.__new__(JobManager)

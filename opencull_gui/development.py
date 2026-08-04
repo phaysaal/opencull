@@ -31,8 +31,9 @@ from PIL import Image, ImageOps
 
 from darktable_engine import render_darktable_default
 from development_engine import _srgb_to_linear_rec2020, render_recipe
+from raw_developer import render_baseline
 from recipe_compiler import compile_recipe
-from scan import open_preview
+from scan import RAW_EXTENSIONS, open_preview
 
 from . import dialogs
 from .jobs import JobError
@@ -49,6 +50,65 @@ DEMOSAIC_MODES = (
 )
 
 
+def available_decoders() -> set[str]:
+    """Which RAW decoders this machine actually has.
+
+    darktable is preferred where it is installed. The LibRaw baseline is the
+    deterministic fallback and comparison oracle: OpenCull's own renderer,
+    decoding to scene-linear Rec.2020 without anyone's look applied.
+
+    With neither, the only thing left is the rendering the camera embedded in
+    the file, which is a judgement already made rather than a decode. That is
+    honest to fall back to and dishonest to call a development.
+    """
+    decoders = set()
+    try:
+        from darktable_engine import find_darktable_cli
+
+        find_darktable_cli()
+        decoders.add("darktable")
+    except Exception:
+        pass
+    if raw_baseline_tools_present():
+        decoders.add("libraw")
+    return decoders
+
+
+def raw_baseline_tools_present() -> bool:
+    """Whether every tool render_baseline shells out to is installed."""
+    return all(
+        shutil.which(name) for name in ("dcraw_emu", "raw-identify")
+    ) and bool(shutil.which("magick") or shutil.which("convert"))
+
+
+def shrink_linear(tiff: Path, maximum: int, destination: Path) -> Path:
+    """Resample a scene-linear baseline down to proof size.
+
+    Done on the linear data rather than after display encoding, which is the
+    only way a downscale averages light the way light actually averages.
+    """
+    array = np.asarray(tifffile.imread(tiff))
+    if array.ndim != 3 or array.shape[2] < 3:
+        raise ValueError("baseline decode is not a colour image")
+    array = array[..., :3].astype(np.float32)
+    height, width = array.shape[:2]
+    longest = max(height, width)
+    if longest > maximum:
+        size = (max(1, round(width * maximum / longest)),
+                max(1, round(height * maximum / longest)))
+        # Pillow has no 16-bit colour mode, so each channel is resampled as a
+        # single-channel float image and the three are stacked back together.
+        array = np.stack([
+            np.asarray(
+                Image.fromarray(array[..., channel], mode="F").resize(
+                    size, Image.Resampling.LANCZOS))
+            for channel in range(3)
+        ], axis=-1)
+    tifffile.imwrite(
+        destination, np.uint16(np.clip(array + 0.5, 0, 65535)))
+    return destination
+
+
 class DevelopmentWorkspace:
     """The renders, recipes and candidates belonging to one project."""
 
@@ -58,6 +118,7 @@ class DevelopmentWorkspace:
         project_layout: dict[str, Path],
         raw_sources: RawSourceStore,
         directions: Callable[[], dict] | None = None,
+        decoders: set[str] | None = None,
     ):
         self.project_path = project_path
         self.project_layout = project_layout
@@ -66,6 +127,10 @@ class DevelopmentWorkspace:
         # does not own. A caller that has no shortlist passes nothing and
         # gets a workspace with no candidates, which is the truth.
         self.directions = directions or (lambda: {"available": False})
+        # Detected once and held, so that what the interface says is about to
+        # happen and what the renderer then does cannot disagree. Installing
+        # a decoder takes effect the next time a project is opened.
+        self.decoders = available_decoders() if decoders is None else set(decoders)
         self.project: dict[str, Any] = load_project(project_path)
         self._native_locks: dict[str, threading.Lock] = {}
 
@@ -124,6 +189,46 @@ class DevelopmentWorkspace:
             str((root / relative).resolve())
             for relative in raw.get("matches", {}).get(photo, [])
         ]
+
+    def source_for(self, photo: str) -> Path:
+        """The file a render is actually made from.
+
+        A matched external RAW where there is one, and otherwise the
+        photograph in the folder -- which may itself be a RAW.
+        """
+        matched = self.raw_files(photo)
+        if matched:
+            candidate = Path(matched[0]).expanduser()
+            if candidate.is_file():
+                return candidate
+        return (Path(str(self.project.get("source_folder") or "")) / photo)
+
+    def decoder_for(self, photo: str, decoders: set[str] | None = None) -> dict:
+        """Which decoder this photograph will get, and what that means.
+
+        Settled and reported before rendering rather than discovered inside
+        it, so the interface can say what it is about to do. The three are
+        not equivalent and the interface must not imply that they are.
+        """
+        available = self.decoders if decoders is None else decoders
+        if self.source_for(photo).suffix.casefold() not in RAW_EXTENSIONS:
+            return {"id": "rendered", "engine": "default",
+                    "label": "Rendered file",
+                    "note": "No RAW for this frame, so the rendered file is used."}
+        if "darktable" in available:
+            return {"id": "darktable", "engine": "darktable",
+                    "label": "darktable",
+                    "note": "A RAW, demosaiced by darktable."}
+        if "libraw" in available:
+            return {"id": "libraw", "engine": "default",
+                    "label": "OpenCull · LibRaw",
+                    "note": ("A RAW, decoded by OpenCull's own LibRaw baseline "
+                             "to scene-linear Rec.2020.")}
+        return {"id": "embedded", "engine": "default",
+                "label": "Camera preview",
+                "note": ("Neither darktable nor LibRaw is installed, so the "
+                         "camera's own embedded rendering is used. That is a "
+                         "judgement already made, not a development.")}
 
     def treatments(self, photo: str) -> list[dict]:
         """The treatments that can actually be rendered for one photograph.
@@ -191,11 +296,17 @@ class DevelopmentWorkspace:
         reference = (Path(str(workspace["source_folder"])) / photo).resolve()
         if not reference.is_file():
             raise ValueError("reference photograph is unavailable")
+        # A matched RAW is only worth reaching for if something here can
+        # decode it. Otherwise the reference photograph is the source, and
+        # the render is honestly the rendering that already existed.
+        decoders = self.decoders
         source = reference
-        if engine == "darktable" and entry.get("raw_files"):
-            candidate = Path(str(entry["raw_files"][0])).expanduser().resolve()
-            if candidate.is_file():
-                source = candidate
+        if engine == "darktable" or "libraw" in decoders:
+            for matched in entry.get("raw_files") or []:
+                candidate = Path(str(matched)).expanduser().resolve()
+                if candidate.is_file():
+                    source = candidate
+                    break
         source_kind = "raw" if source.suffix.casefold() not in {".jpg", ".jpeg"} else "jpeg"
         recipe_value = entry.get(f"{style}_recipe")
         portable = None
@@ -282,18 +393,20 @@ class DevelopmentWorkspace:
                             f".{native_cache.name}.{secrets.token_hex(4)}.tmp")
                         shutil.copy2(Path(native["output"]["path"]), staged_native)
                         os.replace(staged_native, native_cache)
-                baseline_source = native_cache
+                baseline = self._from_display(native_cache, work)
+                calibration_reference = None
+            elif source_kind == "raw" and "libraw" in decoders:
+                # OpenCull's own renderer: the deterministic fallback the
+                # renderer plan describes. It already produces the
+                # scene-linear Rec.2020 baseline render_recipe is written
+                # against, so it is used as it is rather than round-tripped
+                # down through a display JPEG and back up again.
+                baseline = self._libraw_baseline(
+                    source, source_stat, maximum, work)
                 calibration_reference = None
             else:
-                baseline_source = small_reference
+                baseline = self._from_display(small_reference, work)
                 calibration_reference = small_reference
-            with Image.open(baseline_source) as opened:
-                rgb = np.asarray(
-                    ImageOps.exif_transpose(opened).convert("RGB"),
-                    dtype=np.float32) / 255.0
-            linear = np.clip(_srgb_to_linear_rec2020(rgb), 0.0, 1.0)
-            baseline = work / "baseline.tiff"
-            tifffile.imwrite(baseline, np.uint16(linear * 65535.0 + 0.5))
             result = render_recipe(
                 baseline, recipe, work / "render", allow_incomplete=True,
                 reference_jpeg=calibration_reference)
@@ -302,6 +415,44 @@ class DevelopmentWorkspace:
             shutil.copy2(Path(result["output"]["path"]), temporary_output)
             os.replace(temporary_output, destination)
         return destination
+
+    @staticmethod
+    def _from_display(image: Path, work: Path) -> Path:
+        """Lift a display-encoded rendering into the scene-linear baseline."""
+        with Image.open(image) as opened:
+            rgb = np.asarray(
+                ImageOps.exif_transpose(opened).convert("RGB"),
+                dtype=np.float32) / 255.0
+        linear = np.clip(_srgb_to_linear_rec2020(rgb), 0.0, 1.0)
+        baseline = work / "baseline.tiff"
+        tifffile.imwrite(baseline, np.uint16(linear * 65535.0 + 0.5))
+        return baseline
+
+    def _libraw_baseline(
+        self, source: Path, source_stat, maximum: int, work: Path,
+    ) -> Path:
+        """Decode a RAW with LibRaw, and keep the result at proof size.
+
+        The decode is the expensive part and does not depend on the recipe,
+        so it is cached beside the darktable decodes and shared by every
+        treatment of the same photograph.
+        """
+        identity = hashlib.sha256(
+            f"{source}|{source_stat.st_mtime_ns}|{source_stat.st_size}|"
+            f"{maximum}|libraw".encode()).hexdigest()[:20]
+        cache = self.project_layout["Previews"] / "DevelopBaselines" / (
+            f"{source.stem}.{maximum}.libraw.{identity}.tiff")
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        lock = self._native_locks.setdefault(identity, threading.Lock())
+        with lock:
+            if not cache.is_file():
+                record = render_baseline(source, work / "libraw")
+                full = Path(record["outputs"]["linear_tiff"]["path"])
+                staged = cache.with_name(
+                    f".{cache.name}.{secrets.token_hex(4)}.tmp")
+                shrink_linear(full, maximum, staged)
+                os.replace(staged, cache)
+        return cache
 
     # --- recipes --------------------------------------------------------
 
