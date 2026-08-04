@@ -100,7 +100,12 @@ class LauncherLogicTests(unittest.TestCase):
 class FakeServices:
     def __init__(self, projects=None, jobs=None, cache=None):
         self.paths = mock.Mock()
-        self.paths.cache = Path(cache or tempfile.mkdtemp())
+        root = Path(cache or tempfile.mkdtemp())
+        self.paths.cache = root
+        self.paths.support = root / "support"
+        self.paths.results = root / "results"
+        self.paths.support.mkdir(parents=True, exist_ok=True)
+        self.paths.results.mkdir(parents=True, exist_ok=True)
         self._projects = projects or []
         self._jobs = jobs or []
         self.added: list[str] = []

@@ -41,6 +41,7 @@ from opencull_gui.shortlist_reviews import (
     ShortlistReviewStore,
     default_shortlist_review_path,
 )
+from opencull_gui.style import StyleProfileStore
 from scan import classify_folder
 
 from . import theme
@@ -49,6 +50,7 @@ from .previews import LibraryPreviewLoader, PreviewLoader
 from .providers import ProvidersDialog
 from .review import ReviewPage
 from .shortlist import ShortlistPage
+from .style import StyleDialog
 from .widgets import ProjectCard, Row, band, replace_rows, short_path
 
 ACTIVE = {"running", "queued"}
@@ -179,6 +181,8 @@ class Launcher(QMainWindow):
         self._contents: dict[str, dict] = {}
         self._loader: PreviewLoader | None = None
         self._cards: dict[str, ProjectCard] = {}
+        self.style_profiles = StyleProfileStore(
+            services.paths.support / "style-profile.json", services.paths.results)
         self._library_previews = LibraryPreviewLoader(services.paths.cache, self)
         self._library_previews.ready.connect(self._library_painted)
         self.setWindowTitle("Darkimiya")
@@ -267,6 +271,16 @@ class Launcher(QMainWindow):
         title.setFont(theme.display(11))
         layout.addWidget(title)
         layout.addStretch(1)
+
+        self.style_button = QPushButton("Style")
+        self.style_button.setObjectName("ghost")
+        self.style_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.style_button.setFont(theme.body(10))
+        self.style_button.setToolTip(
+            "The personal style profile suggestions edit in. It belongs to "
+            "you, not to a folder.")
+        self.style_button.clicked.connect(self.edit_style)
+        layout.addWidget(self.style_button)
 
         self.providers_button = QPushButton("Providers")
         self.providers_button.setObjectName("ghost")
@@ -650,8 +664,11 @@ class Launcher(QMainWindow):
                 shortlist=str(shortlist.path), review=str(reviews.path),
                 photos=str(photos.root), output=output,
                 profile="professional",
-                style_profile=str(
-                    manifest.get("active_style_profile") or ""),
+                # The project records which profile it last used; the
+                # window's selection is what a new run should use.
+                style_profile=(
+                    self.style_profiles.selected()
+                    or str(manifest.get("active_style_profile") or "")),
                 only_photos=list(wanted))
         except Exception as exc:
             page = self.review_page
@@ -778,6 +795,13 @@ class Launcher(QMainWindow):
 
     def edit_providers(self) -> None:
         dialog = ProvidersDialog(self.services.providers, self)
+        dialog.exec()
+        self.refresh()
+
+    def edit_style(self) -> None:
+        dialog = StyleDialog(
+            self.style_profiles, self.services.jobs, self.services.providers,
+            self)
         dialog.exec()
         self.refresh()
 
