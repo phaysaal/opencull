@@ -341,6 +341,56 @@ class LauncherWindowTests(unittest.TestCase):
         self.assertEqual(
             self.buttons(self.cards(window)[0]), ["Cull"])
 
+    def card_for(self, window, kind):
+        self.folder(window, kind)
+        window.refresh()
+        return self.cards(window)[0]
+
+    def test_clicking_the_pictures_opens_the_folder_for_editing(self):
+        from PySide6.QtCore import QPointF, Qt
+        from PySide6.QtGui import QMouseEvent
+
+        window, _ = self.build(projects=[
+            {"id": "p1", "name": "A", "photos": "/p/a", "available": True}])
+        card = self.card_for(window, "bitmap")
+        self.assertTrue(card.strip.opens())
+        with mock.patch.object(window, "develop") as develop:
+            card.strip.mousePressEvent(QMouseEvent(
+                QMouseEvent.Type.MouseButtonPress, QPointF(10, 10),
+                Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton,
+                Qt.KeyboardModifier.NoModifier))
+        develop.assert_called_once()
+        self.assertEqual(develop.call_args[0][0]["id"], "p1")
+
+    def test_the_pictures_say_where_they_lead(self):
+        window, _ = self.build(projects=[
+            {"id": "p1", "name": "A", "photos": "/p/a", "available": True}])
+        self.assertEqual(self.card_for(window, "raw").strip.toolTip(), "Develop A")
+        self.assertEqual(self.card_for(window, "bitmap").strip.toolTip(), "Edit A")
+
+    def test_pictures_that_lead_nowhere_are_not_a_target(self):
+        # A folder with nothing readable in it has no treatment button, so
+        # its strip must not look like a way in either.
+        window, _ = self.build(projects=[
+            {"id": "p1", "name": "A", "photos": "/p/a", "available": True}])
+        card = self.card_for(window, "empty")
+        self.assertFalse(card.strip.opens())
+        self.assertEqual(card.strip.toolTip(), "")
+
+    def test_an_offline_folder_is_not_a_target(self):
+        window, _ = self.build(projects=[
+            {"id": "p1", "name": "A", "photos": "/p/a", "available": False}])
+        self.assertFalse(self.card_for(window, "bitmap").strip.opens())
+
+    def test_a_folder_being_culled_is_not_a_target(self):
+        window, _ = self.build(projects=[
+            {"id": "p1", "name": "A", "photos": "/p/a", "available": True,
+             "culling": {"status": "running", "log_tail": "20 %"}}])
+        card = self.card_for(window, "bitmap")
+        # The button is gone while the run is in flight; so is the strip.
+        self.assertNotIn("Edit", self.buttons(card))
+        self.assertFalse(card.strip.opens())
+
     def test_a_culled_folder_offers_review_and_recull(self):
         window, _ = self.build(projects=[
             {"id": "p1", "name": "A", "photos": "/p/a", "available": True,

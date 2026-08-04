@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from PySide6.QtCore import QRect, Qt, QTimer
+from PySide6.QtCore import QRect, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QFrame,
@@ -253,10 +253,13 @@ class Filmstrip(QWidget):
     PERF = 5
     PITCH = 14
 
+    clicked = Signal()
+
     def __init__(self, count: int = 3, parent: QWidget | None = None):
         super().__init__(parent)
         self.count = count
         self._pixmaps: list = [None] * count
+        self._opens = False
         self.setMinimumHeight(120)
         self.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -268,6 +271,37 @@ class Filmstrip(QWidget):
 
     def clear(self) -> None:
         self._pixmaps = [None] * self.count
+        self.update()
+
+    def set_opens(self, opens: bool, tip: str = "") -> None:
+        """Whether the pictures are a way in, and where to.
+
+        A strip that cannot be opened must not look as though it can, so the
+        cursor and the hover cue both follow this rather than being set once.
+        """
+        self._opens = opens
+        self.setCursor(
+            Qt.CursorShape.PointingHandCursor if opens
+            else Qt.CursorShape.ArrowCursor)
+        self.setToolTip(tip if opens else "")
+        self.setMouseTracking(opens)
+        self.update()
+
+    def opens(self) -> bool:
+        return self._opens
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        if self._opens and event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+            return
+        super().mousePressEvent(event)
+
+    def enterEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        super().enterEvent(event)
+        self.update()
+
+    def leaveEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        super().leaveEvent(event)
         self.update()
 
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt naming
@@ -309,6 +343,13 @@ class Filmstrip(QWidget):
                 path.addRoundedRect(x, top, self.PERF, 3.0, 1.0, 1.0)
                 painter.fillPath(path, colour)
             x += self.PITCH
+
+        if self._opens and self.underMouse():
+            # A light on the frames, not the safelight: amber here would say
+            # work is in flight, which is what it means everywhere else.
+            wash = QColor(theme.PAPER)
+            wash.setAlphaF(0.07)
+            painter.fillRect(window, wash)
         painter.end()
 
 
@@ -326,6 +367,8 @@ class ProjectCard(QFrame):
         progress: int | None = None,
         frames: int = 3,
         on_remove: Callable[[], None] | None = None,
+        on_open: Callable[[], None] | None = None,
+        open_hint: str = "",
     ):
         super().__init__()
         self.setObjectName("card")
@@ -341,6 +384,12 @@ class ProjectCard(QFrame):
 
         self.strip = Filmstrip(frames)
         self.strip.setFixedHeight(132)
+        # The pictures are the obvious way into a folder, so they are one.
+        # They lead where the folder's own button leads and nowhere else: a
+        # card whose button is absent has nothing for the strip to open.
+        if on_open is not None:
+            self.strip.set_opens(True, open_hint)
+            self.strip.clicked.connect(on_open)
         layout.addWidget(self.strip)
 
         body = QVBoxLayout()

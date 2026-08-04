@@ -373,7 +373,9 @@ class Launcher(QMainWindow):
             actions.append(("Review", lambda p=project: self.open_review(p)))
         contents = self.folder_contents(project)
         treatment = treatment_label(contents["kind"])
-        if treatment and not running and project.get("available"):
+        name = str(project.get("name", ""))
+        opens = bool(treatment and not running and project.get("available"))
+        if opens:
             actions.append((treatment, lambda p=project: self.develop(p)))
         if not running and project.get("available"):
             actions.append((
@@ -385,11 +387,15 @@ class Launcher(QMainWindow):
             f"{total:,} photograph{'' if total == 1 else 's'}" if total
             else "no readable photographs")
         card = ProjectCard(
-            str(project.get("name", "")),
+            name,
             short_path(str(project.get("photos", ""))),
             subtitle, label, tone, actions,
             progress=job_progress(project["culling"]) if running else None,
-            on_remove=lambda p=project: self.remove_project(p))
+            on_remove=lambda p=project: self.remove_project(p),
+            # The strip is a second way to the folder's own treatment, never
+            # a way to something the card is not otherwise offering.
+            on_open=(lambda p=project: self.develop(p)) if opens else None,
+            open_hint=f"{treatment} {name}".strip() if opens else "")
 
         root = str(project.get("photos", ""))
         for position, name in enumerate(contents.get("samples") or []):
