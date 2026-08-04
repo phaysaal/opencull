@@ -28,6 +28,7 @@ from opencull_gui.actions import (
     export_bytes,
     policy_clusters,
 )
+from opencull_gui.development import DevelopmentWorkspace
 from opencull_gui.faces import FaceError, FaceStore
 from opencull_gui.jobs import JobError, JobManager
 from opencull_gui.macos import APP_NAME, InstanceLock, MacOSPaths
@@ -47,6 +48,22 @@ from opencull_gui.report import ReportError, load_report
 from opencull_gui.reviews import ReviewError, ReviewStore
 from opencull_gui.server import ReviewServer
 from opencull_gui.xmp import xmp_zip
+
+
+def development_workspace(photos, entries=()):
+    """A develop stage over a real project, with no server around it.
+
+    Edit directions arrive from the shortlist, which the develop stage does
+    not own, so they are supplied here rather than produced.
+    """
+    project_path, _ = load_or_create_folder_project(photos, "Trip")
+    return DevelopmentWorkspace(
+        project_path, ensure_project_layout(photos),
+        type("RawSources", (),
+             {"public": lambda _self: {"configured": False}})(),
+        directions=lambda: {
+            "available": bool(entries), "path": "",
+            "directions": {"entries": list(entries)}})
 
 
 def report_data(names=("A.JPG", "B.JPG")):
@@ -2345,22 +2362,45 @@ class GuiJobTests(unittest.TestCase):
             root = Path(temporary)
             photos = root / "photos"; photos.mkdir()
             Image.new("RGB", (320, 200), (70, 110, 150)).save(photos / "A.JPG")
-            server = ReviewServer.__new__(ReviewServer)
-            server.project_layout = {"Previews": root / "Previews"}
-            server.development_payload = lambda: {
-                "source_folder": str(photos),
-                "candidates": [{"photo": "A.JPG", "raw_files": []}],
-            }
-            first = server.development_recipe_preview(
+            workspace = development_workspace(photos, entries=[{"photo": "A.JPG"}])
+            first = workspace.recipe_preview(
                 "A.JPG", "calibrated", "default",
                 "markesteijn-3-pass", 96)
-            second = server.development_recipe_preview(
+            second = workspace.recipe_preview(
                 "A.JPG", "calibrated", "default",
                 "markesteijn-3-pass", 96)
             self.assertEqual(first, second)
             self.assertTrue(first.is_file())
             with Image.open(first) as preview:
                 self.assertLessEqual(max(preview.size), 96)
+            # The source photograph is what the render was made from, and it
+            # must come back untouched.
+            with Image.open(photos / "A.JPG") as original:
+                self.assertEqual(original.size, (320, 200))
+
+    def test_treatments_offer_only_what_can_actually_be_rendered(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            photos = Path(temporary) / "photos"; photos.mkdir()
+            workspace = development_workspace(photos, entries=[{
+                "photo": "A.JPG",
+                "standard_recipe": "warm it slightly",
+                "standard_title": "Standard",
+                "signature_recipe": "",
+            }])
+            offered = {item["id"] for item in workspace.treatments("A.JPG")}
+            # The calibrated baseline needs no recipe, so it is always there.
+            self.assertIn("calibrated", offered)
+            self.assertIn("standard", offered)
+            # A treatment with no recipe behind it would fail at the moment it
+            # was chosen, which is worse than not offering it.
+            self.assertNotIn("signature", offered)
+            self.assertNotIn("creative", offered)
+
+    def test_a_photograph_without_directions_has_no_treatments(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            photos = Path(temporary) / "photos"; photos.mkdir()
+            workspace = development_workspace(photos)
+            self.assertEqual(workspace.treatments("A.JPG"), [])
 
     def test_full_resolution_darktable_job_uses_delivery_pipeline(self):
         manager = JobManager.__new__(JobManager)
@@ -2842,32 +2882,24 @@ class GuiHttpTests(unittest.TestCase):
             root = Path(temporary)
             photos = root / "photos"
             photos.mkdir()
-            report_path = root / "trip-results.json"
-            project_path = report_path.with_suffix(".opencull-project.json")
+            workspace = development_workspace(photos)
 
-            server = ReviewServer.__new__(ReviewServer)
-            server.report = type("Report", (), {"path": report_path})()
-            server.photos = type("Photos", (), {"root": photos})()
-            server.project_path = project_path
-            server.project = load_or_create(project_path, "Trip", photos)
-            server.project_layout = ensure_project_layout(photos)
-            server.raw_sources = type(
-                "RawSources", (), {"public": lambda _self: {"configured": False}})()
-            server.edit_directions_payload = lambda: {"available": False}
-
+            # A render registered by a separate worker process, after the
+            # workspace was constructed.
             output = root / "A.standard.jpg"
             output.write_bytes(b"render")
-            update_project(project_path, artifacts={"renders": [{
+            update_project(workspace.project_path, artifacts={"renders": [{
                 "variant": "standard", "source_photo": "A.JPG",
                 "path": str(output), "sha256": "render-hash",
             }]})
 
-            payload = server.development_payload()
+            payload = workspace.payload()
 
             self.assertEqual(len(payload["variants"]), 1)
             self.assertEqual(payload["variants"][0]["source_photo"], "A.JPG")
-            self.assertEqual(server.project["artifacts"]["renders"][0]["sha256"],
-                             "render-hash")
+            self.assertEqual(
+                workspace.project["artifacts"]["renders"][0]["sha256"],
+                "render-hash")
             self.assertEqual(
                 payload["default_export_directory"],
                 str((photos / "Darkimiya" / "Exports").resolve()))

@@ -11,23 +11,17 @@ import re
 import secrets
 import shutil
 import tempfile
-import threading
 from datetime import UTC, datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-import numpy as np
-import tifffile
 from PIL import Image, ImageOps
-
-from darktable_engine import render_darktable_default
-from development_engine import _srgb_to_linear_rec2020, render_recipe
-from recipe_compiler import compile_recipe
 
 from . import dialogs
 from .actions import ActionController, ActionError, export_bytes
+from .development import DevelopmentWorkspace
 from .faces import FaceError, FaceStore
 from .jobs import JobError, JobManager
 from .photos import PhotoError, PhotoStore, PreviewManager
@@ -36,7 +30,6 @@ from .project import (
     import_legacy_development_artifacts,
     legacy_migration_preview,
     load_or_create_folder_project,
-    load_project,
     migrate_legacy_project,
     project_sha256,
     register_file_artifact,
@@ -115,6 +108,11 @@ class ReviewServer(ThreadingHTTPServer):
             f"{report.path.stem}.raw-source.json", report)
         self.actions = ActionController(
             report, reviews, photos, self.project_path, self.raw_sources)
+        # The develop stage is not about HTTP, so it does not live in here.
+        # The native window uses the same object directly.
+        self.development = DevelopmentWorkspace(
+            self.project_path, self.project_layout, self.raw_sources,
+            directions=self.edit_directions_payload)
         self.project = register_file_artifact(
             self.project_path, "culling_report", report.path,
             stage="cull", singleton=True)
@@ -161,6 +159,7 @@ class ReviewServer(ThreadingHTTPServer):
         self.project_layout = ensure_project_layout(self.photos.root)
         self.project = result["project"]
         self.actions.bind_project(self.project_path)
+        self.development.bind(self.project_path, self.project_layout)
         self.project = register_file_artifact(
             self.project_path, "culling_report", self.report.path,
             stage="cull", singleton=True)
@@ -188,280 +187,28 @@ class ReviewServer(ThreadingHTTPServer):
         return {"available": True, "path": str(path), "profile": value}
 
     def development_payload(self) -> dict:
-        # Guided development runs in a separate worker process and registers
-        # its render directly in the durable project manifest.  Refresh here
-        # so a completed job becomes visible without reopening the review.
-        self.project = load_project(self.project_path)
-        artifacts = self.project.get("artifacts", {})
-        directions: list[dict] = []
-        directions_path = ""
-        try:
-            direction_payload = self.edit_directions_payload()
-            if direction_payload.get("available"):
-                value = direction_payload.get("directions", {})
-                directions = value.get("entries", []) if isinstance(value, dict) else []
-                directions_path = str(direction_payload.get("path", ""))
-        except ShortlistError:
-            directions = []
-        raw = self.raw_sources.public()
-        raw_root = Path(raw["root"]) if raw.get("configured") else None
-        candidates = []
-        for entry in directions:
-            if not isinstance(entry, dict) or not entry.get("photo"):
-                continue
-            photo = str(entry["photo"])
-            raw_files = [
-                str((raw_root / relative).resolve())
-                for relative in raw.get("matches", {}).get(photo, [])
-            ] if raw_root else []
-            candidates.append({**entry, "raw_files": raw_files})
-        return {"format": "opencull-development-workspace-v1",
-                "variants": artifacts.get("renders", []) or [],
-                "renderer_comparisons": artifacts.get("renderer_comparisons", []) or [],
-                "recipes": artifacts.get("recipes", []) or [],
-                "calibration": artifacts.get("calibration"),
-                "candidates": candidates,
-                "edit_directions_path": directions_path,
-                "source_folder": self.project.get("source_folder"),
-                "default_export_directory": str(self.project_layout["Exports"]),
-                "rendering": self.project.get("rendering") or {
-                    "engine": "darktable",
-                    "demosaic": "markesteijn-3-pass",
-                },
-                "project_sha256": project_sha256(self.project_path)}
+        payload = self.development.payload()
+        self.project = self.development.project
+        return payload
 
     def development_recipe_preview(
         self, photo: str, style: str, engine: str, demosaic: str,
         maximum: int,
     ) -> Path:
-        """Render one bounded local proof without registering an export artifact."""
-        builtin_styles = {"calibrated", "standard", "signature", "creative", "personal"}
-        if engine not in {"default", "darktable"}:
-            raise ValueError("unsupported development preview engine")
-        if demosaic not in {
-            "markesteijn-1-pass", "markesteijn-3-pass",
-            "markesteijn-3-pass-vng",
-        }:
-            raise ValueError("unsupported development preview demosaic mode")
-        workspace = self.development_payload()
-        entry = next((item for item in workspace.get("candidates", [])
-                      if item.get("photo") == photo), None)
-        if entry is None:
-            raise ValueError("photograph has no edit direction")
-        reference = (Path(str(workspace["source_folder"])) / photo).resolve()
-        if not reference.is_file():
-            raise ValueError("reference photograph is unavailable")
-        source = reference
-        if engine == "darktable" and entry.get("raw_files"):
-            candidate = Path(str(entry["raw_files"][0])).expanduser().resolve()
-            if candidate.is_file():
-                source = candidate
-        source_kind = "raw" if source.suffix.casefold() not in {".jpg", ".jpeg"} else "jpeg"
-        recipe_value = entry.get(f"{style}_recipe")
-        portable = None
-        if style not in builtin_styles:
-            portable = next((
-                item for item in workspace.get("recipes", [])
-                if isinstance(item, dict)
-                and item.get("format") == "darkimiya-portable-recipe-v1"
-                and item.get("id") == style
-                and str(item.get("photo", "")) in {"", photo}
-            ), None)
-            if portable is None:
-                raise ValueError("unsupported development preview treatment")
-            recipe_value = portable.get("recipe")
-        if style == "calibrated":
-            recipe = {
-                "format": "opencull-development-recipe-v1",
-                "source_photo": photo, "source_kind": source_kind,
-                "style": style, "title": "Calibrated baseline",
-                "intent": "Neutral technical preview.",
-                "working_space": "scene-linear-rec2020-d65",
-                "operations": [], "guardrails": [], "diagnostics": [],
-                "coverage": {"instructions": 0, "executable": 0,
-                             "guardrails": 0, "unsupported": 0},
-            }
-        elif portable is not None:
-            if not isinstance(recipe_value, dict) or not isinstance(
-                recipe_value.get("operations"), list
-            ):
-                raise ValueError("portable recipe has no executable operations")
-            recipe = dict(recipe_value)
-            recipe.update({
-                "format": "opencull-development-recipe-v1",
-                "source_photo": photo,
-                "source_kind": source_kind,
-                "style": style,
-                "title": str(portable.get("name") or recipe.get("title") or style),
-            })
-        else:
-            if not recipe_value:
-                raise ValueError("selected treatment has no executable recipe")
-            recipe = compile_recipe(
-                photo, style, str(entry.get(f"{style}_title", style.title())),
-                str(entry.get(f"{style}_intent", "")), recipe_value,
-                str(entry.get("guardrails", "")), source_kind)
-        source_stat = source.stat()
-        identity = hashlib.sha256(json.dumps({
-            "photo": photo, "style": style, "engine": engine,
-            "demosaic": demosaic, "maximum": maximum,
-            "recipe": recipe, "source": str(source),
-            "mtime": source_stat.st_mtime_ns, "size": source_stat.st_size,
-        }, sort_keys=True).encode()).hexdigest()[:24]
-        destination = self.project_layout["Previews"] / "DevelopRecipes" / (
-            f"{Path(photo).stem}.{style}.{engine}.{identity}.jpg")
-        if destination.is_file():
-            return destination
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(
-            prefix=".develop-preview-", dir=destination.parent,
-        ) as temporary:
-            work = Path(temporary)
-            with Image.open(reference) as opened:
-                small = ImageOps.exif_transpose(opened).convert("RGB")
-                small.thumbnail((maximum, maximum), Image.Resampling.LANCZOS)
-                small_reference = work / "reference.jpg"
-                small.save(small_reference, "JPEG", quality=94)
-            if engine == "darktable":
-                native_identity = hashlib.sha256(
-                    f"{source}|{source_stat.st_mtime_ns}|{source_stat.st_size}|"
-                    f"{maximum}|{demosaic}".encode()).hexdigest()[:20]
-                native_cache = self.project_layout["Previews"] / "DevelopNative" / (
-                    f"{source.stem}.{maximum}.{demosaic}.{native_identity}.jpg")
-                native_cache.parent.mkdir(parents=True, exist_ok=True)
-                locks = getattr(self, "_development_preview_locks", None)
-                if locks is None:
-                    locks = {}
-                    self._development_preview_locks = locks
-                lock = locks.setdefault(native_identity, threading.Lock())
-                with lock:
-                    if not native_cache.is_file():
-                        native = render_darktable_default(
-                            source, work / "darktable", max_dimension=maximum,
-                            demosaic_mode=demosaic)
-                        staged_native = native_cache.with_name(
-                            f".{native_cache.name}.{secrets.token_hex(4)}.tmp")
-                        shutil.copy2(Path(native["output"]["path"]), staged_native)
-                        os.replace(staged_native, native_cache)
-                baseline_source = native_cache
-                calibration_reference = None
-            else:
-                baseline_source = small_reference
-                calibration_reference = small_reference
-            with Image.open(baseline_source) as opened:
-                rgb = np.asarray(
-                    ImageOps.exif_transpose(opened).convert("RGB"),
-                    dtype=np.float32) / 255.0
-            linear = np.clip(_srgb_to_linear_rec2020(rgb), 0.0, 1.0)
-            baseline = work / "baseline.tiff"
-            tifffile.imwrite(baseline, np.uint16(linear * 65535.0 + 0.5))
-            result = render_recipe(
-                baseline, recipe, work / "render", allow_incomplete=True,
-                reference_jpeg=calibration_reference)
-            temporary_output = destination.with_name(
-                f".{destination.name}.{secrets.token_hex(4)}.tmp")
-            shutil.copy2(Path(result["output"]["path"]), temporary_output)
-            os.replace(temporary_output, destination)
-        return destination
+        return self.development.recipe_preview(
+            photo, style, engine, demosaic, maximum)
 
     def import_development_recipe(self) -> dict:
-        """Choose and register a portable, executable local development recipe."""
-        try:
-            chosen = dialogs.choose_files("Import a Darkimiya recipe")[0]
-        except dialogs.DialogError as exc:
-            raise JobError(str(exc)) from exc
-        path = Path(chosen).expanduser().resolve()
-        if not path.is_file() or path.stat().st_size > 2 * 1024 * 1024:
-            raise ValueError("recipe must be an available JSON file smaller than 2 MiB")
-        try:
-            imported = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise ValueError(f"cannot read recipe JSON: {exc}") from exc
-        if not isinstance(imported, dict):
-            raise ValueError("recipe JSON must be an object")
-        recipe = imported.get("recipe", imported)
-        if not isinstance(recipe, dict) or not isinstance(recipe.get("operations"), list):
-            raise ValueError(
-                "recipe JSON must contain an executable operations list")
-        if any(not isinstance(operation, dict) for operation in recipe["operations"]):
-            raise ValueError("every recipe operation must be an object")
-        canonical = json.dumps(recipe, sort_keys=True, separators=(",", ":"))
-        digest = hashlib.sha256(canonical.encode()).hexdigest()
-        name = str(
-            imported.get("name") or imported.get("title")
-            or recipe.get("title") or path.stem
-        ).strip()[:80] or "Imported recipe"
-        recipe_id = f"custom-{digest[:16]}"
-        artifact = {
-            "format": "darkimiya-portable-recipe-v1",
-            "id": recipe_id,
-            "name": name,
-            "origin": "imported",
-            "source_path": str(path),
-            "source_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-            "imported_at": datetime.now(UTC).isoformat(),
-            "photo": str(imported.get("photo", "")),
-            "recipe": recipe,
-        }
-        recipes = list(
-            self.project.get("artifacts", {}).get("recipes", []) or [])
-        recipes = [
-            item for item in recipes
-            if not (isinstance(item, dict) and item.get("id") == recipe_id)
-        ]
-        recipes.append(artifact)
-        self.project = update_project(
-            self.project_path, stage="develop", artifacts={"recipes": recipes})
-        return {"recipe": artifact, "development": self.development_payload()}
+        result = self.development.import_recipe()
+        self.project = self.development.project
+        return result
 
     def render_portable_development_recipe(
         self, photo: str, style: str, engine: str, demosaic: str,
     ) -> dict:
-        """Render an imported recipe at the reference photograph's full dimensions."""
-        workspace = self.development_payload()
-        portable = next((
-            item for item in workspace.get("recipes", [])
-            if isinstance(item, dict)
-            and item.get("format") == "darkimiya-portable-recipe-v1"
-            and item.get("id") == style
-            and str(item.get("photo", "")) in {"", photo}
-        ), None)
-        if portable is None:
-            raise ValueError("portable recipe is not registered for this photograph")
-        reference = (Path(str(workspace["source_folder"])) / photo).resolve()
-        if not reference.is_file():
-            raise ValueError("reference photograph is unavailable")
-        with Image.open(reference) as opened:
-            maximum = max(opened.size)
-        preview = self.development_recipe_preview(
-            photo, style, engine, demosaic, maximum)
-        digest = hashlib.sha256(preview.read_bytes()).hexdigest()
-        destination = self.project_layout["Developments"] / (
-            f"{Path(photo).stem}.{style}.{engine}.{digest[:12]}.jpg")
-        if not destination.is_file():
-            shutil.copy2(preview, destination)
-        artifact = {
-            "variant": style if engine == "default" else f"{style}-darktable-guided",
-            "source_photo": photo,
-            "path": str(destination),
-            "provenance": str(portable.get("source_path", "")),
-            "recipe_revision": 1,
-            "sha256": digest,
-            "created_at": datetime.now(UTC).isoformat(),
-        }
-        renders = list(
-            self.project.get("artifacts", {}).get("renders", []) or [])
-        if not any(
-            isinstance(item, dict)
-            and item.get("source_photo") == photo
-            and item.get("variant") == artifact["variant"]
-            and item.get("sha256") == digest
-            for item in renders
-        ):
-            renders.append(artifact)
-        self.project = update_project(
-            self.project_path, stage="develop", artifacts={"renders": renders})
-        return {"render": artifact, "development": self.development_payload()}
+        result = self.development.render_portable(photo, style, engine, demosaic)
+        self.project = self.development.project
+        return result
 
     def verification_payload(self) -> dict:
         return {"format": "opencull-verification-workspace-v1",
