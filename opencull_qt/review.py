@@ -30,6 +30,7 @@ from opencull_gui.reviews import ReviewError, ReviewStore
 
 from . import theme
 from .previews import PreviewLoader, scaled
+from .widgets import workspace_title
 
 THUMB = 200
 
@@ -233,7 +234,8 @@ class ReviewPage(QWidget):
 
     def _fill_clusters(self) -> None:
         state = self.reviews.public_state()
-        self.title.setText(self.report.path.stem.removesuffix("-results").upper())
+        self.title.setText(workspace_title(
+            self.report, self.reviews.photos_root).upper())
         self.clusters.blockSignals(True)
         self.clusters.clear()
         for cluster_id in self.cluster_ids:

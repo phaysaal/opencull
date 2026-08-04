@@ -32,7 +32,7 @@ from opencull_gui.development import DevelopmentWorkspace, suggested_filename
 
 from . import theme
 from .previews import PreviewLoader, scaled
-from .widgets import short_path
+from .widgets import short_path, workspace_title
 
 # A proof, not a delivery. Big enough to judge a treatment on a laptop
 # screen, small enough that a demosaic finishes while you are still looking
@@ -204,56 +204,131 @@ class Renderer(QObject):
         self._pool.waitForDone(5000)
 
 
+class PhotoLabel(QLabel):
+    """A photograph that redraws itself at whatever size it is given.
+
+    The scaling has to happen here rather than in the parent's resizeEvent:
+    when the parent is resized its children have not been laid out yet, so
+    asking this label how big it is then answers with its previous size and
+    the photograph is drawn to fit a box that no longer exists.
+    """
+
+    def __init__(self):
+        super().__init__("")
+        self.setObjectName("paneImage")
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setMinimumSize(160, 120)
+        self.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
+        self._source: QPixmap | None = None
+
+    def set_source(self, pixmap: QPixmap | None) -> None:
+        self._source = pixmap
+        if pixmap is None:
+            self.setPixmap(QPixmap())
+            return
+        self.setText("")
+        self._redraw()
+
+    def set_message(self, text: str) -> None:
+        self._source = None
+        self.setPixmap(QPixmap())
+        self.setText(text)
+
+    def source(self) -> QPixmap | None:
+        return self._source
+
+    def _redraw(self) -> None:
+        if self._source is None:
+            return
+        self.setPixmap(scaled(
+            self._source, max(self.width(), 1), max(self.height(), 1)))
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        super().resizeEvent(event)
+        self._redraw()
+
+
 class Pane(QFrame):
-    """One side of the comparison, holding a photograph that fits."""
+    """One side of the comparison, holding a photograph that fits.
+
+    The pane takes its height from the photograph rather than from the
+    window. Two landscape frames side by side are limited by width, so a
+    pane given all the height there is becomes a tall box with a small
+    picture floating in the middle of it -- which is what the page did, and
+    on a comparison page the picture is the whole point.
+    """
+
+    MARGINS = (10, 8, 10, 10)
+    SPACING = 8
 
     def __init__(self, caption: str):
         super().__init__()
         self.setObjectName("pane")
         self.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self._pixmap: QPixmap | None = None
+        # Until a photograph arrives, both panes assume the commonest frame
+        # so that the empty one is the size of the one beside it.
+        self._aspect = 2 / 3
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 8, 10, 10)
-        layout.setSpacing(8)
+        layout.setContentsMargins(*self.MARGINS)
+        layout.setSpacing(self.SPACING)
 
         self.caption = QLabel(caption.upper())
         self.caption.setObjectName("paneCaption")
         self.caption.setFont(theme.display(8))
         layout.addWidget(self.caption)
 
-        self.image = QLabel("")
-        self.image.setObjectName("paneImage")
-        self.image.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.image.setMinimumSize(160, 120)
-        self.image.setSizePolicy(
-            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
+        self.image = PhotoLabel()
         layout.addWidget(self.image, 1)
 
     def set_caption(self, text: str) -> None:
         self.caption.setText(text.upper())
 
+    def set_aspect(self, aspect: float) -> None:
+        """Match another pane's proportions, so the pair line up."""
+        self._aspect = max(0.05, min(4.0, aspect))
+        self._resize_to_photograph()
+
+    def aspect(self) -> float:
+        return self._aspect
+
     def set_pixmap(self, pixmap: QPixmap | None) -> None:
         self._pixmap = pixmap
-        self._redraw()
+        if pixmap is not None and pixmap.width():
+            self._aspect = pixmap.height() / pixmap.width()
+        self._resize_to_photograph()
+        self.image.set_source(pixmap)
 
     def set_message(self, text: str) -> None:
         self._pixmap = None
-        self.image.setPixmap(QPixmap())
-        self.image.setText(text)
+        self.image.set_message(text)
 
-    def _redraw(self) -> None:
-        if self._pixmap is None:
-            return
-        self.image.setText("")
-        self.image.setPixmap(scaled(
-            self._pixmap,
-            max(self.image.width(), 1), max(self.image.height(), 1)))
+    def _resize_to_photograph(self) -> None:
+        """Hold the pane to the height its photograph actually needs.
+
+        Computed from the width alone, which the height cannot feed back
+        into, so this settles rather than oscillating. It is a fixed height
+        rather than a maximum: a maximum only caps, and the layout would go
+        on using the small size hint the empty image label reports, which
+        collapsed the pane to a strip.
+        """
+        left, top, right, bottom = self.MARGINS
+        inner = max(1, self.width() - left - right)
+        chrome = top + bottom + self.SPACING + self.caption.sizeHint().height()
+        height = round(inner * self._aspect + chrome)
+        # A tall frame in a short window must still fit in the window.
+        parent = self.parentWidget()
+        if parent is not None and parent.height() > 80:
+            height = min(height, parent.height())
+        if abs(height - self.height()) > 1 or self.minimumHeight() != height:
+            self.setFixedHeight(height)
 
     def resizeEvent(self, event) -> None:  # noqa: N802 - Qt naming
         super().resizeEvent(event)
-        self._redraw()
+        self._resize_to_photograph()
 
 
 class DevelopPage(QWidget):
@@ -312,11 +387,14 @@ class DevelopPage(QWidget):
 
         panes = QHBoxLayout()
         panes.setSpacing(12)
+        panes.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         self.original = Pane("As shot")
         self.treated = Pane("Developed")
         panes.addWidget(self.original, 1)
         panes.addWidget(self.treated, 1)
-        column.addLayout(panes, 1)
+        column.addStretch(1)
+        column.addLayout(panes)
+        column.addStretch(1)
 
         self.status = QLabel("")
         self.status.setObjectName("status")
@@ -345,7 +423,8 @@ class DevelopPage(QWidget):
         layout.addWidget(back)
 
         self.title = QLabel(
-            self.report.path.stem.removesuffix("-results").upper())
+            workspace_title(self.report, self.workspace.project.get(
+                "source_folder")).upper())
         self.title.setObjectName("chromeTitle")
         self.title.setFont(theme.display(11))
         layout.addWidget(self.title)
@@ -444,6 +523,7 @@ class DevelopPage(QWidget):
     def _original_ready(self, name: str, size: str, pixmap) -> None:
         if name == self.current and size == "detail":
             self.original.set_pixmap(pixmap)
+            self.treated.set_aspect(self.original.aspect())
 
     # --- treatments ------------------------------------------------------
 

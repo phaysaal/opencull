@@ -171,6 +171,23 @@ class Row(QFrame):
             layout.addWidget(button)
 
 
+def workspace_title(report, photos_root=None) -> str:
+    """Name a workspace for the shoot, not for the file it was written to.
+
+    A report is named after the folder plus how it was made, so the raw stem
+    puts machinery in the window's title: "A Journey To Matsushima-manual-
+    selection". The folder is what the photographer calls the work.
+    """
+    if photos_root is not None:
+        name = Path(str(photos_root)).name
+        if name:
+            return name
+    stem = Path(str(getattr(report, "path", report))).stem
+    for suffix in ("-results", "-manual-selection"):
+        stem = stem.removesuffix(suffix)
+    return stem
+
+
 def short_path(value: str) -> str:
     """A path with the home directory written the way people write it."""
     home = str(Path.home())
