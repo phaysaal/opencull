@@ -7,11 +7,8 @@ import io
 import json
 import mimetypes
 import os
-import re
 import secrets
-import shutil
 import tempfile
-from datetime import UTC, datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -216,74 +213,14 @@ class ReviewServer(ThreadingHTTPServer):
                 "project_sha256": project_sha256(self.project_path)}
 
     def export_payload(self) -> dict:
-        artifacts = self.project.get("artifacts", {})
-        render_history = [
-            item for item in artifacts.get("renders", []) or []
-            if isinstance(item, dict) and item.get("path")
-        ]
-        # The manifest is intentionally append-only evidence.  The delivery UI,
-        # however, should offer one current choice per photo/treatment instead
-        # of presenting every historical render revision as a duplicate.
-        current: dict[tuple[str, str], dict] = {}
-        for item in render_history:
-            key = (str(item.get("source_photo", "")),
-                   str(item.get("variant") or item.get("style") or "render"))
-            previous = current.get(key)
-            if previous is None or (
-                str(item.get("created_at", "")),
-                int(item.get("recipe_revision", 0) or 0),
-            ) >= (
-                str(previous.get("created_at", "")),
-                int(previous.get("recipe_revision", 0) or 0),
-            ):
-                current[key] = item
-        renders = list(current.values())
-        renders.sort(key=lambda item: (
-            str(item.get("source_photo", "")).casefold(),
-            str(item.get("variant", "")).casefold()))
-        export_directory = self.project_layout["Exports"]
-        for item in renders:
-            source_name = Path(str(item.get("source_photo") or
-                                   item.get("path") or "developed")).stem
-            variant = str(item.get("variant") or "render")
-            safe_variant = "-".join(
-                part for part in re.sub(r"[^A-Za-z0-9]+", "-", variant).split("-")
-                if part).lower() or "render"
-            item["suggested_filename"] = f"{source_name}-{safe_variant}.jpg"
-        return {"format": "opencull-export-workspace-v1",
-                "exports": artifacts.get("exports", []) or [],
-                "renders": renders,
-                "render_history_count": len(render_history),
-                "hidden_render_revisions": len(render_history) - len(renders),
-                "default_export_directory": str(export_directory),
-                "project_sha256": project_sha256(self.project_path)}
+        payload = self.development.export_payload()
+        self.project = self.development.project
+        return payload
 
     def export_render(self, source: str, destination: str) -> dict:
-        allowed = {str(Path(str(item.get("path", ""))).expanduser().resolve())
-                   for item in self.project.get("artifacts", {}).get("renders", [])
-                   if isinstance(item, dict)}
-        source_path = str(Path(source).expanduser().resolve())
-        if source_path not in allowed or not Path(source_path).is_file():
-            raise ValueError("source render is not linked to this project")
-        requested_path = Path(destination).expanduser().resolve()
-        destination_path = requested_path
-        revision = 2
-        while destination_path.exists():
-            destination_path = requested_path.with_name(
-                f"{requested_path.stem}-{revision}{requested_path.suffix}")
-            revision += 1
-        destination_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source_path, destination_path)
-        record = {"source": source_path, "destination": str(destination_path),
-                  "requested_destination": str(requested_path),
-                  "created_at": datetime.now(UTC).isoformat(),
-                  "sha256": hashlib.sha256(destination_path.read_bytes()).hexdigest()}
-        exports = list(self.project.get("artifacts", {}).get("exports", []) or [])
-        exports.append(record)
-        self.project = update_project(self.project_path, stage="export",
-                                      artifacts={"exports": exports})
+        record = self.development.export_render(source, destination)
+        self.project = self.development.project
         return record
-        return self.export_payload()
 
     def load_shortlist(self, path: Path) -> dict:
         shortlist = load_shortlist(path, self.report, self.photos.root)

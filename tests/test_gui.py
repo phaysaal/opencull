@@ -37,7 +37,6 @@ from opencull_gui.measurements import ManifestError, load_measurements
 from opencull_gui.photos import PhotoError, PhotoStore, PreviewManager
 from opencull_gui.project import (
     ensure_project_layout,
-    load_or_create,
     load_or_create_folder_project,
     load_project,
     register_render,
@@ -2486,6 +2485,84 @@ class GuiJobTests(unittest.TestCase):
                 pixels = np.asarray(opened.convert("RGB"), dtype=np.float32)
             self.assertGreater(pixels[..., 0].mean(), pixels[..., 2].mean())
 
+    def test_a_full_render_is_the_photograph_s_own_size_and_is_recorded(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            photos = Path(temporary) / "photos"; photos.mkdir()
+            Image.new("RGB", (400, 260), (90, 110, 130)).save(photos / "A.JPG")
+            workspace = development_workspace(photos)
+
+            result = workspace.render_full(
+                "A.JPG", "calibrated", "default", "markesteijn-3-pass")
+
+            with Image.open(result["render"]["path"]) as rendered:
+                # The proof on screen is bounded; what gets delivered is not.
+                self.assertEqual(max(rendered.size), 400)
+            renders = workspace.project["artifacts"]["renders"]
+            self.assertEqual(len(renders), 1)
+            self.assertEqual(renders[0]["source_photo"], "A.JPG")
+            self.assertTrue(renders[0]["sha256"])
+
+    def test_only_a_registered_render_can_be_exported(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            photos = root / "photos"; photos.mkdir()
+            workspace = development_workspace(photos)
+            stranger = root / "somebody-elses.jpg"
+            stranger.write_bytes(b"not ours")
+            with self.assertRaises(ValueError):
+                workspace.export_render(str(stranger), str(root / "out.jpg"))
+            self.assertFalse((root / "out.jpg").exists())
+
+    def test_exporting_writes_the_render_where_it_was_asked_for(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            photos = root / "photos"; photos.mkdir()
+            Image.new("RGB", (120, 90), (90, 110, 130)).save(photos / "A.JPG")
+            workspace = development_workspace(photos)
+            result = workspace.render_full(
+                "A.JPG", "calibrated", "default", "markesteijn-3-pass")
+
+            record = workspace.export_render(
+                str(result["render"]["path"]), str(root / "delivery" / "A.jpg"))
+
+            written = Path(record["destination"])
+            self.assertTrue(written.is_file())
+            self.assertEqual(written.name, "A.jpg")
+            self.assertEqual(
+                workspace.project["artifacts"]["exports"][0]["sha256"],
+                record["sha256"])
+
+    def test_an_export_never_writes_over_a_file_that_is_already_there(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            photos = root / "photos"; photos.mkdir()
+            Image.new("RGB", (120, 90), (90, 110, 130)).save(photos / "A.JPG")
+            workspace = development_workspace(photos)
+            result = workspace.render_full(
+                "A.JPG", "calibrated", "default", "markesteijn-3-pass")
+            target = root / "A.jpg"
+            target.write_bytes(b"somebody's existing file")
+
+            record = workspace.export_render(
+                str(result["render"]["path"]), str(target))
+
+            self.assertEqual(target.read_bytes(), b"somebody's existing file")
+            self.assertEqual(Path(record["destination"]).name, "A-2.jpg")
+            # The record says both what was asked for and what was made, so
+            # the difference is not silent.
+            self.assertEqual(
+                Path(record["requested_destination"]).name, "A.jpg")
+
+    def test_a_delivery_name_says_the_frame_and_the_treatment(self):
+        from opencull_gui.development import suggested_filename
+
+        self.assertEqual(
+            suggested_filename("DSCF0021.RAF", "personal-darktable-guided"),
+            "DSCF0021-personal-darktable-guided.jpg")
+        self.assertEqual(
+            suggested_filename("A.JPG", "Calibrated Baseline!"),
+            "A-calibrated-baseline.jpg")
+
     def test_shrinking_a_baseline_bounds_it_and_keeps_it_linear(self):
         from opencull_gui.development import shrink_linear
 
@@ -3023,13 +3100,10 @@ class GuiHttpTests(unittest.TestCase):
             root = Path(temporary)
             photos = root / "photos"
             photos.mkdir()
-            server = ReviewServer.__new__(ReviewServer)
-            server.project_path = root / "project.json"
-            server.project_layout = ensure_project_layout(photos)
-            server.project = load_or_create(server.project_path, "Trip", photos)
+            workspace = development_workspace(photos)
             older = root / "older.jpg"; older.write_bytes(b"older")
             current = root / "current.jpg"; current.write_bytes(b"current")
-            server.project = update_project(server.project_path, artifacts={"renders": [
+            update_project(workspace.project_path, artifacts={"renders": [
                 {"variant": "personal-darktable-guided", "source_photo": "A.RAF",
                  "path": str(older), "recipe_revision": 1,
                  "created_at": "2026-01-01T00:00:00+00:00"},
@@ -3038,7 +3112,7 @@ class GuiHttpTests(unittest.TestCase):
                  "created_at": "2026-01-02T00:00:00+00:00"},
             ]})
 
-            payload = server.export_payload()
+            payload = workspace.export_payload()
 
             self.assertEqual(len(payload["renders"]), 1)
             self.assertEqual(payload["renders"][0]["path"], str(current))

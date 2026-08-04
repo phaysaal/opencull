@@ -16,6 +16,7 @@ from pathlib import Path
 from PySide6.QtCore import QObject, QRunnable, QSize, Qt, QThreadPool, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
+    QFileDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -27,10 +28,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from opencull_gui.development import DevelopmentWorkspace
+from opencull_gui.development import DevelopmentWorkspace, suggested_filename
 
 from . import theme
 from .previews import PreviewLoader, scaled
+from .widgets import short_path
 
 # A proof, not a delivery. Big enough to judge a treatment on a laptop
 # screen, small enough that a demosaic finishes while you are still looking
@@ -72,6 +74,84 @@ class _RenderJob(QRunnable):
             return
         self.signals.done.emit(
             self.generation, self.photo, self.treatment, str(path))
+
+
+class _ExportSignals(QObject):
+    done = Signal(str, str, str)          # photo, requested, written
+    failed = Signal(str, str)             # photo, reason
+
+
+class _ExportJob(QRunnable):
+    def __init__(self, workspace: DevelopmentWorkspace, photo: str,
+                 treatment: str, engine: str, demosaic: str,
+                 destination: str, signals: _ExportSignals):
+        super().__init__()
+        self.workspace = workspace
+        self.photo = photo
+        self.treatment = treatment
+        self.engine = engine
+        self.demosaic = demosaic
+        self.destination = destination
+        self.signals = signals
+        self.setAutoDelete(True)
+
+    def run(self) -> None:
+        try:
+            # Full size, and registered in the manifest before it leaves, so
+            # what was delivered has a recorded provenance.
+            result = self.workspace.render_full(
+                self.photo, self.treatment, self.engine, self.demosaic)
+            record = self.workspace.export_render(
+                str(result["render"]["path"]), self.destination)
+        except Exception as exc:
+            self.signals.failed.emit(self.photo, str(exc))
+            return
+        self.signals.done.emit(
+            self.photo, self.destination, str(record["destination"]))
+
+
+class Exporter(QObject):
+    """Deliveries in flight.
+
+    Unlike a proof, an export is never abandoned. It was asked for
+    deliberately, so moving to another frame does not cancel it, and several
+    queue behind each other rather than competing for the machine.
+    """
+
+    done = Signal(str, str, str)
+    failed = Signal(str, str)
+
+    def __init__(self, workspace: DevelopmentWorkspace,
+                 parent: QObject | None = None):
+        super().__init__(parent)
+        self.workspace = workspace
+        self.pending = 0
+        self._signals = _ExportSignals()
+        self._signals.done.connect(self._finished)
+        self._signals.failed.connect(self._failed)
+        self._pool = QThreadPool(self)
+        self._pool.setMaxThreadCount(1)
+
+    def export(self, photo: str, treatment: str, engine: str, demosaic: str,
+               destination: str) -> None:
+        self.pending += 1
+        self._pool.start(_ExportJob(
+            self.workspace, photo, treatment, engine, demosaic, destination,
+            self._signals))
+
+    def _finished(self, photo: str, requested: str, written: str) -> None:
+        self.pending = max(0, self.pending - 1)
+        self.done.emit(photo, requested, written)
+
+    def _failed(self, photo: str, reason: str) -> None:
+        self.pending = max(0, self.pending - 1)
+        self.failed.emit(photo, reason)
+
+    def shutdown(self) -> None:
+        self._pool.clear()
+        # An export already writing is left to finish its copy rather than
+        # abandoned partway to a file somebody is expecting.
+        self._pool.waitForDone(20000)
 
 
 class Renderer(QObject):
@@ -196,6 +276,9 @@ class DevelopPage(QWidget):
         self.renderer = Renderer(workspace, self)
         self.renderer.done.connect(self._rendered)
         self.renderer.failed.connect(self._render_failed)
+        self.exporter = Exporter(workspace, self)
+        self.exporter.done.connect(self._exported)
+        self.exporter.failed.connect(self._export_failed)
         self.loader.ready.connect(self._original_ready)
 
         self._build()
@@ -311,6 +394,16 @@ class DevelopPage(QWidget):
         self.develop_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.develop_button.clicked.connect(self.develop_current)
         layout.addWidget(self.develop_button)
+
+        self.export_button = QPushButton("Export…")
+        self.export_button.setObjectName("ghost")
+        self.export_button.setFont(theme.body(10))
+        self.export_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.export_button.setToolTip(
+            "Render this treatment at the photograph's own size and write a "
+            "copy where you choose.")
+        self.export_button.clicked.connect(self.export_current)
+        layout.addWidget(self.export_button)
         return panel
 
     # --- photographs -----------------------------------------------------
@@ -434,6 +527,10 @@ class DevelopPage(QWidget):
             (str(item["name"]) for item in self.available
              if item["id"] == self.treatment), "Developed")
 
+    def _demosaic(self) -> str:
+        return str((self.workspace.payload().get("rendering") or {}).get(
+            "demosaic") or "markesteijn-3-pass")
+
     def develop_current(self) -> None:
         if not self.current or not self.treatment:
             return
@@ -445,8 +542,7 @@ class DevelopPage(QWidget):
         self._report(f"Developing {self.current}. This takes a moment.")
         self.renderer.render(
             self.current, self.treatment, self.engine_for(self.current),
-            str((self.workspace.payload().get("rendering") or {}).get(
-                "demosaic") or "markesteijn-3-pass"))
+            self._demosaic())
 
     def _rendered(self, photo: str, treatment: str, pixmap) -> None:
         self.rendered[(photo, treatment)] = pixmap
@@ -460,6 +556,58 @@ class DevelopPage(QWidget):
         if photo == self.current:
             self.treated.set_message("Could not develop this frame.")
             self._report(reason, "alarm")
+
+    # --- export ---------------------------------------------------------
+
+    def export_directory(self) -> Path:
+        return Path(str(
+            self.workspace.payload().get("default_export_directory") or
+            Path.home()))
+
+    def export_current(self) -> None:
+        """Deliver this treatment at the photograph's own size."""
+        if not self.current or not self.treatment:
+            return
+        suggested = suggested_filename(self.current, self._variant())
+        directory = self.export_directory()
+        directory.mkdir(parents=True, exist_ok=True)
+        chosen, _filter = QFileDialog.getSaveFileName(
+            self, "Export this frame", str(directory / suggested),
+            "JPEG image (*.jpg *.jpeg)",
+            # Qt's own prompt promises to replace an existing file, and that
+            # is a promise this does not keep: an export never writes over
+            # something already there, it takes the next free name and says
+            # which one it used.
+            options=QFileDialog.Option.DontConfirmOverwrite)
+        if not chosen:
+            return
+        self.export_button.setEnabled(False)
+        self._report(
+            f"Exporting {self.current} at full size. This is a longer job "
+            "than the proof on screen.")
+        self.exporter.export(
+            self.current, self.treatment, self.engine_for(self.current),
+            self._demosaic(), chosen)
+
+    def _variant(self) -> str:
+        engine = self.engine_for(self.current)
+        return (self.treatment if engine == "default"
+                else f"{self.treatment}-darktable-guided")
+
+    def _exported(self, photo: str, requested: str, written: str) -> None:
+        self.export_button.setEnabled(self.exporter.pending == 0)
+        where = Path(written)
+        if written != str(Path(requested).expanduser().resolve()):
+            self._report(
+                f"{photo} was written as {where.name}, because "
+                f"{Path(requested).name} was already there and Darkimiya "
+                "does not write over a file.", "ok")
+            return
+        self._report(f"{photo} was exported to {short_path(str(where))}.", "ok")
+
+    def _export_failed(self, photo: str, reason: str) -> None:
+        self.export_button.setEnabled(self.exporter.pending == 0)
+        self._report(f"{photo} could not be exported: {reason}", "alarm")
 
     def _report(self, message: str, tone: str = "") -> None:
         self.status.setText(message)
@@ -489,6 +637,7 @@ class DevelopPage(QWidget):
 
     def shutdown(self) -> None:
         self.renderer.shutdown()
+        self.exporter.shutdown()
 
 
 

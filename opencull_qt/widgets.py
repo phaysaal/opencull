@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 
 from PySide6.QtCore import QRect, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
@@ -168,6 +169,12 @@ class Row(QFrame):
             button.setFont(theme.body(9))
             button.clicked.connect(lambda _=False, run=handler: run())
             layout.addWidget(button)
+
+
+def short_path(value: str) -> str:
+    """A path with the home directory written the way people write it."""
+    home = str(Path.home())
+    return f"~{value[len(home):]}" if value.startswith(home) else value
 
 
 def band(title: str) -> tuple[QWidget, QVBoxLayout]:

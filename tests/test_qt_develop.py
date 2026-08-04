@@ -176,6 +176,80 @@ class DevelopPageTests(unittest.TestCase):
         self.assertIn("demosaiced by darktable", page.engine_note.text())
         self.assertEqual(page.engine_for("A.JPG"), "darktable")
 
+    def test_exporting_renders_at_full_size_and_writes_the_file(self):
+        from unittest import mock
+
+        page = self.page()
+        target = self.photos_path.parent / "delivery" / "A.jpg"
+        with mock.patch(
+            "opencull_qt.develop.QFileDialog.getSaveFileName",
+            return_value=(str(target), ""),
+        ):
+            page.export_current()
+        self.assertTrue(
+            self.wait_for(lambda: page.exporter.pending == 0),
+            "the export never finished")
+        self.assertTrue(target.is_file())
+        with Image.open(target) as written:
+            # The proof on screen is bounded to PROOF_EDGE; a delivery is not.
+            self.assertEqual(max(written.size), 160)
+        self.assertIn("exported to", page.status.text())
+        # And the photograph it came from is untouched.
+        self.assertTrue((self.photos_path / "A.JPG").is_file())
+
+    def test_choosing_a_name_that_exists_reports_the_name_actually_written(self):
+        from unittest import mock
+
+        page = self.page()
+        target = self.photos_path.parent / "A.jpg"
+        target.write_bytes(b"already here")
+        with mock.patch(
+            "opencull_qt.develop.QFileDialog.getSaveFileName",
+            return_value=(str(target), ""),
+        ):
+            page.export_current()
+        self.assertTrue(self.wait_for(lambda: page.exporter.pending == 0))
+        self.assertEqual(target.read_bytes(), b"already here")
+        self.assertIn("A-2.jpg", page.status.text())
+        self.assertIn("does not write over a file", page.status.text())
+
+    def test_cancelling_the_chooser_exports_nothing(self):
+        from unittest import mock
+
+        page = self.page()
+        with mock.patch(
+            "opencull_qt.develop.QFileDialog.getSaveFileName",
+            return_value=("", ""),
+        ):
+            page.export_current()
+        self.assertEqual(page.exporter.pending, 0)
+        self.assertTrue(page.export_button.isEnabled())
+
+    def test_the_offered_name_says_the_frame_and_the_treatment(self):
+        from unittest import mock
+
+        page = self.page()
+        seen = {}
+
+        def remember(_parent, _title, path, *args, **kwargs):
+            seen["path"] = path
+            return ("", "")
+
+        with mock.patch(
+            "opencull_qt.develop.QFileDialog.getSaveFileName", remember
+        ):
+            page.export_current()
+        self.assertTrue(seen["path"].endswith("A-calibrated.jpg"))
+        # And it lands in the project's own Exports directory by default.
+        self.assertIn("Exports", seen["path"])
+
+    def test_a_failed_export_says_why_and_leaves_the_button_usable(self):
+        page = self.page()
+        page._export_failed("A.JPG", "the destination is not writable")
+        self.assertTrue(page.export_button.isEnabled())
+        self.assertIn("not writable", page.status.text())
+        self.assertEqual(page.status.property("tone"), "alarm")
+
     def test_arrow_keys_walk_the_selection(self):
         page = self.page()
         page.keyPressEvent(QKeyEvent(

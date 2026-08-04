@@ -37,7 +37,7 @@ from .develop import DevelopPage, workspace_for
 from .previews import LibraryPreviewLoader, PreviewLoader
 from .providers import ProvidersDialog
 from .review import ReviewPage
-from .widgets import ProjectCard, Row, band, replace_rows
+from .widgets import ProjectCard, Row, band, replace_rows, short_path
 
 ACTIVE = {"running", "queued"}
 
@@ -88,11 +88,6 @@ RECULL_WARNING = (
     "they sit beside will change.\n\n"
     "Only do this if the previous cull was wrong in a large way. To disagree "
     "with a few frames, open the review and change them there.")
-
-
-def short_path(value: str) -> str:
-    home = str(Path.home())
-    return f"~{value[len(home):]}" if value.startswith(home) else value
 
 
 def place_on_active_screen(window: QWidget, prefer: str = "") -> None:

@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import secrets
 import shutil
 import tempfile
@@ -79,6 +80,14 @@ def raw_baseline_tools_present() -> bool:
     return all(
         shutil.which(name) for name in ("dcraw_emu", "raw-identify")
     ) and bool(shutil.which("magick") or shutil.which("convert"))
+
+
+def suggested_filename(photo: str, variant: str) -> str:
+    """A delivery name that says which frame and which treatment it is."""
+    safe = "-".join(
+        part for part in re.sub(r"[^A-Za-z0-9]+", "-", variant).split("-")
+        if part).lower() or "render"
+    return f"{Path(photo).stem}-{safe}.jpg"
 
 
 def shrink_linear(tiff: Path, maximum: int, destination: Path) -> Path:
@@ -522,6 +531,22 @@ class DevelopmentWorkspace:
         ), None)
         if portable is None:
             raise ValueError("portable recipe is not registered for this photograph")
+        return self.render_full(
+            photo, style, engine, demosaic,
+            provenance=str(portable.get("source_path", "")))
+
+    def render_full(
+        self, photo: str, style: str, engine: str, demosaic: str,
+        provenance: str = "",
+    ) -> dict:
+        """Render a treatment at the photograph's own dimensions, and record it.
+
+        The proof on screen is deliberately bounded, so it is not the thing to
+        hand anybody. This makes the full-size render and registers it in the
+        project manifest, which is what makes it a render rather than another
+        preview -- and what lets it be exported afterwards.
+        """
+        workspace = self.payload()
         reference = (Path(str(workspace["source_folder"])) / photo).resolve()
         if not reference.is_file():
             raise ValueError("reference photograph is unavailable")
@@ -530,13 +555,15 @@ class DevelopmentWorkspace:
         digest = hashlib.sha256(preview.read_bytes()).hexdigest()
         destination = self.project_layout["Developments"] / (
             f"{Path(photo).stem}.{style}.{engine}.{digest[:12]}.jpg")
+        destination.parent.mkdir(parents=True, exist_ok=True)
         if not destination.is_file():
             shutil.copy2(preview, destination)
         artifact = {
             "variant": style if engine == "default" else f"{style}-darktable-guided",
             "source_photo": photo,
             "path": str(destination),
-            "provenance": str(portable.get("source_path", "")),
+            "provenance": provenance or str(
+                workspace.get("edit_directions_path") or ""),
             "recipe_revision": 1,
             "sha256": digest,
             "created_at": datetime.now(UTC).isoformat(),
@@ -554,3 +581,77 @@ class DevelopmentWorkspace:
         self.project = update_project(
             self.project_path, stage="develop", artifacts={"renders": renders})
         return {"render": artifact, "development": self.payload()}
+
+    # --- export ---------------------------------------------------------
+
+    def export_payload(self) -> dict:
+        self.project = load_project(self.project_path)
+        artifacts = self.project.get("artifacts", {})
+        render_history = [
+            item for item in artifacts.get("renders", []) or []
+            if isinstance(item, dict) and item.get("path")
+        ]
+        # The manifest is intentionally append-only evidence.  The delivery UI,
+        # however, should offer one current choice per photo/treatment instead
+        # of presenting every historical render revision as a duplicate.
+        current: dict[tuple[str, str], dict] = {}
+        for item in render_history:
+            key = (str(item.get("source_photo", "")),
+                   str(item.get("variant") or item.get("style") or "render"))
+            previous = current.get(key)
+            if previous is None or (
+                str(item.get("created_at", "")),
+                int(item.get("recipe_revision", 0) or 0),
+            ) >= (
+                str(previous.get("created_at", "")),
+                int(previous.get("recipe_revision", 0) or 0),
+            ):
+                current[key] = item
+        renders = list(current.values())
+        renders.sort(key=lambda item: (
+            str(item.get("source_photo", "")).casefold(),
+            str(item.get("variant", "")).casefold()))
+        for item in renders:
+            item["suggested_filename"] = suggested_filename(
+                str(item.get("source_photo") or item.get("path") or "developed"),
+                str(item.get("variant") or "render"))
+        return {"format": "opencull-export-workspace-v1",
+                "exports": artifacts.get("exports", []) or [],
+                "renders": renders,
+                "render_history_count": len(render_history),
+                "hidden_render_revisions": len(render_history) - len(renders),
+                "default_export_directory": str(self.project_layout["Exports"]),
+                "project_sha256": project_sha256(self.project_path)}
+
+    def export_render(self, source: str, destination: str) -> dict:
+        """Copy one registered render out to where it was asked for.
+
+        Only a render the manifest knows about can leave, so an export is
+        always of something with a recorded provenance. An existing file at
+        the destination is never written over: the copy takes the next free
+        name and the record says both what was asked for and what was made.
+        """
+        allowed = {str(Path(str(item.get("path", ""))).expanduser().resolve())
+                   for item in self.project.get("artifacts", {}).get("renders", [])
+                   if isinstance(item, dict)}
+        source_path = str(Path(source).expanduser().resolve())
+        if source_path not in allowed or not Path(source_path).is_file():
+            raise ValueError("source render is not linked to this project")
+        requested_path = Path(destination).expanduser().resolve()
+        destination_path = requested_path
+        revision = 2
+        while destination_path.exists():
+            destination_path = requested_path.with_name(
+                f"{requested_path.stem}-{revision}{requested_path.suffix}")
+            revision += 1
+        destination_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source_path, destination_path)
+        record = {"source": source_path, "destination": str(destination_path),
+                  "requested_destination": str(requested_path),
+                  "created_at": datetime.now(UTC).isoformat(),
+                  "sha256": hashlib.sha256(destination_path.read_bytes()).hexdigest()}
+        exports = list(self.project.get("artifacts", {}).get("exports", []) or [])
+        exports.append(record)
+        self.project = update_project(self.project_path, stage="export",
+                                      artifacts={"exports": exports})
+        return record
