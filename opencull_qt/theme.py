@@ -216,6 +216,10 @@ QFrame#pane {{
     background: {SURFACE}; border: 1px solid {EDGE_SOFT}; border-radius: 10px;
 }}
 QLabel#paneCaption {{ color: {FAINT}; letter-spacing: 2px; }}
+/* The caption is the only thing that says which of the two is on screen,
+   so it changes colour as well as words. */
+QLabel#paneCaption[state="treated"] {{ color: {SAFELIGHT}; }}
+QLabel#paneHint {{ color: {FAINT}; }}
 /* Transparent, so the space a photograph does not fill reads as the frame
    around it rather than as a second empty box inside it. */
 QLabel#paneImage {{ background: transparent; color: {FAINT}; }}

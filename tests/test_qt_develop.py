@@ -18,7 +18,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 try:
     from PySide6.QtCore import Qt
-    from PySide6.QtGui import QKeyEvent
+    from PySide6.QtGui import QFocusEvent, QKeyEvent
     from PySide6.QtWidgets import QApplication
 except ImportError:  # pragma: no cover - exercised only without PySide6
     QApplication = None
@@ -241,7 +241,7 @@ class DevelopPageTests(unittest.TestCase):
     def test_nothing_is_rendered_until_it_is_asked_for(self):
         page = self.page()
         self.assertEqual(page.rendered, {})
-        self.assertIn("Not developed", page.treated.image.text())
+        self.assertIn("Not developed", page.stage.image.text())
         # Moving through the frames must not start rendering either. A
         # render costs real time, so it happens when a person asks.
         page.step(1)
@@ -255,7 +255,8 @@ class DevelopPageTests(unittest.TestCase):
         self.assertTrue(
             self.wait_for(lambda: ("A.JPG", "calibrated") in page.rendered),
             "the render never arrived")
-        self.assertFalse(page.treated._pixmap.isNull())
+        self.assertEqual(page.stage.showing(), "treated")
+        self.assertFalse(page.stage.image.source().isNull())
         self.assertEqual((self.photos_path / "A.JPG").read_bytes(), before)
 
     def test_the_second_look_at_a_render_does_not_render_again(self):
@@ -384,6 +385,94 @@ class DevelopPageTests(unittest.TestCase):
         self.assertTrue(page.export_button.isEnabled())
         self.assertIn("not writable", page.status.text())
         self.assertEqual(page.status.property("tone"), "alarm")
+
+    def hold(self, page, down: bool, repeat: bool = False):
+        # The autorepeat flag can only be set at construction, through the
+        # longer constructor: there is no setter for it.
+        event = QKeyEvent(
+            QKeyEvent.Type.KeyPress if down else QKeyEvent.Type.KeyRelease,
+            Qt.Key.Key_Space, Qt.KeyboardModifier.NoModifier, " ", repeat)
+        if down:
+            page.keyPressEvent(event)
+        else:
+            page.keyReleaseEvent(event)
+
+    def develop(self, page):
+        page.develop_current()
+        self.assertTrue(
+            self.wait_for(lambda: (page.current, page.treatment) in page.rendered),
+            "the render never arrived")
+
+    def test_holding_space_shows_the_frame_as_it_was_shot(self):
+        page = self.page()
+        self.develop(page)
+        self.assertEqual(page.stage.showing(), "treated")
+        self.hold(page, True)
+        self.assertEqual(page.stage.showing(), "as shot")
+        self.assertEqual(page.stage.caption.text(), "AS SHOT")
+        self.hold(page, False)
+        self.assertEqual(page.stage.showing(), "treated")
+
+    def test_the_caption_always_says_which_one_is_on_screen(self):
+        page = self.page()
+        self.develop(page)
+        self.assertEqual(page.stage.caption.text(), "CALIBRATED BASELINE")
+        self.hold(page, True)
+        self.assertEqual(page.stage.caption.text(), "AS SHOT")
+
+    def test_a_repeating_key_is_not_read_as_a_release(self):
+        # A held key repeats. Treating a repeat as a fresh press or release
+        # would make the comparison flicker while the key is simply down.
+        page = self.page()
+        self.develop(page)
+        self.hold(page, True)
+        self.hold(page, True, repeat=True)
+        self.hold(page, True, repeat=True)
+        self.assertEqual(page.stage.showing(), "as shot")
+        self.hold(page, False, repeat=True)
+        self.assertEqual(page.stage.showing(), "as shot")
+        self.hold(page, False)
+        self.assertEqual(page.stage.showing(), "treated")
+
+    def test_losing_the_keyboard_does_not_leave_it_held_down(self):
+        page = self.page()
+        self.develop(page)
+        self.hold(page, True)
+        page.focusOutEvent(QFocusEvent(QKeyEvent.Type.FocusOut))
+        self.assertEqual(page.stage.showing(), "treated")
+
+    def test_holding_before_developing_changes_nothing(self):
+        page = self.page()
+        self.assertEqual(page.stage.showing(), "as shot")
+        self.hold(page, True)
+        self.assertEqual(page.stage.showing(), "as shot")
+        self.hold(page, False)
+
+    def test_moving_frames_releases_the_comparison(self):
+        page = self.page()
+        self.develop(page)
+        self.hold(page, True)
+        page.step(1)
+        self.assertFalse(page.stage.holding())
+
+    def test_the_page_says_how_to_compare_once_there_is_something_to(self):
+        page = self.page()
+        self.assertEqual(page.stage.hint.text(), "")
+        self.develop(page)
+        self.assertIn("Hold space", page.stage.hint.text())
+
+    def test_number_keys_choose_a_treatment(self):
+        page = self.page()
+        page.keyPressEvent(QKeyEvent(
+            QKeyEvent.Type.KeyPress, Qt.Key.Key_1,
+            Qt.KeyboardModifier.NoModifier))
+        self.assertEqual(page.treatment, "calibrated")
+
+    def test_the_lists_never_take_the_keyboard_from_the_comparison(self):
+        # A focused list would swallow the space bar to toggle its own row.
+        page = self.page()
+        for widget in (page.photos, page.treatments):
+            self.assertEqual(widget.focusPolicy(), Qt.FocusPolicy.NoFocus)
 
     def test_arrow_keys_walk_the_selection(self):
         page = self.page()

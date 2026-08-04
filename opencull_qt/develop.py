@@ -249,86 +249,100 @@ class PhotoLabel(QLabel):
         self._redraw()
 
 
-class Pane(QFrame):
-    """One side of the comparison, holding a photograph that fits.
+class Stage(QFrame):
+    """One photograph, as large as the window allows, in two states.
 
-    The pane takes its height from the photograph rather than from the
-    window. Two landscape frames side by side are limited by width, so a
-    pane given all the height there is becomes a tall box with a small
-    picture floating in the middle of it -- which is what the page did, and
-    on a comparison page the picture is the whole point.
+    A treatment is judged by flicking between it and the frame it came
+    from: same place, same size, same instant. Two pictures side by side
+    are each half the size and the eye still has to travel between them,
+    so the comparison happens here in one place and time instead.
     """
 
-    MARGINS = (10, 8, 10, 10)
-    SPACING = 8
-
-    def __init__(self, caption: str):
+    def __init__(self):
         super().__init__()
         self.setObjectName("pane")
         self.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        self._pixmap: QPixmap | None = None
-        # Until a photograph arrives, both panes assume the commonest frame
-        # so that the empty one is the size of the one beside it.
-        self._aspect = 2 / 3
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self._as_shot: QPixmap | None = None
+        self._treated: QPixmap | None = None
+        self._treatment = ""
+        self._holding = False
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(*self.MARGINS)
-        layout.setSpacing(self.SPACING)
+        layout.setContentsMargins(10, 8, 10, 10)
+        layout.setSpacing(8)
 
-        self.caption = QLabel(caption.upper())
+        bar = QHBoxLayout()
+        bar.setSpacing(12)
+        self.caption = QLabel("AS SHOT")
         self.caption.setObjectName("paneCaption")
         self.caption.setFont(theme.display(8))
-        layout.addWidget(self.caption)
+        bar.addWidget(self.caption)
+        bar.addStretch(1)
+
+        self.hint = QLabel("")
+        self.hint.setObjectName("paneHint")
+        self.hint.setFont(theme.body(9))
+        bar.addWidget(self.hint)
+        layout.addLayout(bar)
 
         self.image = PhotoLabel()
         layout.addWidget(self.image, 1)
 
-    def set_caption(self, text: str) -> None:
-        self.caption.setText(text.upper())
+    # --- what there is to show ------------------------------------------
 
-    def set_aspect(self, aspect: float) -> None:
-        """Match another pane's proportions, so the pair line up."""
-        self._aspect = max(0.05, min(4.0, aspect))
-        self._resize_to_photograph()
+    def set_as_shot(self, pixmap: QPixmap | None) -> None:
+        self._as_shot = pixmap
+        self._paint()
 
-    def aspect(self) -> float:
-        return self._aspect
+    def set_treated(self, pixmap: QPixmap | None, treatment: str = "") -> None:
+        self._treated = pixmap
+        if treatment:
+            self._treatment = treatment
+        self._paint()
 
-    def set_pixmap(self, pixmap: QPixmap | None) -> None:
-        self._pixmap = pixmap
-        if pixmap is not None and pixmap.width():
-            self._aspect = pixmap.height() / pixmap.width()
-        self._resize_to_photograph()
-        self.image.set_source(pixmap)
+    def set_treatment(self, treatment: str) -> None:
+        self._treatment = treatment
+        self._paint()
 
     def set_message(self, text: str) -> None:
-        self._pixmap = None
+        self._as_shot = None
+        self._treated = None
         self.image.set_message(text)
 
-    def _resize_to_photograph(self) -> None:
-        """Hold the pane to the height its photograph actually needs.
+    def holding(self) -> bool:
+        return self._holding
 
-        Computed from the width alone, which the height cannot feed back
-        into, so this settles rather than oscillating. It is a fixed height
-        rather than a maximum: a maximum only caps, and the layout would go
-        on using the small size hint the empty image label reports, which
-        collapsed the pane to a strip.
-        """
-        left, top, right, bottom = self.MARGINS
-        inner = max(1, self.width() - left - right)
-        chrome = top + bottom + self.SPACING + self.caption.sizeHint().height()
-        height = round(inner * self._aspect + chrome)
-        # A tall frame in a short window must still fit in the window.
-        parent = self.parentWidget()
-        if parent is not None and parent.height() > 80:
-            height = min(height, parent.height())
-        if abs(height - self.height()) > 1 or self.minimumHeight() != height:
-            self.setFixedHeight(height)
+    def hold(self, holding: bool) -> None:
+        """Show the frame as it was shot, for as long as the key is down."""
+        if holding == self._holding:
+            return
+        self._holding = holding
+        self._paint()
 
-    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt naming
-        super().resizeEvent(event)
-        self._resize_to_photograph()
+    def showing(self) -> str:
+        """Which of the two is on screen: what the caption has to agree with."""
+        if self._treated is not None and not self._holding:
+            return "treated"
+        return "as shot"
+
+    def _paint(self) -> None:
+        treated = self._treated is not None and not self._holding
+        pixmap = self._treated if treated else self._as_shot
+        if pixmap is None:
+            self.image.set_message(
+                "Developing…" if self._holding else "Not developed yet.")
+        else:
+            self.image.set_source(pixmap)
+        self.caption.setText(
+            (self._treatment or "Developed").upper() if treated else "AS SHOT")
+        self.caption.setProperty("state", "treated" if treated else "shot")
+        self.caption.style().unpolish(self.caption)
+        self.caption.style().polish(self.caption)
+        self.hint.setText(
+            "" if self._treated is None else
+            "Release to return" if self._holding else
+            "Hold space to see it as shot")
 
 
 class DevelopPage(QWidget):
@@ -375,6 +389,7 @@ class DevelopPage(QWidget):
 
         self.photos = QListWidget()
         self.photos.setObjectName("clusterList")
+        self.photos.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.photos.setFixedWidth(238)
         self.photos.currentRowChanged.connect(self._chose_row)
         split.addWidget(self.photos)
@@ -385,16 +400,8 @@ class DevelopPage(QWidget):
         column.setContentsMargins(18, 16, 18, 16)
         column.setSpacing(12)
 
-        panes = QHBoxLayout()
-        panes.setSpacing(12)
-        panes.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-        self.original = Pane("As shot")
-        self.treated = Pane("Developed")
-        panes.addWidget(self.original, 1)
-        panes.addWidget(self.treated, 1)
-        column.addStretch(1)
-        column.addLayout(panes)
-        column.addStretch(1)
+        self.stage = Stage()
+        column.addWidget(self.stage, 1)
 
         self.status = QLabel("")
         self.status.setObjectName("status")
@@ -451,6 +458,9 @@ class DevelopPage(QWidget):
 
         self.treatments = QListWidget()
         self.treatments.setObjectName("treatmentList")
+        # Neither list takes focus: the space bar belongs to the comparison,
+        # and a focused list would eat it to toggle its own selection.
+        self.treatments.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.treatments.currentRowChanged.connect(self._chose_treatment)
         layout.addWidget(self.treatments)
 
@@ -502,15 +512,17 @@ class DevelopPage(QWidget):
     def _chose_row(self, row: int) -> None:
         if 0 <= row < len(self.photo_names):
             self.show_photo(self.photo_names[row])
+        self.setFocus()
 
     def show_photo(self, name: str) -> None:
         self.current = name
         # Whatever is still rendering belongs to the frame we just left.
         self.renderer.abandon()
-        self.original.set_message("…")
+        self.stage.hold(False)
+        self.stage.set_message("…")
         pixmap = self.loader.request(name, "detail")
         if pixmap is not None:
-            self.original.set_pixmap(pixmap)
+            self.stage.set_as_shot(pixmap)
 
         row = self.photo_names.index(name)
         if self.photos.currentRow() != row:
@@ -522,8 +534,7 @@ class DevelopPage(QWidget):
 
     def _original_ready(self, name: str, size: str, pixmap) -> None:
         if name == self.current and size == "detail":
-            self.original.set_pixmap(pixmap)
-            self.treated.set_aspect(self.original.aspect())
+            self.stage.set_as_shot(pixmap)
 
     # --- treatments ------------------------------------------------------
 
@@ -592,15 +603,12 @@ class DevelopPage(QWidget):
 
     def _show_treated(self) -> None:
         if not self.current or not self.treatment:
-            self.treated.set_message("")
+            self.stage.set_treated(None)
             return
-        self.treated.set_caption(self._treatment_name())
         cached = self.rendered.get((self.current, self.treatment))
+        self.stage.set_treated(cached, self._treatment_name())
         if cached is not None:
-            self.treated.set_pixmap(cached)
             self._report("")
-            return
-        self.treated.set_message("Not developed yet.")
 
     def _treatment_name(self) -> str:
         return next(
@@ -618,7 +626,6 @@ class DevelopPage(QWidget):
             self._show_treated()
             return
         self.develop_button.setEnabled(False)
-        self.treated.set_message("Developing…")
         self._report(f"Developing {self.current}. This takes a moment.")
         self.renderer.render(
             self.current, self.treatment, self.engine_for(self.current),
@@ -628,13 +635,14 @@ class DevelopPage(QWidget):
         self.rendered[(photo, treatment)] = pixmap
         self.develop_button.setEnabled(True)
         if photo == self.current and treatment == self.treatment:
-            self.treated.set_pixmap(pixmap)
-            self._report("Developed. The photograph itself is unchanged.", "ok")
+            self.stage.set_treated(pixmap, self._treatment_name())
+            self._report(
+                "Developed. Hold space to see it as shot; the photograph "
+                "itself is unchanged.", "ok")
 
     def _render_failed(self, photo: str, reason: str) -> None:
         self.develop_button.setEnabled(True)
         if photo == self.current:
-            self.treated.set_message("Could not develop this frame.")
             self._report(reason, "alarm")
 
     # --- export ---------------------------------------------------------
@@ -702,9 +710,21 @@ class DevelopPage(QWidget):
         if 0 <= row < len(self.photo_names):
             self.show_photo(self.photo_names[row])
 
+    def choose_treatment(self, index: int) -> None:
+        if 0 <= index < len(self.available):
+            self.treatments.setCurrentRow(index)
+            self._chose_treatment(index)
+
     def keyPressEvent(self, event) -> None:  # noqa: N802 - Qt naming
         key = event.key()
-        if key in (Qt.Key.Key_Right, Qt.Key.Key_Down):
+        if key == Qt.Key.Key_Space:
+            # A held key repeats; the first press is the only one that means
+            # anything, and the repeats must not be read as releases.
+            if not event.isAutoRepeat():
+                self.stage.hold(True)
+        elif Qt.Key.Key_1 <= key <= Qt.Key.Key_9:
+            self.choose_treatment(key - Qt.Key.Key_1)
+        elif key in (Qt.Key.Key_Right, Qt.Key.Key_Down):
             self.step(1)
         elif key in (Qt.Key.Key_Left, Qt.Key.Key_Up):
             self.step(-1)
@@ -714,6 +734,18 @@ class DevelopPage(QWidget):
             self.closed.emit()
         else:
             super().keyPressEvent(event)
+
+    def keyReleaseEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
+            self.stage.hold(False)
+        else:
+            super().keyReleaseEvent(event)
+
+    def focusOutEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        # A key released while another window has the keyboard never reaches
+        # here, and the comparison would stay held down for good.
+        self.stage.hold(False)
+        super().focusOutEvent(event)
 
     def shutdown(self) -> None:
         self.renderer.shutdown()
