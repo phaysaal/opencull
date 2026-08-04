@@ -19,6 +19,7 @@ from PIL import Image, ImageOps
 from . import dialogs
 from .actions import ActionController, ActionError, export_bytes
 from .development import DevelopmentWorkspace
+from .directions import DirectionsIndex
 from .faces import FaceError, FaceStore
 from .jobs import JobError, JobManager
 from .photos import PhotoError, PhotoStore, PreviewManager
@@ -256,141 +257,12 @@ class ReviewServer(ThreadingHTTPServer):
     def edit_directions_payload(self) -> dict:
         if self.shortlist is None or self.shortlist_reviews is None:
             return {"available": False, "reason": "shortlist is not loaded"}
-        review_state = self.shortlist_reviews.public_state()
-        revision = review_state["revision"]
-        base_path = self.project_layout["Recipes"] / (
-            f"{self.shortlist.path.stem}.edit-directions-r{revision}.json")
-        shortlist_sha = hashlib.sha256(self.shortlist.path.read_bytes()).hexdigest()
-        next_path = base_path
-        version = 2
-        while next_path.exists():
-            next_path = base_path.with_name(
-                f"{base_path.stem}-v{version}{base_path.suffix}")
-            version += 1
-
-        prefix = f"{self.shortlist.path.stem}.edit-directions-r"
-        search_roots = [self.project_layout["Recipes"]]
-        if self.shortlist.path.parent != self.project_layout["Recipes"]:
-            search_roots.append(self.shortlist.path.parent)
-        paths = list(dict.fromkeys(
-            path
-            for root in search_roots
-            for path in root.glob(f"{prefix}*.json")
-            if not path.name.endswith(".checkpoint.json")
-        ))
-        paths.sort(key=lambda path: path.stat().st_mtime_ns, reverse=True)
-        valid: list[tuple[Path, dict]] = []
-        for path in paths:
-            try:
-                value = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, UnicodeError, json.JSONDecodeError):
-                continue
-            if (
-                isinstance(value, dict)
-                and value.get("format") == "opencull-edit-directions-v1"
-                and value.get("shortlist_sha256") == shortlist_sha
-            ):
-                valid.append((path, value))
-
-        exact = [
-            (path, value) for path, value in valid
-            if value.get("review_revision") == revision
-        ]
-        selected = {
-            photo for photo, entry in review_state.get("entries", {}).items()
-            if isinstance(entry, dict) and entry.get("interesting") is True
-        }
-        active_style_sha = ""
-        active_style = self.project.get("active_style_profile")
-        if active_style:
-            try:
-                active_style_sha = hashlib.sha256(
-                    Path(str(active_style)).expanduser().resolve().read_bytes()
-                ).hexdigest()
-            except OSError:
-                active_style_sha = ""
-        ordered = exact + [item for item in valid if item not in exact]
-        if not ordered:
-            return {
-                "available": False,
-                "default_path": str(next_path),
-                "processed_photos": [],
-                "processed_count": 0,
-                "regeneration_required": False,
-            }
-
-        path, value = ordered[0]
-        # A targeted regeneration report contains one photograph. Overlay the
-        # newest exact-revision entry for each photo onto older complete reports
-        # so regenerating one rejection never hides the rest of the batch.
-        entries_by_photo: dict[str, dict] = {}
-        personal_style_photos: set[str] = set()
-        personal_fields = (
-            "personal_title", "personal_intent", "personal_instructions",
-            "personal_recipe",
-        )
-        for _, report in ordered:
-            report_style_sha = str(report.get("style_profile_sha256", ""))
-            for entry in report.get("entries", []):
-                photo = entry.get("photo") if isinstance(entry, dict) else None
-                if (
-                    isinstance(photo, str)
-                    and photo not in entries_by_photo
-                    and (not selected or photo in selected)
-                ):
-                    entries_by_photo[photo] = entry
-                    has_personal = all(
-                        isinstance(entry.get(field), str)
-                        and bool(entry[field].strip())
-                        for field in personal_fields
-                    )
-                    # Reports predating style provenance remain usable when
-                    # they visibly contain a complete personal treatment.
-                    style_matches = (
-                        not active_style_sha
-                        or report_style_sha == active_style_sha
-                        or not report_style_sha
-                    )
-                    if has_personal and style_matches:
-                        personal_style_photos.add(photo)
-        available_entries = [
-            entries_by_photo[photo] for photo in sorted(entries_by_photo)
-        ]
-        available_photos = {entry.get("photo") for entry in available_entries}
-        complete_photos = available_photos
-        if active_style:
-            complete_photos = available_photos & personal_style_photos
-        processed_photos = sorted(
-            photo for photo in (selected & complete_photos)
-            if isinstance(photo, str)
-        )
-        directions = {
-            **value,
-            "review_revision": revision,
-            "entries": available_entries,
-            "assembled_from": [str(candidate) for candidate, _ in ordered],
-        }
-        encoded = json.dumps(
-            directions, sort_keys=True, separators=(",", ":"),
-            ensure_ascii=False).encode("utf-8")
-        effective_path = self.project_layout["Recipes"] / (
-            f"{self.shortlist.path.stem}.effective-edit-directions-"
-            f"{hashlib.sha256(encoded).hexdigest()[:16]}.json")
-        if not effective_path.is_file():
-            _atomic_json_file(effective_path, directions)
-        missing = sorted(selected - complete_photos)
-        return {
-            "available": True,
-            "path": str(effective_path),
-            "directions": directions,
-            "default_path": str(next_path),
-            "partial": not exact or bool(missing),
-            "missing_photos": missing,
-            "processed_photos": processed_photos,
-            "processed_count": len(processed_photos),
-            "regeneration_required": bool(processed_photos),
-            "selection_revision": revision,
-        }
+        return DirectionsIndex(
+            self.shortlist, self.shortlist_reviews,
+            self.project_layout["Recipes"],
+            style_profile=lambda: str(
+                self.project.get("active_style_profile") or ""),
+        ).payload()
 
     def server_close(self) -> None:
         previews = getattr(self, "previews", None)

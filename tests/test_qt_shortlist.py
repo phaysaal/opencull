@@ -223,5 +223,127 @@ class ShortlistPageTests(unittest.TestCase):
                       page.selected.text())
 
 
+@unittest.skipUnless(QApplication is not None, "PySide6 is not installed")
+class SuggestTests(unittest.TestCase):
+    """Asking for editing directions, and asking first what it will cost."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.application = QApplication.instance() or QApplication([])
+
+    def setUp(self):
+        self._temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self._temporary.name)
+        self.report_path, self.photos_path, self.shortlist_path = build(
+            self.root)
+        self.report = load_report(self.report_path)
+        self.photos = PhotoStore(self.photos_path, self.root / "cache")
+        self.shortlist = load_shortlist(
+            self.shortlist_path, self.report, self.photos.root)
+        self.reviews = ShortlistReviewStore(
+            default_shortlist_review_path(self.shortlist_path), self.shortlist)
+        self.recipes = self.root / "Recipes"
+        self.recipes.mkdir(exist_ok=True)
+        self.addCleanup(self._temporary.cleanup)
+
+    def index(self):
+        from opencull_gui.directions import DirectionsIndex
+
+        return DirectionsIndex(self.shortlist, self.reviews, self.recipes)
+
+    def page(self, directions=None):
+        from opencull_qt.previews import PreviewLoader
+        from opencull_qt.shortlist import ShortlistPage
+
+        loader = PreviewLoader(self.photos)
+        page = ShortlistPage(
+            self.shortlist, self.reviews, loader,
+            directions=self.index() if directions is None else directions)
+        page.resize(1000, 700)
+        page.show()
+        self.addCleanup(loader.shutdown)
+        self.addCleanup(page.deleteLater)
+        return page
+
+    def answered(self, photos):
+        import hashlib
+
+        revision = self.reviews.public_state()["revision"]
+        (self.recipes /
+         f"{self.shortlist_path.stem}.edit-directions-r{revision}.json"
+         ).write_text(json.dumps({
+             "format": "opencull-edit-directions-v1",
+             "shortlist_sha256": hashlib.sha256(
+                 self.shortlist_path.read_bytes()).hexdigest(),
+             "review_revision": revision,
+             "entries": [{"photo": photo, "standard_recipe": "{}"}
+                         for photo in photos],
+         }), encoding="utf-8")
+
+    def test_nothing_marked_means_nothing_to_ask_for(self):
+        page = self.page()
+        self.assertFalse(page.suggest_button.isEnabled())
+
+    def test_asking_names_the_marked_frames_and_where_to_write(self):
+        page = self.page()
+        page.set_interesting(True)
+        asked = []
+        page.suggested.connect(lambda out, photos: asked.append((out, photos)))
+        page.suggest()
+        self.assertEqual(len(asked), 1)
+        output, photos = asked[0]
+        self.assertEqual(photos, ["A.JPG"])
+        # The name carries the review revision it answers, which is what the
+        # reader looks for.
+        self.assertRegex(Path(output).name, r"edit-directions-r\d+\.json$")
+
+    def test_frames_already_answered_are_reported_not_silently_redone(self):
+        page = self.page()
+        page.set_interesting(True)
+        self.answered(["A.JPG"])
+        page._fill_entries()
+        self.assertIn("already have editing directions", page.selected.text())
+
+    def test_asking_again_for_answered_frames_asks_first(self):
+        from unittest import mock
+
+        page = self.page()
+        page.set_interesting(True)
+        self.answered(["A.JPG"])
+        asked = []
+        page.suggested.connect(lambda out, photos: asked.append(photos))
+        with mock.patch.object(page, "_ask_scope", return_value="cancel"):
+            page.suggest()
+        self.assertEqual(asked, [])
+
+    def test_choosing_only_the_missing_asks_for_only_those(self):
+        from unittest import mock
+
+        page = self.page()
+        for photo in NAMES:
+            page.show_entry(photo)
+            page.set_interesting(True)
+        self.answered(["A.JPG"])
+        asked = []
+        page.suggested.connect(lambda out, photos: asked.append(photos))
+        with mock.patch.object(page, "_ask_scope", return_value="missing"):
+            page.suggest()
+        self.assertEqual(asked, [["B.JPG", "C.JPG"]])
+
+    def test_choosing_to_redo_everything_asks_for_everything(self):
+        from unittest import mock
+
+        page = self.page()
+        for photo in NAMES:
+            page.show_entry(photo)
+            page.set_interesting(True)
+        self.answered(["A.JPG"])
+        asked = []
+        page.suggested.connect(lambda out, photos: asked.append(photos))
+        with mock.patch.object(page, "_ask_scope", return_value="all"):
+            page.suggest()
+        self.assertEqual(asked, [NAMES])
+
+
 if __name__ == "__main__":
     unittest.main()

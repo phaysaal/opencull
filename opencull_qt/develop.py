@@ -642,6 +642,46 @@ class DevelopPage(QWidget):
 
 
 
+def shortlist_path_for(report, layout: dict) -> Path:
+    """Where this report's assessment lives, by convention."""
+    return layout["Reports"] / f"{report.path.stem}.professional-shortlist.json"
+
+
+def directions_for(report, photos_root: Path, layout: dict,
+                   project_path: Path):
+    """The edit directions for this folder, if it has been through assessment.
+
+    A folder that has only been culled has no shortlist, so it has no
+    directions and no treatments beyond the baseline. That is the truth
+    rather than an error, so this answers None and the workspace carries on.
+    """
+    from opencull_gui.directions import DirectionsIndex
+    from opencull_gui.project import load_project
+    from opencull_gui.shortlist import load_shortlist
+    from opencull_gui.shortlist_reviews import (
+        ShortlistReviewStore,
+        default_shortlist_review_path,
+    )
+
+    path = shortlist_path_for(report, layout)
+    if not path.is_file():
+        return None
+    try:
+        shortlist = load_shortlist(path, report, photos_root)
+        reviews = ShortlistReviewStore(
+            default_shortlist_review_path(path), shortlist)
+    except Exception:
+        # A shortlist belonging to a different cull is not this folder's
+        # assessment. Treating it as absent is right; refusing to open the
+        # develop page over it is not.
+        return None
+    index = DirectionsIndex(
+        shortlist, reviews, layout["Recipes"],
+        style_profile=lambda: str(
+            load_project(project_path).get("active_style_profile") or ""))
+    return index.payload
+
+
 def workspace_for(report, photos_root: Path,
                   decoders: set[str] | None = None) -> DevelopmentWorkspace:
     """Build a develop stage for one folder, the way the server builds one."""
@@ -658,4 +698,5 @@ def workspace_for(report, photos_root: Path,
     raw_sources = RawSourceStore(
         layout["Reports"] / f"{report.path.stem}.raw-source.json", report)
     return DevelopmentWorkspace(
-        project_path, layout, raw_sources, decoders=decoders)
+        project_path, layout, raw_sources, decoders=decoders,
+        directions=directions_for(report, photos_root, layout, project_path))

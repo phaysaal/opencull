@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QListWidget,
     QListWidgetItem,
+    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
@@ -81,13 +82,15 @@ class ShortlistPage(QWidget):
     """Assessed frames on the left, one frame's evidence on the right."""
 
     closed = Signal()
+    suggested = Signal(str, list)   # output path, photographs to ask about
 
     def __init__(self, shortlist, reviews, loader: PreviewLoader,
-                 parent: QWidget | None = None):
+                 directions=None, parent: QWidget | None = None):
         super().__init__(parent)
         self.shortlist = shortlist
         self.reviews = reviews
         self.loader = loader
+        self.directions = directions
         self.entries = list(shortlist.entries)
         self.current = str(self.entries[0]["photo"]) if self.entries else ""
 
@@ -235,9 +238,6 @@ class ShortlistPage(QWidget):
 
         actions = QHBoxLayout()
         actions.setSpacing(9)
-        # What happens next is stated, not offered. Asking for suggestions is
-        # the next stage and is not built yet, and a button that does nothing
-        # is worse than none: it reads as a step already taken.
         self.selected = QLabel("")
         self.selected.setObjectName("hint")
         self.selected.setWordWrap(True)
@@ -249,6 +249,16 @@ class ShortlistPage(QWidget):
         save_note.setFont(theme.body(9))
         save_note.clicked.connect(lambda: self.save())
         actions.addWidget(save_note)
+
+        self.suggest_button = QPushButton("Suggest edits →")
+        self.suggest_button.setObjectName("primary")
+        self.suggest_button.setFont(theme.body(10))
+        self.suggest_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.suggest_button.setToolTip(
+            "Ask the models how to develop each marked frame. One call per "
+            "frame, so this costs.")
+        self.suggest_button.clicked.connect(self.suggest)
+        actions.addWidget(self.suggest_button)
         layout.addLayout(actions)
         return panel
 
@@ -280,12 +290,25 @@ class ShortlistPage(QWidget):
         chosen = int(summary.get("interesting", 0))
         self.progress.setText(
             f"{chosen} of {len(self.entries)} worth developing")
-        self.selected.setText(
-            "Nothing is marked yet. The suggestion pass reads exactly the "
-            "frames marked here, so it would have nothing to read."
-            if not chosen else
-            f"{chosen} frame{'' if chosen == 1 else 's'} marked. The "
-            "suggestion pass reads exactly these.")
+        done = len(self._already_suggested())
+        if not chosen:
+            self.selected.setText(
+                "Nothing is marked yet. The suggestion pass reads exactly the "
+                "frames marked here, so it would have nothing to read.")
+        elif done >= chosen:
+            self.selected.setText(
+                f"{chosen} marked, and all of them already have editing "
+                "directions.")
+        else:
+            waiting = chosen - done
+            self.selected.setText(
+                f"{chosen} frame{'' if chosen == 1 else 's'} marked, "
+                f"{waiting} still without editing directions."
+                if done else
+                f"{chosen} frame{'' if chosen == 1 else 's'} marked. The "
+                "suggestion pass reads exactly these.")
+        self.suggest_button.setEnabled(
+            bool(chosen) and self.directions is not None)
 
     def _chose_row(self, row: int) -> None:
         if 0 <= row < len(self.entries):
@@ -392,6 +415,83 @@ class ShortlistPage(QWidget):
         self.interesting.setChecked(chosen)
         self._fill_entries()
         self._report("Saved." if chosen else "Not marked.", "ok")
+
+    # --- asking for suggestions -----------------------------------------
+
+    def _already_suggested(self) -> list[str]:
+        """Marked frames that already have directions worth keeping."""
+        if self.directions is None:
+            return []
+        try:
+            return list(self.directions.payload().get(
+                "processed_photos") or [])
+        except Exception:
+            return []
+
+    def suggest(self) -> None:
+        """Ask for editing directions, having first asked what to spend.
+
+        Every frame is a separate call to a model, so redoing frames that
+        already have directions costs again for an answer already given.
+        The choice is put to the photographer rather than assumed.
+        """
+        if self.directions is None:
+            return
+        payload = self.directions.payload()
+        marked = {
+            photo for photo, entry in self._state().get("entries", {}).items()
+            if isinstance(entry, dict) and entry.get("interesting") is True
+        }
+        done = set(payload.get("processed_photos") or [])
+        waiting = sorted(marked - done)
+        if not marked:
+            return
+        if done and waiting:
+            choice = self._ask_scope(len(waiting), len(done))
+            if choice == "cancel":
+                return
+            photos = waiting if choice == "missing" else sorted(marked)
+        elif done:
+            if self._ask_scope(0, len(done)) == "cancel":
+                return
+            photos = sorted(marked)
+        else:
+            photos = sorted(marked)
+        self._report(
+            f"Asking for editing directions for {len(photos)} "
+            f"frame{'' if len(photos) == 1 else 's'}.")
+        self.suggested.emit(str(payload.get("default_path", "")), photos)
+
+    def _ask_scope(self, waiting: int, done: int) -> str:
+        box = QMessageBox(self)
+        box.setWindowTitle("Ask for editing directions?")
+        box.setIcon(QMessageBox.Icon.Question)
+        only = None
+        if waiting:
+            box.setText(
+                f"{done} of these frames already have editing directions.")
+            box.setInformativeText(
+                f"Asking again for all of them costs another call per frame "
+                f"for answers you already have.\n\n"
+                f"{waiting} frame{'' if waiting == 1 else 's'} "
+                f"{'has' if waiting == 1 else 'have'} no directions yet.")
+            only = box.addButton(
+                f"Only the {waiting} without", QMessageBox.ButtonRole.AcceptRole)
+            box.addButton(
+                "Redo all of them", QMessageBox.ButtonRole.DestructiveRole)
+        else:
+            box.setText("Every marked frame already has editing directions.")
+            box.setInformativeText(
+                "Asking again replaces answers you already have, and costs "
+                "another call for each frame.")
+            box.addButton("Ask again", QMessageBox.ButtonRole.DestructiveRole)
+        cancel = box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(only or cancel)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is cancel:
+            return "cancel"
+        return "missing" if only is not None and clicked is only else "all"
 
     def step(self, delta: int) -> None:
         if not self.entries:

@@ -48,6 +48,141 @@ def build_shoot(root: Path) -> tuple[Path, Path]:
     return report, photos
 
 
+def assess_and_suggest(root: Path, report_path: Path, photos: Path,
+                       marked=("A.JPG",), styles=("standard", "signature")):
+    """Put a shoot through assessment and suggestions, on disk.
+
+    The develop page finds these by convention rather than by being told,
+    so the test writes them where the convention says they live.
+    """
+    import hashlib
+
+    from opencull_gui.project import ensure_project_layout
+    from opencull_gui.shortlist import ASSESSMENT_FIELDS
+
+    layout = ensure_project_layout(photos)
+    shortlist_path = (
+        layout["Reports"] / f"{report_path.stem}.professional-shortlist.json")
+    shortlist_path.write_text(json.dumps({
+        "format": "opencull-professional-shortlist-v1",
+        "source_report_sha256": hashlib.sha256(
+            report_path.read_bytes()).hexdigest(),
+        "candidate_policy": "effective", "candidate_signature": "sig",
+        "entries": [
+            {"rank": index + 1, "photo": name, "cluster_id": "group-0001",
+             "tier": "strong", "score": 80, "confidence": 0.8,
+             "rationale": "worth a look", "raw_files": [],
+             "assessment": dict.fromkeys(ASSESSMENT_FIELDS, "seen"),
+             "warnings": []}
+            for index, name in enumerate(NAMES)
+        ],
+    }), encoding="utf-8")
+
+    review_path = shortlist_path.with_suffix(".review.json")
+    review_path.write_text(json.dumps({
+        "format": "opencull-professional-shortlist-review-v1",
+        "shortlist_path": str(shortlist_path),
+        "source_report_sha256": hashlib.sha256(
+            report_path.read_bytes()).hexdigest(),
+        "candidate_signature": "sig", "revision": 1,
+        "entries": {
+            photo: {"tier": "strong", "edit_raw": False, "interesting": True,
+                    "reviewed": True, "note": "", "updated_at": "now"}
+            for photo in marked},
+        "history": [], "migrations": [],
+    }), encoding="utf-8")
+
+    # A recipe is sections of plain instructions, carried as JSON text, and
+    # the compiler turns each line into a typed operation.
+    recipe = json.dumps({
+        "tone": ["increase exposure by 0.2 stops", "add 4 contrast"],
+        "color": ["lift saturation by 6"],
+    })
+    treatments: dict = {}
+    for style in styles:
+        treatments[f"{style}_title"] = f"{style.title()} treatment"
+        treatments[f"{style}_intent"] = f"what {style} is for"
+        treatments[f"{style}_recipe"] = recipe
+    (layout["Recipes"] /
+     f"{shortlist_path.stem}.edit-directions-r1.json").write_text(json.dumps({
+        "format": "opencull-edit-directions-v1",
+        "shortlist_sha256": hashlib.sha256(
+            shortlist_path.read_bytes()).hexdigest(),
+        "review_revision": 1,
+        "entries": [
+            {"photo": photo, "guardrails": "keep skin believable",
+             **treatments}
+            for photo in marked
+        ],
+    }), encoding="utf-8")
+    return shortlist_path
+
+
+@unittest.skipUnless(QApplication is not None, "PySide6 is not installed")
+class SuggestedTreatmentTests(unittest.TestCase):
+    """What the suggestion pass produced has to reach the develop page."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.application = QApplication.instance() or QApplication([])
+
+    def setUp(self):
+        self._temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self._temporary.name)
+        self.report_path, self.photos_path = build_shoot(self.root)
+        self.report = load_report(self.report_path)
+        self.photos = PhotoStore(self.photos_path, self.root / "cache")
+        self.addCleanup(self._temporary.cleanup)
+
+    def workspace(self):
+        from opencull_qt.develop import workspace_for
+
+        return workspace_for(self.report, self.photos.root, decoders=set())
+
+    def test_without_an_assessment_only_the_baseline_is_offered(self):
+        self.assertEqual(
+            [item["id"] for item in self.workspace().treatments("A.JPG")],
+            ["calibrated"])
+
+    def test_suggested_treatments_reach_the_develop_page(self):
+        assess_and_suggest(self.root, self.report_path, self.photos_path)
+        offered = self.workspace().treatments("A.JPG")
+        self.assertEqual(
+            [item["id"] for item in offered],
+            ["calibrated", "standard", "signature"])
+        self.assertEqual(offered[1]["name"], "Standard treatment")
+        self.assertEqual(offered[1]["intent"], "what standard is for")
+
+    def test_a_frame_nobody_marked_gets_no_suggested_treatments(self):
+        assess_and_suggest(
+            self.root, self.report_path, self.photos_path, marked=("A.JPG",))
+        self.assertEqual(
+            [item["id"] for item in self.workspace().treatments("B.JPG")],
+            ["calibrated"])
+
+    def test_a_shortlist_from_a_different_cull_is_treated_as_absent(self):
+        assess_and_suggest(self.root, self.report_path, self.photos_path)
+        from opencull_gui.project import ensure_project_layout
+
+        layout = ensure_project_layout(self.photos_path)
+        shortlist = (
+            layout["Reports"] /
+            f"{self.report_path.stem}.professional-shortlist.json")
+        value = json.loads(shortlist.read_text(encoding="utf-8"))
+        value["source_report_sha256"] = "a different cull entirely"
+        shortlist.write_text(json.dumps(value), encoding="utf-8")
+        # The develop page still opens; it simply has no suggestions.
+        self.assertEqual(
+            [item["id"] for item in self.workspace().treatments("A.JPG")],
+            ["calibrated"])
+
+    def test_a_suggested_treatment_renders(self):
+        assess_and_suggest(self.root, self.report_path, self.photos_path)
+        rendered = self.workspace().recipe_preview(
+            "A.JPG", "standard", "default", "markesteijn-3-pass", 80)
+        self.assertTrue(rendered.is_file())
+
+
 @unittest.skipUnless(QApplication is not None, "PySide6 is not installed")
 class DevelopPageTests(unittest.TestCase):
     @classmethod

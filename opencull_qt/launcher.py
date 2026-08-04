@@ -26,7 +26,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from opencull_gui.directions import DirectionsIndex
 from opencull_gui.photos import PhotoStore
+from opencull_gui.project import (
+    ensure_project_layout,
+    load_or_create_folder_project,
+    load_project,
+)
 from opencull_gui.project_catalog import ProjectCatalogError
 from opencull_gui.report import load_report
 from opencull_gui.reviews import ReviewStore, default_review_path
@@ -607,16 +613,58 @@ class Launcher(QMainWindow):
             shortlist = load_shortlist(shortlist_path, report, photos.root)
             reviews = ShortlistReviewStore(
                 default_shortlist_review_path(shortlist_path), shortlist)
+            layout = ensure_project_layout(photos.root)
+            project_path, _ = load_or_create_folder_project(
+                photos.root, report.path.stem)
+            directions = DirectionsIndex(
+                shortlist, reviews, layout["Recipes"],
+                style_profile=lambda: str(
+                    load_project(project_path).get(
+                        "active_style_profile") or ""))
         except Exception as exc:
             name = project.get("name", "That folder")
             self.report(f"{name}'s assessment could not be opened: {exc}",
                         "alarm")
             return
-        self.show_shortlist(shortlist, reviews, photos)
+        self.show_shortlist(shortlist, reviews, photos, directions, project)
 
-    def show_shortlist(self, shortlist, reviews, photos) -> None:
-        self._show_workspace(
-            photos, lambda loader: ShortlistPage(shortlist, reviews, loader))
+    def show_shortlist(self, shortlist, reviews, photos, directions=None,
+                       project: dict | None = None):
+        page = self._show_workspace(
+            photos,
+            lambda loader: ShortlistPage(
+                shortlist, reviews, loader, directions=directions))
+        page.suggested.connect(
+            lambda output, photos_wanted: self.suggest_edits(
+                shortlist, reviews, photos, output, photos_wanted,
+                project or {}))
+        return page
+
+    def suggest_edits(self, shortlist, reviews, photos, output: str,
+                      wanted: list, project: dict) -> None:
+        """Queue editing directions for the frames that were marked."""
+        try:
+            project_path, manifest = load_or_create_folder_project(
+                photos.root, shortlist.path.stem)
+            self.services.jobs.add_edit_suggestions(
+                shortlist=str(shortlist.path), review=str(reviews.path),
+                photos=str(photos.root), output=output,
+                profile="professional",
+                style_profile=str(
+                    manifest.get("active_style_profile") or ""),
+                only_photos=list(wanted))
+        except Exception as exc:
+            page = self.review_page
+            if page is not None and hasattr(page, "_report"):
+                page._report(str(exc), "alarm")
+            return
+        page = self.review_page
+        if page is not None and hasattr(page, "_report"):
+            page._report(
+                f"Queued. {len(wanted)} frame"
+                f"{'' if len(wanted) == 1 else 's'} will get editing "
+                "directions; the develop page offers them when it finishes.",
+                "ok")
 
     def open_review(self, project: dict) -> None:
         """Show the folder's culling decisions, in this window."""
@@ -664,6 +712,7 @@ class Launcher(QMainWindow):
         self.pages.addWidget(page)
         self.pages.setCurrentWidget(page)
         page.setFocus()
+        return page
 
     def show_projects(self) -> None:
         self.pages.setCurrentWidget(self.projects_page)
