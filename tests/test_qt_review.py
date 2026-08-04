@@ -291,54 +291,5 @@ class PreviewLoaderTests(unittest.TestCase):
             self.wait_for(seen)
         self.assertLessEqual(len(loader._cache), 2)
 
-@unittest.skipUnless(QApplication is not None, "PySide6 is not installed")
-class IntentTests(unittest.TestCase):
-    """Review and develop land on the same page; only the framing differs."""
-
-    @classmethod
-    def setUpClass(cls):
-        cls.application = QApplication.instance() or QApplication([])
-
-    def setUp(self):
-        self._temporary = tempfile.TemporaryDirectory()
-        root = Path(self._temporary.name)
-        self.report_path, self.photos_path = build_shoot(root)
-        self.report = load_report(self.report_path)
-        self.photos = PhotoStore(self.photos_path, root / "cache")
-        self.reviews = ReviewStore(
-            default_review_path(self.report_path), self.report, self.photos.root)
-        self.addCleanup(self._temporary.cleanup)
-
-    def page(self, intent):
-        from opencull_qt.previews import PreviewLoader
-        from opencull_qt.review import ReviewPage
-
-        loader = PreviewLoader(self.photos)
-        page = ReviewPage(self.report, self.reviews, loader, intent=intent)
-        page.show()
-        self.addCleanup(loader.shutdown)
-        self.addCleanup(page.deleteLater)
-        return page
-
-    def test_reviewing_shows_no_caveat(self):
-        self.assertFalse(self.page("review").pending.isVisible())
-
-    def test_developing_says_the_controls_are_not_here_yet(self):
-        page = self.page("develop")
-        self.assertTrue(page.pending.isVisible())
-        self.assertIn("not in this window yet", page.pending.text())
-
-    def test_both_intents_show_the_same_frames(self):
-        self.assertEqual(
-            sorted(self.page("review").frames),
-            sorted(self.page("develop").frames))
-
-    def test_decisions_are_saved_from_either_intent(self):
-        page = self.page("develop")
-        page.toggle("B.JPG")
-        self.assertIn(
-            "B.JPG",
-            self.reviews.public_state()["clusters"]["group-0001"]["keepers"])
-
 if __name__ == "__main__":
     unittest.main()

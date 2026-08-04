@@ -188,6 +188,30 @@ QLabel#frameName {{ color: {FAINT}; }}
 QLabel#frameNumber {{ color: {MUTED}; }}
 QLabel#frameAi {{ color: {SAFELIGHT}; letter-spacing: 1px; }}
 
+/* --- develop page --- */
+QFrame#panel {{ background: {SURFACE}; border-left: 1px solid {EDGE_SOFT}; }}
+QFrame#pane {{
+    background: {SURFACE}; border: 1px solid {EDGE_SOFT}; border-radius: 10px;
+}}
+QLabel#paneCaption {{ color: {FAINT}; letter-spacing: 2px; }}
+/* Transparent, so the space a photograph does not fill reads as the frame
+   around it rather than as a second empty box inside it. */
+QLabel#paneImage {{ background: transparent; color: {FAINT}; }}
+QListWidget#treatmentList {{
+    background: {INK}; border: 1px solid {EDGE_SOFT};
+    border-radius: 8px; outline: none; padding: 4px 0;
+}}
+/* No vertical padding: the row's height is set on the item, and the
+   delegate centres the text within it. */
+QListWidget#treatmentList::item {{
+    padding: 0 10px; color: {MUTED}; border: none;
+}}
+QListWidget#treatmentList::item:selected {{
+    background: {RAISED}; color: {PAPER};
+    border-left: 2px solid {SAFELIGHT};
+}}
+QListWidget#treatmentList::item:hover {{ background: {RAISED}; }}
+
 QScrollArea {{ border: none; background: {INK}; }}
 QScrollBar:vertical {{ background: transparent; width: 10px; margin: 0; }}
 QScrollBar::handle:vertical {{

@@ -24,6 +24,7 @@ except ImportError:  # pragma: no cover - exercised only without PySide6
 
 from opencull_gui import credentials  # noqa: E402
 from opencull_gui.providers import AGENTS, ProviderStore  # noqa: E402
+from tests.test_qt_develop import build_shoot  # noqa: E402
 
 
 def qt_available() -> bool:
@@ -412,7 +413,7 @@ class LauncherWindowTests(unittest.TestCase):
         source = Path("opencull_qt/launcher.py").read_text(encoding="utf-8")
         self.assertNotIn("webbrowser", source)
 
-    def test_review_and_develop_open_the_same_page(self):
+    def test_review_and_develop_open_the_same_window(self):
         window, _ = self.build(projects=[])
         report = Path(tempfile.mkdtemp()) / "report.json"
         report.write_text("{}", encoding="utf-8")
@@ -423,6 +424,37 @@ class LauncherWindowTests(unittest.TestCase):
                             "report": str(report)})
         intents = [call.kwargs["intent"] for call in opened.call_args_list]
         self.assertEqual(intents, ["review", "develop"])
+
+    def test_the_two_intents_reach_their_own_pages(self):
+        window, _ = self.build(projects=[])
+        shoot = Path(tempfile.mkdtemp())
+        report_path, photos_path = build_shoot(shoot)
+        project = {"id": "p1", "name": "A", "photos": str(photos_path),
+                   "report": str(report_path)}
+        with mock.patch.object(window, "show_develop") as develop, \
+                mock.patch.object(window, "show_review") as review:
+            window.develop(project)
+            develop.assert_called_once()
+            review.assert_not_called()
+        with mock.patch.object(window, "show_develop") as develop, \
+                mock.patch.object(window, "show_review") as review:
+            window.open_review(project)
+            review.assert_called_once()
+            develop.assert_not_called()
+
+    def test_the_develop_page_is_a_page_of_this_window(self):
+        from opencull_qt.develop import DevelopPage
+
+        window, _ = self.build(projects=[])
+        shoot = Path(tempfile.mkdtemp())
+        report_path, photos_path = build_shoot(shoot)
+        window.develop({"id": "p1", "name": "A", "photos": str(photos_path),
+                        "report": str(report_path)})
+        self.addCleanup(window.show_projects)
+        self.assertIsInstance(window.pages.currentWidget(), DevelopPage)
+        # Leaving it returns to the library rather than closing anything.
+        window.show_projects()
+        self.assertIs(window.pages.currentWidget(), window.projects_page)
 
     def test_every_folder_can_be_removed(self):
         window, _ = self.build(projects=[

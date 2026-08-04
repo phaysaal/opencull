@@ -33,6 +33,7 @@ from opencull_gui.reviews import ReviewStore, default_review_path
 from scan import classify_folder
 
 from . import theme
+from .develop import DevelopPage, workspace_for
 from .previews import LibraryPreviewLoader, PreviewLoader
 from .providers import ProvidersDialog
 from .review import ReviewPage
@@ -181,7 +182,7 @@ class Launcher(QMainWindow):
         self.pages.addWidget(central)
         self.setCentralWidget(self.pages)
         self.projects_page = central
-        self.review_page: ReviewPage | None = None
+        self.review_page: ReviewPage | DevelopPage | None = None
 
     @staticmethod
     def _card_band(title: str) -> tuple[QWidget, QGridLayout]:
@@ -523,26 +524,36 @@ class Launcher(QMainWindow):
     def _open_workspace(
         self, project: dict, report_path: Path, intent: str,
     ) -> None:
-        """Both Review and Develop land on the same page of the same window."""
+        """Review and Develop are two pages of this window, never a browser."""
         photos_path = Path(str(project.get("photos", "")))
         try:
             report = load_report(report_path)
             photos = PhotoStore(
                 photos_path, self.services.paths.cache / "previews")
+            if intent == "develop":
+                self.show_develop(report, photos)
+                return
             reviews = ReviewStore(
                 default_review_path(report_path), report, photos.root)
         except Exception as exc:
             name = project.get("name", "That folder")
             self.report(f"{name} could not be opened: {exc}", "alarm")
             return
-        self.show_review(report, photos, reviews, intent=intent)
+        self.show_review(report, photos, reviews)
 
-    def show_review(
-        self, report, photos, reviews, intent: str = "review",
-    ) -> None:
+    def show_review(self, report, photos, reviews) -> None:
+        self._show_workspace(
+            photos, lambda loader: ReviewPage(report, reviews, loader))
+
+    def show_develop(self, report, photos) -> None:
+        workspace = workspace_for(report, photos.root)
+        self._show_workspace(
+            photos, lambda loader: DevelopPage(report, workspace, loader))
+
+    def _show_workspace(self, photos, build) -> None:
         self._close_review()
         self._loader = PreviewLoader(photos, self)
-        page = ReviewPage(report, reviews, self._loader, intent=intent)
+        page = build(self._loader)
         page.closed.connect(self.show_projects)
         self.review_page = page
         self.pages.addWidget(page)
@@ -555,6 +566,12 @@ class Launcher(QMainWindow):
         self.refresh()
 
     def _close_review(self) -> None:
+        if self.review_page is not None:
+            # A render in flight holds the page alive and would deliver into a
+            # widget that is going away.
+            shutdown = getattr(self.review_page, "shutdown", None)
+            if shutdown is not None:
+                shutdown()
         loader = getattr(self, "_loader", None)
         if loader is not None:
             loader.shutdown()
