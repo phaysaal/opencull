@@ -39,9 +39,11 @@ ASSESSMENT = "assessment"
 PROFILE = "profile"
 SUGGESTIONS = "suggestions"
 DEVELOPMENT = "development"
+FINE_TUNING = "fine_tuning"
 EXPORT = "export"
 
-ORDER = (CULL, ASSESSMENT, PROFILE, SUGGESTIONS, DEVELOPMENT, EXPORT)
+ORDER = (CULL, ASSESSMENT, PROFILE, SUGGESTIONS, DEVELOPMENT, FINE_TUNING,
+         EXPORT)
 
 TITLES = {
     CULL: "Cull",
@@ -49,6 +51,7 @@ TITLES = {
     PROFILE: "Personal profile",
     SUGGESTIONS: "Editing suggestions",
     DEVELOPMENT: "Development",
+    FINE_TUNING: "Advanced fine tuning",
     EXPORT: "Export",
 }
 
@@ -59,6 +62,7 @@ PURPOSE = {
     PROFILE: "Read your own photographs to learn how you edit.",
     SUGGESTIONS: "Ask for treatments for the frames you marked.",
     DEVELOPMENT: "Render a treatment and compare it against the frame as shot.",
+    FINE_TUNING: "Move the numbers a treatment compiled into, within their bounds.",
     EXPORT: "Write the finished rendering where it is going.",
 }
 
@@ -96,6 +100,7 @@ def plan(
     profile_selected: bool = False,
     marked: int | None = None,
     culled: bool | None = None,
+    suggested: bool | None = None,
     manifest: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Describe every phase of one folder, in order.
@@ -104,6 +109,11 @@ def plan(
     developing. ``None`` means nobody has looked yet, which is different
     from nobody having marked anything: an unread assessment does not block
     the suggestion phase, it just has nothing to ask about.
+
+    ``suggested`` overrides the manifest's count of direction rounds. The
+    directions belonging to a shortlist are found on disk by convention, and
+    a caller holding that index knows the answer more exactly than the
+    manifest does.
 
     ``culled`` overrides what the catalog says. Development on a folder
     that was never culled writes a deterministic everything-included
@@ -120,9 +130,13 @@ def plan(
     assessed = bool(project.get("shortlist_available"))
     culling = _job_state(project.get("culling"))
     assessing = _job_state(project.get("assessment"))
-    directions = _count(manifest, "edit_directions")
+    rounds = _count(manifest, "edit_directions")
+    directions = bool(rounds) if suggested is None else bool(suggested)
     renders = _count(manifest, "renders")
     exports = _count(manifest, "exports")
+    tuned = sum(
+        1 for item in manifest.get("artifacts", {}).get("renders", []) or []
+        if isinstance(item, dict) and item.get("adjustments"))
 
     offline = "" if available else "The photographs folder is not on disk."
 
@@ -174,7 +188,8 @@ def plan(
     if directions:
         phases.append(entry(
             SUGGESTIONS, "done",
-            detail=f"{directions} round{'s' if directions > 1 else ''} asked for."))
+            detail=f"{rounds} round{'s' if rounds > 1 else ''} asked for."
+            if rounds else "Asked for."))
     elif not assessed:
         phases.append(entry(
             SUGGESTIONS, "blocked",
@@ -193,6 +208,20 @@ def plan(
         DEVELOPMENT, "done" if renders else "ready",
         detail=f"{renders} rendered." if renders else
         "The calibrated baseline is available with or without suggestions."))
+
+    if tuned:
+        phases.append(entry(
+            FINE_TUNING, "done",
+            detail=f"{tuned} adjusted version{'s' if tuned > 1 else ''} kept."))
+    elif directions:
+        phases.append(entry(
+            FINE_TUNING, "ready",
+            detail="Every control keeps the sentence that produced it."))
+    else:
+        phases.append(entry(
+            FINE_TUNING, "blocked",
+            "Fine tuning moves the numbers a treatment compiled into, so "
+            "there has to be a treatment. Ask for editing suggestions first."))
 
     if exports:
         phases.append(entry(

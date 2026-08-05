@@ -53,7 +53,8 @@ class _Signals(QObject):
 class _RenderJob(QRunnable):
     def __init__(self, workspace: DevelopmentWorkspace, photo: str,
                  treatment: str, engine: str, demosaic: str,
-                 signals: _Signals, generation: int):
+                 signals: _Signals, generation: int,
+                 maximum: int = 0, adjustments: dict | None = None):
         super().__init__()
         self.workspace = workspace
         self.photo = photo
@@ -62,13 +63,15 @@ class _RenderJob(QRunnable):
         self.demosaic = demosaic
         self.signals = signals
         self.generation = generation
+        self.maximum = maximum or PROOF_EDGE
+        self.adjustments = adjustments
         self.setAutoDelete(True)
 
     def run(self) -> None:
         try:
             path = self.workspace.recipe_preview(
                 self.photo, self.treatment, self.engine, self.demosaic,
-                PROOF_EDGE)
+                self.maximum, self.adjustments)
         except Exception as exc:
             self.signals.failed.emit(self.generation, self.photo, str(exc))
             return
@@ -231,24 +234,27 @@ class Renderer(QObject):
     failed = Signal(str, str)
 
     def __init__(self, workspace: DevelopmentWorkspace,
+                 maximum: int = PROOF_EDGE,
+                 pool: QThreadPool | None = None,
                  parent: QObject | None = None):
         super().__init__(parent)
         self.workspace = workspace
+        self.maximum = maximum
         self._generation = 0
         self._signals = _Signals()
         self._signals.done.connect(self._finished)
         self._signals.failed.connect(self._failed)
-        self._pool = QThreadPool(self)
+        self._pool = pool or QThreadPool(self)
         # A render saturates the machine on its own. Two at once makes both
         # slower and neither useful sooner.
         self._pool.setMaxThreadCount(1)
 
     def render(self, photo: str, treatment: str, engine: str,
-               demosaic: str) -> None:
+               demosaic: str, adjustments: dict | None = None) -> None:
         self._generation += 1
         self._pool.start(_RenderJob(
             self.workspace, photo, treatment, engine, demosaic,
-            self._signals, self._generation))
+            self._signals, self._generation, self.maximum, adjustments))
 
     def abandon(self) -> None:
         """Stop caring about a render whose frame is no longer on screen."""
@@ -433,7 +439,7 @@ class DevelopPage(QWidget):
         self.available: list[dict] = []
         self.rendered: dict[tuple[str, str], QPixmap] = {}
 
-        self.renderer = Renderer(workspace, self)
+        self.renderer = Renderer(workspace, parent=self)
         self.renderer.done.connect(self._rendered)
         self.renderer.failed.connect(self._render_failed)
         self.exporter = Exporter(workspace, self)

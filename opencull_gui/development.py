@@ -37,6 +37,7 @@ from recipe_compiler import compile_recipe
 from scan import RAW_EXTENSIONS, open_preview
 
 from . import dialogs
+from .adjustments import apply as apply_adjustments
 from .jobs import JobError
 from .project import load_project, project_sha256, update_project
 from .raw_sources import RawSourceStore
@@ -358,16 +359,21 @@ class DevelopmentWorkspace:
 
     # --- rendering ------------------------------------------------------
 
-    def recipe_preview(
-        self, photo: str, style: str, engine: str, demosaic: str,
-        maximum: int,
-    ) -> Path:
-        """Render one bounded local proof without registering an export artifact."""
+    def compiled_recipe(self, photo: str, style: str, engine: str) -> dict:
+        """What the renderer will actually execute for one treatment.
+
+        The recipe is the only thing a rendering comes from, so fine tuning
+        needs it in hand before anything is rendered. Settling it separately
+        also means the same compile answers the page and the render, rather
+        than the page describing one recipe and the renderer running another.
+        """
+        return self._prepare(photo, style, engine)["recipe"]
+
+    def _prepare(self, photo: str, style: str, engine: str) -> dict:
+        """Settle the source photograph and the recipe for one treatment."""
         builtin_styles = set(BUILTIN_STYLES)
         if engine not in set(ENGINES):
             raise ValueError("unsupported development preview engine")
-        if demosaic not in set(DEMOSAIC_MODES):
-            raise ValueError("unsupported development preview demosaic mode")
         workspace = self.payload()
         entry = next((item for item in workspace.get("candidates", [])
                       if item.get("photo") == photo), None)
@@ -436,6 +442,30 @@ class DevelopmentWorkspace:
                 photo, style, str(entry.get(f"{style}_title", style.title())),
                 str(entry.get(f"{style}_intent", "")), recipe_value,
                 str(entry.get("guardrails", "")), source_kind)
+        return {"recipe": recipe, "source": source, "reference": reference,
+                "source_kind": source_kind}
+
+    def recipe_preview(
+        self, photo: str, style: str, engine: str, demosaic: str,
+        maximum: int, adjustments: dict | None = None,
+    ) -> Path:
+        """Render one bounded local proof without registering an export artifact.
+
+        ``adjustments`` are the photographer's bounded changes to the
+        compiled operations. They are folded in before the cache identity is
+        taken, so an adjusted proof is a different rendering with a
+        different name rather than one quietly overwriting the other.
+        """
+        if demosaic not in set(DEMOSAIC_MODES):
+            raise ValueError("unsupported development preview demosaic mode")
+        prepared = self._prepare(photo, style, engine)
+        recipe = prepared["recipe"]
+        source = prepared["source"]
+        reference = prepared["reference"]
+        source_kind = prepared["source_kind"]
+        decoders = self.decoders
+        if adjustments:
+            recipe = apply_adjustments(recipe, adjustments)
         source_stat = source.stat()
         identity = hashlib.sha256(json.dumps({
             "photo": photo, "style": style, "engine": engine,
@@ -612,7 +642,7 @@ class DevelopmentWorkspace:
 
     def render_full(
         self, photo: str, style: str, engine: str, demosaic: str,
-        provenance: str = "",
+        provenance: str = "", adjustments: dict | None = None,
     ) -> dict:
         """Render a treatment at the photograph's own dimensions, and record it.
 
@@ -620,26 +650,33 @@ class DevelopmentWorkspace:
         hand anybody. This makes the full-size render and registers it in the
         project manifest, which is what makes it a render rather than another
         preview -- and what lets it be exported afterwards.
+
+        A render carrying the photographer's adjustments is registered as its
+        own variant. Delivering it must never be mistaken for delivering the
+        treatment as the model wrote it.
         """
         workspace = self.payload()
         reference = (Path(str(workspace["source_folder"])) / photo).resolve()
         if not reference.is_file():
             raise ValueError("reference photograph is unavailable")
         maximum = max(open_preview(reference).size)
-        preview = self.recipe_preview(photo, style, engine, demosaic, maximum)
+        preview = self.recipe_preview(
+            photo, style, engine, demosaic, maximum, adjustments)
         digest = hashlib.sha256(preview.read_bytes()).hexdigest()
         destination = self.project_layout["Developments"] / (
             f"{Path(photo).stem}.{style}.{engine}.{digest[:12]}.jpg")
         destination.parent.mkdir(parents=True, exist_ok=True)
         if not destination.is_file():
             shutil.copy2(preview, destination)
+        variant = style if engine == "default" else f"{style}-darktable-guided"
         artifact = {
-            "variant": style if engine == "default" else f"{style}-darktable-guided",
+            "variant": f"{variant}-adjusted" if adjustments else variant,
             "source_photo": photo,
             "path": str(destination),
             "provenance": provenance or str(
                 workspace.get("edit_directions_path") or ""),
-            "recipe_revision": 1,
+            "recipe_revision": 2 if adjustments else 1,
+            "adjustments": list((adjustments or {}).keys()),
             "sha256": digest,
             "created_at": datetime.now(UTC).isoformat(),
         }

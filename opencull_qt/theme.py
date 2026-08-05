@@ -260,6 +260,27 @@ QListWidget#treatmentList::item:selected {{
 }}
 QListWidget#treatmentList::item:hover {{ background: {RAISED}; }}
 
+/* --- fine tuning --- */
+/* The scrolled holder is a plain QWidget, so QFrame#panel cannot reach it
+   and it would otherwise paint with the default light palette. */
+QScrollArea#controlScroll, QWidget#controls {{ background: {SURFACE}; }}
+QLabel#reading {{ color: {PAPER}; }}
+/* A value that no longer says what the model asked for is marked, so a
+   panel of twelve controls does not have to be read twelve times. */
+QLabel#provenance {{ color: {FAINT}; }}
+QLabel#provenance[moved="true"] {{ color: {SAFELIGHT}; }}
+QLabel#guardrail {{ color: {FIXED}; }}
+QSlider::groove:horizontal {{
+    background: {EDGE}; height: 3px; border-radius: 2px;
+}}
+QSlider::sub-page:horizontal {{ background: {EDGE}; border-radius: 2px; }}
+QSlider::handle:horizontal {{
+    background: {PAPER}; width: 11px; height: 11px;
+    margin: -4px 0; border-radius: 6px;
+}}
+QSlider::handle:horizontal:hover {{ background: {SAFELIGHT_BRIGHT}; }}
+QSlider:disabled::handle:horizontal {{ background: {EDGE}; }}
+
 QScrollArea {{ border: none; background: {INK}; }}
 QScrollBar:vertical {{ background: transparent; width: 10px; margin: 0; }}
 QScrollBar::handle:vertical {{

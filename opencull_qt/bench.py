@@ -153,6 +153,20 @@ class Bench:
             return False
         return str(clustering.get("mode") or "") != "manual-selection"
 
+    def suggested(self) -> bool:
+        """Whether any editing directions exist for this shortlist.
+
+        Directions are found on disk by convention rather than read out of
+        the manifest, so this is the exact answer where the manifest holds
+        only a count of registered job outputs.
+        """
+        if not self.shortlist_path.is_file():
+            return False
+        try:
+            return bool(self.directions.payload().get("available"))
+        except Exception:                            # noqa: BLE001 - absent
+            return False
+
     def marked(self) -> int | None:
         """How many assessed frames are marked worth developing.
 

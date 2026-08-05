@@ -37,6 +37,7 @@ from . import theme
 from .bench import Bench
 from .develop import DevelopPage
 from .export import ExportPage
+from .finetune import FineTunePage
 from .previews import LibraryPreviewLoader, PreviewLoader
 from .providers import ProvidersDialog
 from .review import ReviewPage
@@ -636,7 +637,8 @@ class Launcher(QMainWindow):
         return phases.plan(
             project,
             profile_selected=bool(self.style_profiles.selected()),
-            marked=bench.marked(), culled=bench.culled())
+            marked=bench.marked(), culled=bench.culled(),
+            suggested=bench.suggested())
 
     # --- the pages behind the phases -------------------------------------
 
@@ -647,6 +649,7 @@ class Launcher(QMainWindow):
             phases.PROFILE: self._profile_page,
             phases.SUGGESTIONS: self._suggestions_page,
             phases.DEVELOPMENT: self._development_page,
+            phases.FINE_TUNING: self._finetune_page,
             phases.EXPORT: self._export_page,
         }
         build = builders.get(key)
@@ -710,6 +713,9 @@ class Launcher(QMainWindow):
         page.verification_wanted.connect(
             lambda request: self.verify_render(bench.workspace, request))
         return page
+
+    def _finetune_page(self, bench: Bench):
+        return FineTunePage(bench.report, bench.workspace, self._loader)
 
     def _export_page(self, bench: Bench):
         return ExportPage(bench.workspace)

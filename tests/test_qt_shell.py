@@ -18,7 +18,7 @@ except ImportError:  # pragma: no cover - exercised only without PySide6
     QApplication = None
 
 from opencull_gui import phases  # noqa: E402
-from tests.test_phases import manifest, project  # noqa: E402
+from tests.test_phases import project  # noqa: E402
 
 
 def culled(**changes) -> dict:
@@ -45,7 +45,8 @@ class PhaseBarTests(unittest.TestCase):
 
     def test_the_phases_are_numbered_in_the_order_they_happen(self):
         numbers = [text.split()[0] for text in self.labels(self.bar())]
-        self.assertEqual(numbers, ["1", "2", "3", "4", "5", "6"])
+        self.assertEqual(
+            numbers, [str(index + 1) for index in range(len(phases.ORDER))])
 
     def test_choosing_an_open_phase_asks_for_it(self):
         bar = self.bar()
@@ -112,7 +113,10 @@ class FirstOpenTests(unittest.TestCase):
 
         plan = phases.plan(
             culled(shortlist_available=True), marked=2,
-            manifest=manifest(edit_directions=1, renders=1, exports=1))
+            manifest={"artifacts": {
+                "edit_directions": [{}],
+                "renders": [{"adjustments": ["op-001"]}],
+                "exports": [{}]}})
         self.assertEqual(first_open(plan), phases.EXPORT)
 
 
