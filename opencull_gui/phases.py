@@ -1,0 +1,217 @@
+"""The phases of a shoot, and which of them a folder can enter right now.
+
+Darkimiya is a pipeline: a cull narrows a folder to a selection, an
+assessment judges that selection, suggestions are written against what was
+judged, a development executes them, and an export delivers the result.
+Until now that order lived only in the photographer's head and in which
+button happened to be on which page.
+
+This module states it once, in one place, with no interface attached. It
+answers two questions about every phase of one folder: has it happened, and
+can it be entered now. A phase that cannot be entered carries the reason,
+because "greyed out with no explanation" is the interface telling somebody
+they are wrong without saying how.
+
+Two rules shape the gates:
+
+Nothing is blocked to protect the photographer from a bad photograph. The
+gates exist where a phase genuinely has no input -- there is no assessment
+to review before one has been run -- and nowhere else. Development in
+particular is never gated on the AI: a calibrated baseline can be rendered
+from any frame, and a photographer who wants no suggestions should not have
+to buy them.
+
+The personal profile is never blocked at all. It belongs to the
+photographer rather than to the shoot, it can be built before any folder is
+opened, and it appears in the order only because it is what the suggestion
+phase reads.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+from opencull_gui.project import load_project
+
+CULL = "cull"
+ASSESSMENT = "assessment"
+PROFILE = "profile"
+SUGGESTIONS = "suggestions"
+DEVELOPMENT = "development"
+EXPORT = "export"
+
+ORDER = (CULL, ASSESSMENT, PROFILE, SUGGESTIONS, DEVELOPMENT, EXPORT)
+
+TITLES = {
+    CULL: "Cull",
+    ASSESSMENT: "Assessment",
+    PROFILE: "Personal profile",
+    SUGGESTIONS: "Editing suggestions",
+    DEVELOPMENT: "Development",
+    EXPORT: "Export",
+}
+
+# What each phase is for, in one sentence, shown wherever there is room.
+PURPOSE = {
+    CULL: "Narrow the folder to the frames worth keeping.",
+    ASSESSMENT: "Have the keepers judged, then decide which are worth developing.",
+    PROFILE: "Read your own photographs to learn how you edit.",
+    SUGGESTIONS: "Ask for treatments for the frames you marked.",
+    DEVELOPMENT: "Render a treatment and compare it against the frame as shot.",
+    EXPORT: "Write the finished rendering where it is going.",
+}
+
+ACTIVE = {"queued", "running"}
+
+
+def _count(manifest: dict[str, Any], key: str) -> int:
+    items = manifest.get("artifacts", {}).get(key)
+    return len(items) if isinstance(items, list) else 0
+
+
+def manifest_for(project: dict) -> dict[str, Any]:
+    """The project manifest, or an empty one when it cannot be read.
+
+    A folder whose manifest has gone missing is not an error to raise here:
+    the phases simply report as unstarted, which is what the photographer
+    sees on disk too.
+    """
+    path = Path(str(project.get("project", ""))).expanduser()
+    if not path.is_file():
+        return {}
+    try:
+        return load_project(path)
+    except (ValueError, OSError):
+        return {}
+
+
+def _job_state(job: Any) -> str:
+    return str((job or {}).get("status") or "")
+
+
+def plan(
+    project: dict,
+    *,
+    profile_selected: bool = False,
+    marked: int | None = None,
+    culled: bool | None = None,
+    manifest: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Describe every phase of one folder, in order.
+
+    ``marked`` is how many assessed photographs have been flagged as worth
+    developing. ``None`` means nobody has looked yet, which is different
+    from nobody having marked anything: an unread assessment does not block
+    the suggestion phase, it just has nothing to ask about.
+
+    ``culled`` overrides what the catalog says. Development on a folder
+    that was never culled writes a deterministic everything-included
+    selection and registers it as the culling report, so the catalog counts
+    that folder as culled. It has a selection; it has not been culled, and
+    the phase bar must not claim a run happened that never did.
+    """
+    if manifest is None:
+        manifest = manifest_for(project)
+
+    available = bool(project.get("available"))
+    selected = bool(project.get("report_available"))
+    culled = selected if culled is None else bool(culled)
+    assessed = bool(project.get("shortlist_available"))
+    culling = _job_state(project.get("culling"))
+    assessing = _job_state(project.get("assessment"))
+    directions = _count(manifest, "edit_directions")
+    renders = _count(manifest, "renders")
+    exports = _count(manifest, "exports")
+
+    offline = "" if available else "The photographs folder is not on disk."
+
+    def entry(
+        key: str, state: str, reason: str = "", detail: str = "",
+    ) -> dict[str, Any]:
+        # The profile is the photographer's, not the shoot's, so a folder
+        # that has gone offline has no bearing on it.
+        if offline and state != "done" and key != PROFILE:
+            state, reason = "blocked", offline
+        return {
+            "id": key,
+            "number": ORDER.index(key) + 1,
+            "title": TITLES[key],
+            "purpose": PURPOSE[key],
+            "state": state,
+            "reason": reason,
+            "detail": detail,
+        }
+
+    phases = []
+
+    if culling in ACTIVE:
+        phases.append(entry(CULL, "running", detail="Culling now."))
+    elif culled:
+        phases.append(entry(CULL, "done", detail="Culled."))
+    else:
+        phases.append(entry(CULL, "ready"))
+
+    if assessing in ACTIVE:
+        phases.append(entry(ASSESSMENT, "running", detail="Assessing now."))
+    elif assessed:
+        marked_note = (
+            f"{marked} marked to develop." if marked
+            else "Assessed. Nothing marked to develop yet.")
+        phases.append(entry(ASSESSMENT, "done", detail=marked_note))
+    elif selected:
+        phases.append(entry(ASSESSMENT, "ready"))
+    else:
+        phases.append(entry(
+            ASSESSMENT, "blocked",
+            "An assessment reads the selection a cull produced. Cull first."))
+
+    phases.append(entry(
+        PROFILE, "done" if profile_selected else "ready",
+        detail="A profile is in use." if profile_selected else
+        "Optional. Without one, suggestions have no personal treatment."))
+
+    if directions:
+        phases.append(entry(
+            SUGGESTIONS, "done",
+            detail=f"{directions} round{'s' if directions > 1 else ''} asked for."))
+    elif not assessed:
+        phases.append(entry(
+            SUGGESTIONS, "blocked",
+            "Suggestions are written against an assessment. Assess first."))
+    elif marked == 0:
+        phases.append(entry(
+            SUGGESTIONS, "blocked",
+            "Nothing is marked as worth developing. Mark frames in the "
+            "assessment first."))
+    else:
+        phases.append(entry(SUGGESTIONS, "ready"))
+
+    # Never gated on the AI: the calibrated baseline is available for any
+    # frame, and asking for it should not require paying for a cull first.
+    phases.append(entry(
+        DEVELOPMENT, "done" if renders else "ready",
+        detail=f"{renders} rendered." if renders else
+        "The calibrated baseline is available with or without suggestions."))
+
+    if exports:
+        phases.append(entry(
+            EXPORT, "done", detail=f"{exports} delivered."))
+    elif renders:
+        phases.append(entry(EXPORT, "ready"))
+    else:
+        phases.append(entry(
+            EXPORT, "blocked",
+            "There is nothing rendered to deliver yet. Develop a frame first."))
+
+    return phases
+
+
+def openable(phases: list[dict[str, Any]]) -> set[str]:
+    """The phases a photographer can enter now.
+
+    A running phase stays open: watching a cull is the whole point of
+    having started one.
+    """
+    return {
+        item["id"] for item in phases if item["state"] != "blocked"}

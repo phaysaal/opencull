@@ -1,0 +1,165 @@
+"""The suggestions phase: what was proposed, and what is still to ask for."""
+
+from __future__ import annotations
+
+import os
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+try:
+    from PySide6.QtWidgets import QApplication, QLabel
+except ImportError:  # pragma: no cover - exercised only without PySide6
+    QApplication = None
+
+from opencull_gui.directions import DirectionsIndex  # noqa: E402
+from opencull_gui.project import ensure_project_layout  # noqa: E402
+from opencull_gui.report import load_report  # noqa: E402
+from opencull_gui.shortlist import load_shortlist  # noqa: E402
+from opencull_gui.shortlist_reviews import (  # noqa: E402
+    ShortlistReviewStore,
+    default_shortlist_review_path,
+)
+from tests.test_qt_develop import NAMES, assess_and_suggest, build_shoot  # noqa: E402
+
+
+@unittest.skipUnless(QApplication is not None, "PySide6 is not installed")
+class SuggestionsPageTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.application = QApplication.instance() or QApplication([])
+
+    def setUp(self):
+        self._temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self._temporary.name)
+        self.report_path, self.photos = build_shoot(self.root)
+        self.addCleanup(self._temporary.cleanup)
+
+    def page(self, marked=(NAMES[0],), styles=("standard", "signature"),
+             suggested=True, answered=None):
+        """A shoot marked for development, some of it already answered.
+
+        ``marked`` is what the photographer marked; ``answered`` is what the
+        suggestion pass has come back about. They are not the same list, and
+        the difference is the whole reason the page has a cost dialog.
+        """
+        from opencull_qt.suggestions import SuggestionsPage
+
+        shortlist_path = assess_and_suggest(
+            self.root, self.report_path, self.photos,
+            marked=marked if answered is None else answered, styles=styles)
+        if not suggested:
+            for stale in ensure_project_layout(self.photos)["Recipes"].glob(
+                    "*edit-directions*"):
+                stale.unlink()
+        report = load_report(self.report_path)
+        shortlist = load_shortlist(shortlist_path, report, self.photos)
+        # The store, not a hand-written file, decides what a valid review of
+        # this shortlist looks like.
+        default_shortlist_review_path(shortlist_path).unlink(missing_ok=True)
+        reviews = ShortlistReviewStore(
+            default_shortlist_review_path(shortlist_path), shortlist)
+        # Marked through the store rather than by writing its file, so the
+        # marks carry the revision the store itself would give them.
+        for photo in marked:
+            reviews.update(
+                photo, "strong", False, "", True,
+                reviews.public_state()["revision"], interesting=True)
+        directions = DirectionsIndex(
+            shortlist, reviews, ensure_project_layout(self.photos)["Recipes"])
+        page = SuggestionsPage(shortlist, reviews, directions)
+        self.addCleanup(page.deleteLater)
+        return page
+
+    def text(self, page) -> str:
+        return "\n".join(
+            label.text() for label in page.findChildren(QLabel))
+
+    def test_only_the_marked_frames_are_listed(self):
+        page = self.page(marked=(NAMES[0], NAMES[1]))
+        self.assertEqual(page.photos, sorted([NAMES[0], NAMES[1]]))
+
+    def test_the_reasoning_is_shown_not_just_the_treatment_name(self):
+        shown = self.text(self.page())
+        self.assertIn("Standard treatment", shown)
+        self.assertIn("what standard is for", shown)
+        self.assertIn("WHAT IT IS TRYING TO DO", shown)
+
+    def test_the_recipe_that_will_run_is_shown_too(self):
+        self.assertIn("increase exposure by 0.2 stops", self.text(self.page()))
+
+    def test_guardrails_are_shown_once_as_true_of_every_treatment(self):
+        shown = self.text(self.page())
+        self.assertIn("keep skin believable", shown)
+        self.assertEqual(shown.count("keep skin believable"), 1)
+
+    def test_a_treatment_with_no_recipe_says_it_cannot_be_rendered(self):
+        from opencull_qt.suggestions import Treatment
+
+        card = Treatment("creative", {
+            "creative_title": "Bold", "creative_intent": "go further",
+            "creative_recipe": ""})
+        self.addCleanup(card.deleteLater)
+        shown = "\n".join(label.text() for label in card.findChildren(QLabel))
+        self.assertIn("cannot be rendered", shown)
+
+    def test_a_frame_with_nothing_yet_says_so_rather_than_showing_blank(self):
+        page = self.page(suggested=False)
+        self.assertIn("Nothing has been suggested", self.text(page))
+
+    def test_the_counter_says_how_many_are_answered(self):
+        page = self.page(marked=(NAMES[0], NAMES[1]), answered=(NAMES[0],))
+        self.assertIn("1 of 2 marked frames answered", page.progress.text())
+
+    def test_nothing_marked_says_where_to_mark(self):
+        page = self.page(marked=())
+        self.assertIn("Mark some in the assessment", self.text(page))
+        self.assertFalse(page.ask_button.isEnabled())
+
+
+@unittest.skipUnless(QApplication is not None, "PySide6 is not installed")
+class AskingTests(SuggestionsPageTests):
+    """Asking again costs a call per frame, so the scope is put to the user."""
+
+    def test_asking_with_nothing_answered_asks_for_all_of_them(self):
+        page = self.page(marked=(NAMES[0], NAMES[1]), suggested=False)
+        asked = []
+        page.suggested.connect(lambda output, photos: asked.append(photos))
+        with mock.patch.object(page, "_ask_scope") as scope:
+            page.suggest()
+        scope.assert_not_called()
+        self.assertEqual(asked, [sorted([NAMES[0], NAMES[1]])])
+
+    def test_asking_when_some_are_answered_offers_only_the_rest(self):
+        page = self.page(marked=(NAMES[0], NAMES[1]), answered=(NAMES[0],))
+        asked = []
+        page.suggested.connect(lambda output, photos: asked.append(photos))
+        with mock.patch.object(page, "_ask_scope", return_value="missing"):
+            page.suggest()
+        self.assertEqual(asked, [[NAMES[1]]])
+
+    def test_redoing_all_of_them_is_a_deliberate_choice(self):
+        page = self.page(marked=(NAMES[0], NAMES[1]), answered=(NAMES[0],))
+        asked = []
+        page.suggested.connect(lambda output, photos: asked.append(photos))
+        with mock.patch.object(page, "_ask_scope", return_value="all"):
+            page.suggest()
+        self.assertEqual(asked, [sorted([NAMES[0], NAMES[1]])])
+
+    def test_cancelling_asks_for_nothing(self):
+        page = self.page(marked=(NAMES[0], NAMES[1]), answered=(NAMES[0],))
+        asked = []
+        page.suggested.connect(lambda output, photos: asked.append(photos))
+        with mock.patch.object(page, "_ask_scope", return_value="cancel"):
+            page.suggest()
+        self.assertEqual(asked, [])
+
+
+if __name__ == "__main__":
+    unittest.main()

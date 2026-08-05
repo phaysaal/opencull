@@ -455,7 +455,8 @@ class DevelopPage(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
-        outer.addWidget(self._bar())
+        self.bar = self._bar()
+        outer.addWidget(self.bar)
 
         split = QHBoxLayout()
         split.setContentsMargins(0, 0, 0, 0)
@@ -515,6 +516,7 @@ class DevelopPage(QWidget):
         self.counter.setObjectName("hint")
         self.counter.setFont(theme.body(9))
         layout.addWidget(self.counter)
+        self.indicator = self.counter
         return bar
 
     def _panel(self) -> QWidget:

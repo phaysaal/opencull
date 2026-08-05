@@ -22,7 +22,7 @@ try:
 except ImportError:  # pragma: no cover - exercised only without PySide6
     QApplication = None
 
-from opencull_gui import credentials  # noqa: E402
+from opencull_gui import credentials, phases  # noqa: E402
 from opencull_gui.providers import AGENTS, ProviderStore  # noqa: E402
 from tests.test_qt_develop import build_shoot  # noqa: E402
 
@@ -275,10 +275,13 @@ class LauncherWindowTests(unittest.TestCase):
         self.assertTrue(window.notice.isVisible())
         self.assertIn("no provider credential", window.notice_text.text())
 
-    def test_opening_a_missing_report_explains_rather_than_crashing(self):
+    def test_opening_a_folder_that_cannot_be_read_explains_rather_than_crashing(self):
         window, services = self.build()
-        window.open_review({"report": "/gone.json", "photos": "/p"})
-        self.assertIn("no longer on disk", window.notice_text.text())
+        services.projects.manual_selection_report.side_effect = ValueError(
+            "project contains no supported photographs")
+        window.open_review({"id": "p1", "name": "A",
+                            "report": "/gone.json", "photos": "/p"})
+        self.assertIn("no supported photographs", window.notice_text.text())
         self.assertEqual(services.opened, [])
 
     def test_the_window_lands_on_the_screen_being_used(self):
@@ -447,13 +450,14 @@ class LauncherWindowTests(unittest.TestCase):
         # And it is not offered a second one while the first is running.
         self.assertNotIn("Assess", self.buttons(card))
 
-    def test_opening_an_assessed_folder_goes_to_the_page_not_the_queue(self):
+    def test_the_assessment_phase_opens_the_marks_rather_than_the_queue(self):
         window, services = self.build(projects=[])
-        with mock.patch.object(window, "open_shortlist") as opened:
-            window.assess_project({
+        with mock.patch.object(window, "open_project") as opened:
+            window.open_shortlist({
                 "id": "p1", "name": "A", "photos": "/p/a",
                 "shortlist_available": True, "shortlist": "/p/a/s.json"})
         opened.assert_called_once()
+        self.assertEqual(opened.call_args[0][1], phases.ASSESSMENT)
         services.jobs.add_professional.assert_not_called()
 
     def test_assessing_queues_the_shortlist_with_the_culling_review(self):
@@ -516,66 +520,72 @@ class LauncherWindowTests(unittest.TestCase):
 
     def test_developing_an_unculled_folder_builds_a_selection_first(self):
         window, services = self.build(projects=[])
-        services.projects.manual_selection_report.return_value = Path("/p/a/all.json")
-        with mock.patch.object(window, "_open_workspace") as opened:
-            window.develop({"id": "p1", "name": "A", "photos": "/p/a", "report": ""})
+        shoot = Path(tempfile.mkdtemp())
+        report_path, photos_path = build_shoot(shoot)
+        services.projects.manual_selection_report.return_value = report_path
+        window.develop({"id": "p1", "name": "A", "photos": str(photos_path),
+                        "report": "", "available": True})
+        self.addCleanup(window.show_projects)
         services.projects.manual_selection_report.assert_called_once_with("p1")
-        self.assertEqual(opened.call_args.kwargs["intent"], "develop")
+        self.assertEqual(window.review_page.current, phases.DEVELOPMENT)
 
     def test_developing_a_culled_folder_reuses_its_report(self):
         window, services = self.build(projects=[])
-        report = Path(tempfile.mkdtemp()) / "report.json"
-        report.write_text("{}", encoding="utf-8")
-        with mock.patch.object(window, "_open_workspace") as opened:
-            window.develop(
-                {"id": "p1", "name": "A", "photos": "/p/a", "report": str(report)})
+        shoot = Path(tempfile.mkdtemp())
+        report_path, photos_path = build_shoot(shoot)
+        window.develop({"id": "p1", "name": "A", "photos": str(photos_path),
+                        "report": str(report_path), "available": True})
+        self.addCleanup(window.show_projects)
         services.projects.manual_selection_report.assert_not_called()
-        self.assertEqual(opened.call_args[0][1], report)
+        self.assertEqual(window.bench.report_path, report_path)
 
     def test_develop_never_leaves_the_window(self):
         # The browser hand-off was the thing this architecture removed.
         source = Path("opencull_qt/launcher.py").read_text(encoding="utf-8")
         self.assertNotIn("webbrowser", source)
 
-    def test_review_and_develop_open_the_same_window(self):
-        window, _ = self.build(projects=[])
-        report = Path(tempfile.mkdtemp()) / "report.json"
-        report.write_text("{}", encoding="utf-8")
-        with mock.patch.object(window, "_open_workspace") as opened:
-            window.open_review({"id": "p1", "name": "A", "photos": "/p/a",
-                                "report": str(report)})
-            window.develop({"id": "p1", "name": "A", "photos": "/p/a",
-                            "report": str(report)})
-        intents = [call.kwargs["intent"] for call in opened.call_args_list]
-        self.assertEqual(intents, ["review", "develop"])
-
-    def test_the_two_intents_reach_their_own_pages(self):
+    def test_every_phase_of_one_shoot_shares_one_shell(self):
         window, _ = self.build(projects=[])
         shoot = Path(tempfile.mkdtemp())
         report_path, photos_path = build_shoot(shoot)
         project = {"id": "p1", "name": "A", "photos": str(photos_path),
-                   "report": str(report_path)}
-        with mock.patch.object(window, "show_develop") as develop, \
-                mock.patch.object(window, "show_review") as review:
-            window.develop(project)
-            develop.assert_called_once()
-            review.assert_not_called()
-        with mock.patch.object(window, "show_develop") as develop, \
-                mock.patch.object(window, "show_review") as review:
-            window.open_review(project)
-            review.assert_called_once()
-            develop.assert_not_called()
+                   "report": str(report_path), "available": True,
+                   "report_available": True}
+        window.open_review(project)
+        self.addCleanup(window.show_projects)
+        shell = window.review_page
+        self.assertEqual(shell.current, phases.CULL)
+        # And the same shell, not a second one, carries the next phase.
+        window.develop(project)
+        self.assertEqual(window.review_page.current, phases.DEVELOPMENT)
 
-    def test_the_develop_page_is_a_page_of_this_window(self):
+    def test_the_two_phases_reach_their_own_pages(self):
         from opencull_qt.develop import DevelopPage
+        from opencull_qt.review import ReviewPage
+
+        window, _ = self.build(projects=[])
+        shoot = Path(tempfile.mkdtemp())
+        report_path, photos_path = build_shoot(shoot)
+        project = {"id": "p1", "name": "A", "photos": str(photos_path),
+                   "report": str(report_path), "available": True,
+                   "report_available": True}
+        window.open_review(project)
+        self.addCleanup(window.show_projects)
+        shell = window.review_page
+        self.assertIsInstance(shell.page_for(phases.CULL), ReviewPage)
+        shell.open_phase(phases.DEVELOPMENT)
+        self.assertIsInstance(shell.page_for(phases.DEVELOPMENT), DevelopPage)
+
+    def test_the_shoot_is_a_page_of_this_window(self):
+        from opencull_qt.shell import ProjectShell
 
         window, _ = self.build(projects=[])
         shoot = Path(tempfile.mkdtemp())
         report_path, photos_path = build_shoot(shoot)
         window.develop({"id": "p1", "name": "A", "photos": str(photos_path),
-                        "report": str(report_path)})
+                        "report": str(report_path), "available": True})
         self.addCleanup(window.show_projects)
-        self.assertIsInstance(window.pages.currentWidget(), DevelopPage)
+        self.assertIsInstance(window.pages.currentWidget(), ProjectShell)
         # Leaving it returns to the library rather than closing anything.
         window.show_projects()
         self.assertIs(window.pages.currentWidget(), window.projects_page)

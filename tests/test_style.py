@@ -163,9 +163,9 @@ class StyleDialogTests(unittest.TestCase):
         self.addCleanup(self._temporary.cleanup)
 
     def dialog(self):
-        from opencull_qt.style import StyleDialog
+        from opencull_qt.style import StylePanel
 
-        page = StyleDialog(self.store, self.jobs, self.providers)
+        page = StylePanel(self.store, self.jobs, self.providers)
         self.addCleanup(page.deleteLater)
         return page
 

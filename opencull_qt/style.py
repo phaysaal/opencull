@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QSize, Qt
+from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
@@ -40,18 +40,25 @@ EXAMPLE_LIMIT = 64
 PROFILE_ROW = 32
 
 
-class StyleDialog(QDialog):
-    """Choose which profile is in use, and build a new one."""
+class StylePanel(QWidget):
+    """Choose which profile is in use, and build a new one.
+
+    The same panel serves two homes: a dialog opened from the window's
+    chrome, and the profile phase of a shoot. It is one thing in both,
+    because the profile is one thing -- the photographer's, not a copy per
+    project.
+    """
+
+    done = Signal()
 
     def __init__(self, store: StyleProfileStore, jobs, providers,
-                 parent: QWidget | None = None):
+                 parent: QWidget | None = None, closable: bool = True):
         super().__init__(parent)
         self.store = store
         self.jobs = jobs
         self.providers = providers
-        self.setWindowTitle("Personal style")
-        self.setMinimumSize(660, 620)
-        self.setStyleSheet(theme.STYLESHEET)
+        self.closable = closable
+        self.setObjectName("page")
         self._build()
         self.refresh()
 
@@ -120,12 +127,13 @@ class StyleDialog(QDialog):
         actions.addWidget(self.forget_button)
         actions.addStretch(1)
 
-        close = QPushButton("Done")
-        close.setObjectName("ghost")
-        close.setFont(theme.body(10))
-        close.setCursor(Qt.CursorShape.PointingHandCursor)
-        close.clicked.connect(self.accept)
-        actions.addWidget(close)
+        if self.closable:
+            close = QPushButton("Done")
+            close.setObjectName("ghost")
+            close.setFont(theme.body(10))
+            close.setCursor(Qt.CursorShape.PointingHandCursor)
+            close.clicked.connect(self.done)
+            actions.addWidget(close)
         layout.addLayout(actions)
 
         self.status = QLabel("")
@@ -314,3 +322,19 @@ def _stamp() -> str:
     from datetime import datetime
 
     return datetime.now().strftime("%Y%m%d-%H%M%S")
+
+
+class StyleDialog(QDialog):
+    """The profile panel, opened from the window's chrome."""
+
+    def __init__(self, store: StyleProfileStore, jobs, providers,
+                 parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setWindowTitle("Personal style")
+        self.setMinimumSize(660, 620)
+        self.setStyleSheet(theme.STYLESHEET)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self.panel = StylePanel(store, jobs, providers, self)
+        self.panel.done.connect(self.accept)
+        layout.addWidget(self.panel)

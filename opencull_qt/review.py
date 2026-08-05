@@ -139,7 +139,8 @@ class ReviewPage(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
-        outer.addWidget(self._bar())
+        self.bar = self._bar()
+        outer.addWidget(self.bar)
 
         split = QHBoxLayout()
         split.setContentsMargins(0, 0, 0, 0)
@@ -228,6 +229,8 @@ class ReviewPage(QWidget):
         self.progress.setObjectName("hint")
         self.progress.setFont(theme.body(9))
         layout.addWidget(self.progress)
+        # What this page counts, kept when a shell takes over the chrome.
+        self.indicator = self.progress
         return bar
 
     # --- clusters -------------------------------------------------------

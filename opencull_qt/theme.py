@@ -162,6 +162,25 @@ QPushButton#icon {{ background: transparent; border: none; border-radius: 13px; 
 QPushButton#icon:hover {{ background: {EDGE_SOFT}; }}
 QLabel#cardCount {{ color: {MUTED}; }}
 
+/* --- the phase bar --- */
+QFrame#phaseBar {{
+    background: {SURFACE}; border-bottom: 1px solid {EDGE_SOFT};
+}}
+QPushButton#phase {{
+    background: transparent; border: none;
+    border-bottom: 2px solid transparent;
+    padding: 6px 11px; color: {PAPER}; letter-spacing: 1px;
+}}
+QPushButton#phase:hover {{ background: {RAISED}; }}
+QPushButton#phase[state="done"] {{ color: {FIXED}; }}
+QPushButton#phase[state="running"] {{ color: {SAFELIGHT}; }}
+QPushButton#phase[state="blocked"] {{ color: {FAINT}; }}
+/* A blocked phase says why when pressed, so it must not look pressable. */
+QPushButton#phase[state="blocked"]:hover {{ background: transparent; }}
+QPushButton#phase[current="true"] {{
+    color: {PAPER}; border-bottom-color: {SAFELIGHT};
+}}
+
 /* --- review page --- */
 QListWidget#clusterList {{
     background: {SURFACE}; border: none;

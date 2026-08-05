@@ -26,31 +26,24 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from opencull_gui.directions import DirectionsIndex
-from opencull_gui.photos import PhotoStore
-from opencull_gui.project import (
-    ensure_project_layout,
-    load_or_create_folder_project,
-    load_project,
-)
+from opencull_gui import phases
+from opencull_gui.project import load_or_create_folder_project
 from opencull_gui.project_catalog import ProjectCatalogError
-from opencull_gui.report import load_report
-from opencull_gui.reviews import ReviewStore, default_review_path
-from opencull_gui.shortlist import load_shortlist
-from opencull_gui.shortlist_reviews import (
-    ShortlistReviewStore,
-    default_shortlist_review_path,
-)
+from opencull_gui.reviews import default_review_path
 from opencull_gui.style import StyleProfileStore
 from scan import classify_folder
 
 from . import theme
-from .develop import DevelopPage, workspace_for
+from .bench import Bench
+from .develop import DevelopPage
+from .export import ExportPage
 from .previews import LibraryPreviewLoader, PreviewLoader
 from .providers import ProvidersDialog
 from .review import ReviewPage
+from .shell import Invitation, ProjectShell, first_open
 from .shortlist import ShortlistPage
-from .style import StyleDialog
+from .style import StyleDialog, StylePanel
+from .suggestions import SuggestionsPage
 from .widgets import ProjectCard, Row, band, replace_rows, short_path
 
 ACTIVE = {"running", "queued"}
@@ -232,7 +225,8 @@ class Launcher(QMainWindow):
         self.pages.addWidget(central)
         self.setCentralWidget(self.pages)
         self.projects_page = central
-        self.review_page: ReviewPage | DevelopPage | ShortlistPage | None = None
+        self.review_page: ProjectShell | None = None
+        self.bench: Bench | None = None
 
     @staticmethod
     def _card_band(title: str) -> tuple[QWidget, QGridLayout]:
@@ -359,6 +353,7 @@ class Launcher(QMainWindow):
 
     def refresh(self) -> None:
         if self.pages.currentWidget() is not self.projects_page:
+            self._refresh_phases()
             return
         queue = self.services.jobs.public()
         projects = self.services.projects.public(queue)["projects"]
@@ -396,6 +391,29 @@ class Launcher(QMainWindow):
                 last=index == len(active) - 1)
             for index, job in enumerate(active)
         ])
+
+    def _refresh_phases(self) -> None:
+        """Keep the phase bar honest while a run is in flight.
+
+        A cull started from inside the shell finishes somewhere else. The
+        bar has to notice, or the phase it filled stays an invitation to do
+        what has already been done.
+        """
+        shell, bench = self.review_page, self.bench
+        if not isinstance(shell, ProjectShell) or bench is None:
+            return
+        try:
+            queue = self.services.jobs.public()
+            projects = self.services.projects.public(queue)["projects"]
+        except Exception:                            # noqa: BLE001 - transient
+            return
+        current = next(
+            (item for item in projects
+             if item.get("id") == bench.project.get("id")), None)
+        if current is None:
+            return
+        bench.project = current
+        shell.show_plan(self.phase_plan(current, bench))
 
     def folder_contents(self, project: dict) -> dict:
         """Classify a folder's photographs, walking it at most once."""
@@ -551,11 +569,12 @@ class Launcher(QMainWindow):
         except Exception as exc:
             # A missing provider credential surfaces here, and is the most
             # common reason a cull cannot start, so say so plainly.
-            self.report(str(exc), "alarm")
+            self._say(str(exc), "alarm")
             self.refresh()
             return
-        self.report(
-            f"Culling {name}. It will be marked Culled when the run finishes.")
+        self._say(
+            f"Culling {name}. It will be marked Culled when the run finishes.",
+            "ok")
         self.refresh()
 
     def confirm_recull(self, name: str) -> bool:
@@ -571,29 +590,143 @@ class Launcher(QMainWindow):
         box.exec()
         return box.clickedButton() is again
 
-    def develop(self, project: dict) -> None:
-        """Open a folder's frames for development, in this window.
+    def open_project(self, project: dict, phase: str = "") -> None:
+        """Open one folder in this window, on one of its phases.
 
-        Development works from a selection. A folder that has been culled
-        already has one; a folder that has not gets a deterministic
-        everything-included selection, so a treatment does not require paying
-        for a cull first.
+        Every phase of a shoot lives behind the same chrome and the same
+        phase bar, so opening a folder is one act rather than four
+        differently-shaped ones.
         """
         report_path = Path(str(project.get("report", "")))
         try:
             if not report_path.is_file():
+                # Development and the phase bar both need a selection. A
+                # folder that was never culled gets the deterministic
+                # everything-included one, so nothing here demands a cull.
                 report_path = self.services.projects.manual_selection_report(
                     str(project.get("id", "")))
         except (ProjectCatalogError, ValueError, OSError) as exc:
             self.report(str(exc), "alarm")
             return
-        self._open_workspace(project, report_path, intent="develop")
+        self._close_review()
+        try:
+            bench = Bench(project, self.services.paths.cache, report_path)
+            self._loader = PreviewLoader(bench.photos, self)
+        except Exception as exc:
+            name = project.get("name", "That folder")
+            self.report(f"{name} could not be opened: {exc}", "alarm")
+            return
+        shell = ProjectShell(project, lambda key: self._phase_page(bench, key))
+        shell.closed.connect(self.show_projects)
+        self.bench = bench
+        self.review_page = shell
+        self.pages.addWidget(shell)
+        self.pages.setCurrentWidget(shell)
+        shell.show_plan(self.phase_plan(project, bench))
+        if not shell.open_phase(phase or first_open(shell.plan)):
+            # A folder whose photographs are not on disk has every phase of
+            # its own shut. Landing on the first one that is open beats
+            # landing on nothing at all.
+            for item in shell.plan:
+                if item["state"] != "blocked" and shell.open_phase(item["id"]):
+                    break
+        self.refresh()
+
+    def phase_plan(self, project: dict, bench: Bench) -> list[dict]:
+        return phases.plan(
+            project,
+            profile_selected=bool(self.style_profiles.selected()),
+            marked=bench.marked(), culled=bench.culled())
+
+    # --- the pages behind the phases -------------------------------------
+
+    def _phase_page(self, bench: Bench, key: str):
+        builders = {
+            phases.CULL: self._cull_page,
+            phases.ASSESSMENT: self._assessment_page,
+            phases.PROFILE: self._profile_page,
+            phases.SUGGESTIONS: self._suggestions_page,
+            phases.DEVELOPMENT: self._development_page,
+            phases.EXPORT: self._export_page,
+        }
+        build = builders.get(key)
+        if build is None:
+            return None
+        try:
+            return build(bench)
+        except Exception as exc:                     # noqa: BLE001 - reported
+            shell = self.review_page
+            if isinstance(shell, ProjectShell):
+                shell.report(f"That phase could not be opened: {exc}", "alarm")
+            return None
+
+    def _cull_page(self, bench: Bench):
+        # Not "has a report": a folder developed without culling has one,
+        # written locally to include everything. There is nothing to review
+        # in a selection that kept every frame.
+        if not bench.culled():
+            return Invitation(
+                "This folder has not been culled",
+                "A cull reads every frame, groups the near-duplicates, and "
+                "proposes which one of each group to keep. You review what it "
+                "proposes; nothing is deleted, ever.",
+                "Cull this folder",
+                lambda: self.cull_project(bench.project),
+                "Every frame is read by a model, so this costs.")
+        return ReviewPage(bench.report, bench.reviews, self._loader)
+
+    def _assessment_page(self, bench: Bench):
+        if not bench.shortlist_path.is_file():
+            return Invitation(
+                "This folder has not been assessed",
+                "An assessment reads the frames the cull kept and judges each "
+                "one for what it could become. You then mark the ones worth "
+                "developing, and those are the ones that get editing "
+                "suggestions.",
+                "Assess the keepers",
+                lambda: self.assess_project(bench.project),
+                "Every kept frame is read by a model, so this costs.")
+        return ShortlistPage(
+            bench.shortlist, bench.shortlist_reviews, self._loader,
+            directions=bench.directions)
+
+    def _profile_page(self, bench: Bench):
+        panel = StylePanel(
+            self.style_profiles, self.services.jobs, self.services.providers,
+            closable=False)
+        return panel
+
+    def _suggestions_page(self, bench: Bench):
+        page = SuggestionsPage(
+            bench.shortlist, bench.shortlist_reviews, bench.directions)
+        page.suggested.connect(
+            lambda output, wanted: self.suggest_edits(
+                bench.shortlist, bench.shortlist_reviews, bench.photos,
+                output, wanted, bench.project))
+        return page
+
+    def _development_page(self, bench: Bench):
+        page = DevelopPage(bench.report, bench.workspace, self._loader)
+        page.verification_wanted.connect(
+            lambda request: self.verify_render(bench.workspace, request))
+        return page
+
+    def _export_page(self, bench: Bench):
+        return ExportPage(bench.workspace)
+
+    # --- starting the runs behind the phases ------------------------------
+
+    def develop(self, project: dict) -> None:
+        self.open_project(project, phases.DEVELOPMENT)
+
+    def open_review(self, project: dict) -> None:
+        self.open_project(project, phases.CULL)
+
+    def open_shortlist(self, project: dict) -> None:
+        self.open_project(project, phases.ASSESSMENT)
 
     def assess_project(self, project: dict) -> None:
-        """Open the assessment if there is one, and otherwise ask for it."""
-        if project.get("shortlist_available"):
-            self.open_shortlist(project)
-            return
+        """Queue the assessment of a folder's keepers."""
         report_path = Path(str(project.get("report", "")))
         if not report_path.is_file():
             self.report("That report is no longer on disk.", "alarm")
@@ -605,60 +738,21 @@ class Launcher(QMainWindow):
                 str(report_path), photos,
                 review=str(review) if review.is_file() else "")
         except Exception as exc:
-            self.report(str(exc), "alarm")
+            self._say(str(exc), "alarm")
             self.refresh()
             return
         name = str(project.get("name") or Path(photos).name)
-        self.report(
+        self._say(
             f"Assessing {name}. Every frame the cull kept is read for its "
             "editing potential; the frames you then mark are the ones that "
-            "get editing suggestions.")
+            "get editing suggestions.", "ok")
         self.refresh()
-
-    def open_shortlist(self, project: dict) -> None:
-        """Show the assessment and the marks made against it."""
-        shortlist_path = Path(str(project.get("shortlist", "")))
-        report_path = Path(str(project.get("report", "")))
-        photos_path = Path(str(project.get("photos", "")))
-        try:
-            report = load_report(report_path)
-            photos = PhotoStore(
-                photos_path, self.services.paths.cache / "previews")
-            shortlist = load_shortlist(shortlist_path, report, photos.root)
-            reviews = ShortlistReviewStore(
-                default_shortlist_review_path(shortlist_path), shortlist)
-            layout = ensure_project_layout(photos.root)
-            project_path, _ = load_or_create_folder_project(
-                photos.root, report.path.stem)
-            directions = DirectionsIndex(
-                shortlist, reviews, layout["Recipes"],
-                style_profile=lambda: str(
-                    load_project(project_path).get(
-                        "active_style_profile") or ""))
-        except Exception as exc:
-            name = project.get("name", "That folder")
-            self.report(f"{name}'s assessment could not be opened: {exc}",
-                        "alarm")
-            return
-        self.show_shortlist(shortlist, reviews, photos, directions, project)
-
-    def show_shortlist(self, shortlist, reviews, photos, directions=None,
-                       project: dict | None = None):
-        page = self._show_workspace(
-            photos,
-            lambda loader: ShortlistPage(
-                shortlist, reviews, loader, directions=directions))
-        page.suggested.connect(
-            lambda output, photos_wanted: self.suggest_edits(
-                shortlist, reviews, photos, output, photos_wanted,
-                project or {}))
-        return page
 
     def suggest_edits(self, shortlist, reviews, photos, output: str,
                       wanted: list, project: dict) -> None:
         """Queue editing directions for the frames that were marked."""
         try:
-            project_path, manifest = load_or_create_folder_project(
+            _project_path, manifest = load_or_create_folder_project(
                 photos.root, shortlist.path.stem)
             self.services.jobs.add_edit_suggestions(
                 shortlist=str(shortlist.path), review=str(reviews.path),
@@ -671,61 +765,15 @@ class Launcher(QMainWindow):
                     or str(manifest.get("active_style_profile") or "")),
                 only_photos=list(wanted))
         except Exception as exc:
-            page = self.review_page
-            if page is not None and hasattr(page, "_report"):
-                page._report(str(exc), "alarm")
+            self._say(str(exc), "alarm")
             return
-        page = self.review_page
-        if page is not None and hasattr(page, "_report"):
-            page._report(
-                f"Queued. {len(wanted)} frame"
-                f"{'' if len(wanted) == 1 else 's'} will get editing "
-                "directions; the develop page offers them when it finishes.",
-                "ok")
-
-    def open_review(self, project: dict) -> None:
-        """Show the folder's culling decisions, in this window."""
-        report_path = Path(str(project.get("report", "")))
-        if not report_path.is_file():
-            self.report("That report is no longer on disk.", "alarm")
-            return
-        self._open_workspace(project, report_path, intent="review")
-
-    def _open_workspace(
-        self, project: dict, report_path: Path, intent: str,
-    ) -> None:
-        """Review and Develop are two pages of this window, never a browser."""
-        photos_path = Path(str(project.get("photos", "")))
-        try:
-            report = load_report(report_path)
-            photos = PhotoStore(
-                photos_path, self.services.paths.cache / "previews")
-            if intent == "develop":
-                self.show_develop(report, photos)
-                return
-            reviews = ReviewStore(
-                default_review_path(report_path), report, photos.root)
-        except Exception as exc:
-            name = project.get("name", "That folder")
-            self.report(f"{name} could not be opened: {exc}", "alarm")
-            return
-        self.show_review(report, photos, reviews)
-
-    def show_review(self, report, photos, reviews) -> None:
-        self._show_workspace(
-            photos, lambda loader: ReviewPage(report, reviews, loader))
-
-    def show_develop(self, report, photos):
-        workspace = workspace_for(report, photos.root)
-        page = self._show_workspace(
-            photos, lambda loader: DevelopPage(report, workspace, loader))
-        page.verification_wanted.connect(
-            lambda request: self.verify_render(workspace, request))
-        return page
+        self._say(
+            f"Queued. {len(wanted)} frame"
+            f"{'' if len(wanted) == 1 else 's'} will get editing "
+            "directions; they appear here when the run finishes.", "ok")
 
     def verify_render(self, workspace, request: dict) -> None:
         """Ask a model whether one rendering did what it promised."""
-        page = self.review_page
         try:
             self.services.jobs.add_semantic_verification(
                 original=str(request["original"]),
@@ -734,13 +782,11 @@ class Launcher(QMainWindow):
                 project=str(workspace.project_path),
                 provider_profile_id=self.provider_id())
         except Exception as exc:
-            if page is not None and hasattr(page, "_report"):
-                page._report(str(exc), "alarm")
+            self._say(str(exc), "alarm")
             return
-        if page is not None and hasattr(page, "_report"):
-            page._report(
-                f"Verifying {request['photo']}. The certificate covers the "
-                "full-size render and appears here when it finishes.", "ok")
+        self._say(
+            f"Verifying {request['photo']}. The certificate covers the "
+            "full-size render and appears here when it finishes.", "ok")
 
     def provider_id(self) -> str:
         providers = getattr(self.services, "providers", None)
@@ -748,16 +794,21 @@ class Launcher(QMainWindow):
                     if providers is not None else [])
         return str(profiles[0]["id"]) if profiles else ""
 
-    def _show_workspace(self, photos, build) -> None:
-        self._close_review()
-        self._loader = PreviewLoader(photos, self)
-        page = build(self._loader)
-        page.closed.connect(self.show_projects)
-        self.review_page = page
-        self.pages.addWidget(page)
-        self.pages.setCurrentWidget(page)
-        page.setFocus()
-        return page
+    def _say(self, message: str, tone: str = "") -> None:
+        """Report where the photographer is looking.
+
+        Inside a folder that is its shell; on the library it is the hero.
+        A message put on the page nobody is reading is a message nobody
+        gets.
+        """
+        shell = self.review_page
+        if isinstance(shell, ProjectShell):
+            shell.report(message, tone)
+            page = shell.page_for(shell.current)
+            if page is not None and hasattr(page, "_report"):
+                page._report(message, tone)
+            return
+        self.report(message, tone)
 
     def show_projects(self) -> None:
         self.pages.setCurrentWidget(self.projects_page)
@@ -779,6 +830,7 @@ class Launcher(QMainWindow):
             self.pages.removeWidget(self.review_page)
             self.review_page.deleteLater()
             self.review_page = None
+        self.bench = None
 
     def remove_project(self, project: dict) -> None:
         """Forget a folder. Nothing inside it is touched."""
