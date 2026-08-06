@@ -737,10 +737,25 @@ class Launcher(QMainWindow):
         self.open_project(project, phases.ASSESSMENT)
 
     def assess_project(self, project: dict) -> None:
-        """Queue the assessment of a folder's keepers."""
+        """Queue the assessment of a folder's selection.
+
+        Every other run that costs money is confirmed before it starts. This
+        one is confirmed only when it would cost more than the photographer
+        is likely to expect -- an unculled folder has every frame in its
+        selection, so the assessment reads all of them.
+        """
         report_path = Path(str(project.get("report", "")))
         if not report_path.is_file():
             self.report("That report is no longer on disk.", "alarm")
+            return
+        bench = self.bench
+        culled = bench.culled() if bench is not None else True
+        frames = 0
+        if not culled and bench is not None:
+            frames = len(bench.report.data.get("clusters", []) or [])
+        name = str(project.get("name") or Path(
+            str(project.get("photos", ""))).name)
+        if not culled and not self.confirm_full_assessment(name, frames):
             return
         photos = str(project.get("photos", ""))
         review = default_review_path(report_path)
@@ -752,12 +767,39 @@ class Launcher(QMainWindow):
             self._say(str(exc), "alarm")
             self.refresh()
             return
-        name = str(project.get("name") or Path(photos).name)
         self._say(
-            f"Assessing {name}. Every frame the cull kept is read for its "
-            "editing potential; the frames you then mark are the ones that "
-            "get editing suggestions.", "ok")
+            f"Assessing {name}. "
+            + ("Every frame the cull kept is read for its editing potential"
+               if culled else
+               f"All {frames} frames are read for their editing potential")
+            + "; the frames you then mark are the ones that get editing "
+            "suggestions.", "ok")
         self.refresh()
+
+    def confirm_full_assessment(self, name: str, frames: int) -> bool:
+        """Ask before assessing a folder nothing has narrowed.
+
+        The number is the point. "This costs" is a warning nobody weighs;
+        "about 23 calls instead of one per keeper" is one they can.
+        """
+        box = QMessageBox(self)
+        box.setWindowTitle("Assess every frame?")
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setText(f"{name} has not been culled.")
+        box.setInformativeText(
+            f"Its selection is therefore every frame in the folder, so this "
+            f"reads about {frames} photograph"
+            f"{'' if frames == 1 else 's'} -- one model call each -- rather "
+            "than one per keeper.\n\n"
+            "Culling first narrows the folder and is usually cheaper. "
+            "Assessing everything is a legitimate choice if you want the "
+            "judgement on all of it.")
+        assess = box.addButton(
+            f"Assess all {frames}", QMessageBox.ButtonRole.DestructiveRole)
+        cancel = box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(cancel)
+        box.exec()
+        return box.clickedButton() is assess
 
     def suggest_edits(self, shortlist, reviews, photos, output: str,
                       wanted: list, project: dict) -> None:

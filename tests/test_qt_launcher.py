@@ -460,6 +460,54 @@ class LauncherWindowTests(unittest.TestCase):
         self.assertEqual(opened.call_args[0][1], phases.ASSESSMENT)
         services.jobs.add_professional.assert_not_called()
 
+    def test_assessing_an_unculled_folder_asks_before_spending(self):
+        window, services = self.build(projects=[])
+        shoot = Path(tempfile.mkdtemp())
+        report_path, photos_path = build_shoot(shoot)
+        project = {"id": "p1", "name": "A", "photos": str(photos_path),
+                   "report": str(report_path), "available": True,
+                   "report_available": True}
+        window.open_project(project)
+        self.addCleanup(window.show_projects)
+        with mock.patch.object(window.bench, "culled", return_value=False), \
+                mock.patch.object(
+                    window, "confirm_full_assessment", return_value=False) as ask:
+            window.assess_project(project)
+        ask.assert_called_once()
+        services.jobs.add_professional.assert_not_called()
+
+    def test_the_question_names_how_many_frames_will_be_read(self):
+        window, services = self.build(projects=[])
+        shoot = Path(tempfile.mkdtemp())
+        report_path, photos_path = build_shoot(shoot)
+        project = {"id": "p1", "name": "A", "photos": str(photos_path),
+                   "report": str(report_path), "available": True,
+                   "report_available": True}
+        window.open_project(project)
+        self.addCleanup(window.show_projects)
+        with mock.patch.object(window.bench, "culled", return_value=False), \
+                mock.patch.object(
+                    window, "confirm_full_assessment", return_value=True) as ask:
+            window.assess_project(project)
+        # One cluster per frame in the everything-included selection.
+        self.assertEqual(ask.call_args[0][1], 1)
+        services.jobs.add_professional.assert_called_once()
+
+    def test_assessing_a_culled_folder_does_not_ask(self):
+        window, services = self.build(projects=[])
+        shoot = Path(tempfile.mkdtemp())
+        report_path, photos_path = build_shoot(shoot)
+        project = {"id": "p1", "name": "A", "photos": str(photos_path),
+                   "report": str(report_path), "available": True,
+                   "report_available": True}
+        window.open_project(project)
+        self.addCleanup(window.show_projects)
+        with mock.patch.object(window.bench, "culled", return_value=True), \
+                mock.patch.object(window, "confirm_full_assessment") as ask:
+            window.assess_project(project)
+        ask.assert_not_called()
+        services.jobs.add_professional.assert_called_once()
+
     def test_assessing_queues_the_shortlist_with_the_culling_review(self):
         window, services = self.build(projects=[])
         shoot = Path(tempfile.mkdtemp())
