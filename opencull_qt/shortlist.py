@@ -33,9 +33,9 @@ from opencull_gui.shortlist import ASSESSMENT_FIELDS
 from opencull_gui.shortlist_reviews import ShortlistReviewError
 
 from . import theme
-from .previews import PreviewLoader, scaled
+from .develop import PhotoLabel
+from .previews import PreviewLoader
 
-THUMB = 320
 ROW = 32
 
 # The models' own ranking, strongest first. A tier is a judgement, so it is
@@ -122,49 +122,68 @@ class ShortlistPage(QWidget):
         right = QWidget()
         right.setObjectName("page")
         column = QVBoxLayout(right)
-        column.setContentsMargins(22, 18, 22, 16)
-        column.setSpacing(12)
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(0)
 
-        header = QHBoxLayout()
-        header.setSpacing(14)
-        self.frame = QLabel("…")
-        self.frame.setObjectName("frameImage")
-        self.frame.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.frame.setFixedSize(THUMB, int(THUMB * 0.72))
-        header.addWidget(self.frame)
+        # The photograph is what is being judged, so it gets the room. The
+        # judgement sits beside it in a column narrow enough to read, rather
+        # than under a thumbnail with half the window left empty.
+        body = QHBoxLayout()
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(0)
 
-        titles = QVBoxLayout()
-        titles.setSpacing(4)
+        stage = QFrame()
+        stage.setObjectName("pane")
+        stage_column = QVBoxLayout(stage)
+        stage_column.setContentsMargins(14, 12, 14, 12)
+        stage_column.setSpacing(8)
         self.heading = QLabel("")
         self.heading.setObjectName("clusterTitle")
-        self.heading.setFont(theme.display(18))
-        titles.addWidget(self.heading)
+        self.heading.setFont(theme.display(17))
+        stage_column.addWidget(self.heading)
+        self.frame = PhotoLabel()
+        self.frame.setObjectName("paneImage")
+        stage_column.addWidget(self.frame, 1)
+        body.addWidget(stage, 1)
+
+        panel = QFrame()
+        panel.setObjectName("panel")
+        panel.setFixedWidth(430)
+        judgement = QVBoxLayout(panel)
+        judgement.setContentsMargins(18, 14, 12, 14)
+        judgement.setSpacing(8)
 
         self.verdict = QLabel("")
         self.verdict.setObjectName("rowState")
         self.verdict.setFont(theme.display(9))
-        titles.addWidget(self.verdict)
+        judgement.addWidget(self.verdict)
 
         self.rationale = QLabel("")
         self.rationale.setObjectName("hint")
         self.rationale.setWordWrap(True)
         self.rationale.setFont(theme.body(10))
-        titles.addWidget(self.rationale)
-        titles.addStretch(1)
-        header.addLayout(titles, 1)
-        column.addLayout(header)
+        judgement.addWidget(self.rationale)
 
         scroll = QScrollArea()
+        scroll.setObjectName("controlScroll")
         scroll.setWidgetResizable(True)
+        # Without this the holder grows to its widest child and every wrapped
+        # paragraph then lays out at that width, off screen.
+        scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         holder = QWidget()
-        holder.setObjectName("page")
+        holder.setObjectName("controls")
         self.axes = QVBoxLayout(holder)
-        self.axes.setContentsMargins(0, 4, 12, 4)
+        self.axes.setContentsMargins(0, 4, 8, 4)
         self.axes.setSpacing(10)
         scroll.setWidget(holder)
-        column.addWidget(scroll, 1)
+        judgement.addWidget(scroll, 1)
+        body.addWidget(panel)
 
-        column.addWidget(self._decision())
+        column.addLayout(body, 1)
+        decision = self._decision()
+        decision.setContentsMargins(22, 0, 22, 0)
+        column.addWidget(decision)
         split.addWidget(right, 1)
         outer.addLayout(split, 1)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -323,7 +342,7 @@ class ShortlistPage(QWidget):
         self.current = photo
         entry = self.entry_for(photo)
         self.loader.abandon()
-        self.frame.setText("…")
+        self.frame.set_message("…")
         pixmap = self.loader.request(photo, "detail")
         if pixmap is not None:
             self._set_frame(pixmap)
@@ -368,9 +387,9 @@ class ShortlistPage(QWidget):
         self._report("")
 
     def _set_frame(self, pixmap) -> None:
-        self.frame.setPixmap(
-            scaled(pixmap, self.frame.width(), self.frame.height()))
-        self.frame.setText("")
+        # PhotoLabel scales in its own resizeEvent: a parent's is too early,
+        # because its children are not laid out when it runs.
+        self.frame.set_source(pixmap)
 
     def _painted(self, photo: str, size: str, pixmap) -> None:
         if photo == self.current and size == "detail":

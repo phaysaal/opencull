@@ -121,6 +121,28 @@ QPushButton#ghost:hover {{ background: {RAISED}; border-color: #3B3633; }}
 QPushButton#ghost:pressed {{ background: {EDGE_SOFT}; }}
 QPushButton#ghost:disabled {{ color: {FAINT}; border-color: {EDGE_SOFT}; }}
 
+/* Dialog buttons are the application's own buttons, not the platform's.
+   Left alone they take the default style and then inherit PAPER text from
+   the QWidget rule, which puts near-white on light grey and makes the
+   choice on a confirmation unreadable. */
+QMessageBox, QMessageBox QLabel {{ background: {SURFACE}; color: {PAPER}; }}
+QMessageBox QPushButton, QDialogButtonBox QPushButton {{
+    background: {RAISED}; color: {PAPER};
+    border: 1px solid {EDGE}; border-radius: 8px;
+    padding: 7px 18px; min-width: 92px;
+}}
+QMessageBox QPushButton:hover, QDialogButtonBox QPushButton:hover {{
+    background: {EDGE}; border-color: #3B3633;
+}}
+QMessageBox QPushButton:pressed, QDialogButtonBox QPushButton:pressed {{
+    background: {EDGE_SOFT};
+}}
+/* The default button is the safe one. It is marked, so a photographer who
+   presses return without reading does the harmless thing knowingly. */
+QMessageBox QPushButton:default, QDialogButtonBox QPushButton:default {{
+    border-color: {SAFELIGHT}; color: {PAPER};
+}}
+
 QFrame#rows {{
     background: {SURFACE}; border: 1px solid {EDGE_SOFT}; border-radius: 10px;
 }}
