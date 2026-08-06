@@ -36,6 +36,12 @@ CAPTION = 16
 # whole shoot on a narrow one.
 COLUMNS = 8
 
+# A shoot can be thousands of frames, and building a tile for each would
+# stall the window before it drew. What is left out is said out loud: a
+# sheet that quietly stopped at a round number would read as the whole
+# selection, which is exactly the thing this page exists to show.
+LIMIT = 120
+
 
 class Tile(QFrame):
     """One frame of the selection, named."""
@@ -72,17 +78,28 @@ class ContactSheet(QWidget):
     chosen = Signal(str)
 
     def __init__(self, names: list[str], loader: PreviewLoader,
-                 columns: int = COLUMNS, parent: QWidget | None = None):
+                 columns: int = COLUMNS, limit: int = LIMIT,
+                 parent: QWidget | None = None):
         super().__init__(parent)
         self.setObjectName("page")
-        self.names = list(names)
+        self.selection = list(names)
+        self.names = self.selection[:limit]
         self.loader = loader
         self.tiles: dict[str, Tile] = {}
         self.loader.ready.connect(self._painted)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
+        layout.setSpacing(6)
+
+        dropped = len(self.selection) - len(self.names)
+        if dropped:
+            notice = QLabel(
+                f"Showing the first {len(self.names)} of "
+                f"{len(self.selection):,}. All of them are read.")
+            notice.setObjectName("hint")
+            notice.setFont(theme.body(9))
+            layout.addWidget(notice)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)

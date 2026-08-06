@@ -669,14 +669,18 @@ class Launcher(QMainWindow):
         # written locally to include everything. There is nothing to review
         # in a selection that kept every frame.
         if not bench.culled():
+            frames = list(bench.report.photo_names)
+            count = len(frames)
             return Invitation(
                 "This folder has not been culled",
                 "A cull reads every frame, groups the near-duplicates, and "
                 "proposes which one of each group to keep. You review what it "
                 "proposes; nothing is deleted, ever.",
-                "Cull this folder",
+                f"Cull these {count} photographs",
                 lambda: self.cull_project(bench.project),
-                "Every frame is read by a model, so this costs.")
+                f"These are the {count} photographs in the folder. Every one "
+                "is read by a model, so this costs.",
+                shows=ContactSheet(frames, self._loader))
         return ReviewPage(bench.report, bench.reviews, self._loader)
 
     def _assessment_page(self, bench: Bench):
