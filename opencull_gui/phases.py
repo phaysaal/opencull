@@ -174,11 +174,21 @@ def plan(
             else "Assessed. Nothing marked to develop yet.")
         phases.append(entry(ASSESSMENT, "done", detail=marked_note))
     elif selected:
-        phases.append(entry(ASSESSMENT, "ready"))
+        # An assessment reads a selection, and a cull is not the only way to
+        # have one: a folder opened without culling gets the deterministic
+        # everything-included selection. So this is not blocked -- but the
+        # difference is what it costs, and that is worth saying out loud
+        # rather than discovering on the invoice.
+        phases.append(entry(
+            ASSESSMENT, "ready",
+            detail="Assesses the frames the cull kept." if culled else
+            "No cull yet, so this reads every frame in the folder rather "
+            "than the keepers. That is a model call each."))
     else:
         phases.append(entry(
             ASSESSMENT, "blocked",
-            "An assessment reads the selection a cull produced. Cull first."))
+            "An assessment reads a selection, and this folder has none yet. "
+            "Cull it, or open it once to select everything."))
 
     phases.append(entry(
         PROFILE, "done" if profile_selected else "ready",

@@ -680,15 +680,20 @@ class Launcher(QMainWindow):
 
     def _assessment_page(self, bench: Bench):
         if not bench.shortlist_path.is_file():
+            culled = bench.culled()
+            frames = len(bench.report.data.get("clusters", []) or [])
             return Invitation(
                 "This folder has not been assessed",
-                "An assessment reads the frames the cull kept and judges each "
-                "one for what it could become. You then mark the ones worth "
-                "developing, and those are the ones that get editing "
-                "suggestions.",
-                "Assess the keepers",
+                "An assessment judges each frame in the selection for what it "
+                "could become. You then mark the ones worth developing, and "
+                "those are the ones that get editing suggestions.",
+                "Assess the keepers" if culled else "Assess every frame",
                 lambda: self.assess_project(bench.project),
-                "Every kept frame is read by a model, so this costs.")
+                "Every frame in the selection is read by a model, so this "
+                "costs." if culled else
+                "This folder has not been culled, so the selection is every "
+                f"frame in it -- about {frames} model calls rather than one "
+                "per keeper. Culling first is usually cheaper.")
         return ShortlistPage(
             bench.shortlist, bench.shortlist_reviews, self._loader,
             directions=bench.directions)

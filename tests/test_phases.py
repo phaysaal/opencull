@@ -68,14 +68,36 @@ class CullTests(unittest.TestCase):
 
 
 class AssessmentTests(unittest.TestCase):
-    def test_assessment_is_blocked_before_a_cull(self):
+    def test_assessment_is_blocked_with_no_selection_at_all(self):
         plan = phases.plan(project(), manifest={})
         self.assertEqual(state(plan, phases.ASSESSMENT), "blocked")
-        self.assertIn("Cull first", reason(plan, phases.ASSESSMENT))
+        self.assertIn("has none yet", reason(plan, phases.ASSESSMENT))
 
     def test_a_cull_opens_the_assessment(self):
         plan = phases.plan(project(report_available=True), manifest={})
         self.assertEqual(state(plan, phases.ASSESSMENT), "ready")
+
+    def test_a_selection_without_a_cull_also_opens_it(self):
+        # Opening a folder writes an everything-included selection, so a cull
+        # is not the only way to have one.
+        plan = phases.plan(
+            project(report_available=True), culled=False, manifest={})
+        self.assertEqual(state(plan, phases.ASSESSMENT), "ready")
+
+    def test_assessing_an_unculled_folder_says_what_it_will_read(self):
+        detail = next(
+            item["detail"] for item in phases.plan(
+                project(report_available=True), culled=False, manifest={})
+            if item["id"] == phases.ASSESSMENT)
+        self.assertIn("every frame in the folder", detail)
+        self.assertIn("model call", detail)
+
+    def test_assessing_a_culled_folder_reads_only_the_keepers(self):
+        detail = next(
+            item["detail"] for item in phases.plan(
+                project(report_available=True), culled=True, manifest={})
+            if item["id"] == phases.ASSESSMENT)
+        self.assertIn("kept", detail)
 
     def test_an_assessment_says_how_many_are_marked(self):
         plan = phases.plan(

@@ -80,7 +80,7 @@ class PhaseBarTests(unittest.TestCase):
     def test_a_blocked_phase_carries_its_reason_as_its_tooltip(self):
         bar = self.bar()
         self.assertIn(
-            "Cull first", bar._buttons[phases.ASSESSMENT].toolTip())
+            "has none yet", bar._buttons[phases.ASSESSMENT].toolTip())
 
     def test_replacing_the_phases_keeps_the_pages_own_counter(self):
         bar = self.bar()
