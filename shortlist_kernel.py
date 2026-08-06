@@ -78,6 +78,21 @@ def _chosen_names(
     return chosen, revision
 
 
+def chosen_photographs(
+    report: dict[str, Any], review: dict[str, Any] | None,
+    policy: str = "effective",
+) -> list[str]:
+    """The photographs an assessment under this policy would read.
+
+    Public because an interface has to be able to show what a run is about
+    to cost before it starts, and the only honest answer is the one this
+    module already computes for the run itself. A second copy of the rule
+    in the window would be a copy that drifts.
+    """
+    chosen, _revision = _chosen_names(report, review, policy)
+    return [name for _cluster, name in chosen]
+
+
 def build_professional_candidates(
     report_path: str,
     photos: str,

@@ -41,6 +41,7 @@ from PySide6.QtWidgets import (
 from opencull_gui import phases
 
 from . import theme
+from .widgets import Paragraph
 
 # Blocked and ready must not be told apart by colour alone: the two dimmest
 # readable greys in the palette are nearly the same shade, and the only ones
@@ -146,31 +147,46 @@ class Invitation(QWidget):
     that has not been run has nothing to mark. Showing an empty page in
     either case would be accurate and useless. This says what the phase
     does, what it will cost, and offers to run it.
+
+    Where the run has a selection to work from, ``shows`` carries the
+    photographs in it. Knowing that a run will read twenty-three frames is
+    not the same as seeing which twenty-three, and the second is what a
+    photographer is actually deciding about.
     """
 
     def __init__(self, title: str, body: str, action: str, on_action,
-                 note: str = "", parent: QWidget | None = None):
+                 note: str = "", shows: QWidget | None = None,
+                 parent: QWidget | None = None):
         super().__init__(parent)
         self.setObjectName("page")
-        # Held in the middle of the window rather than pinned to its top
-        # corner: a short message against a wall of empty black reads as a
-        # page that failed to load rather than one with nothing in it yet.
+        self.shows = shows
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(36, 34, 36, 30)
-        outer.addStretch(1)
-        row = QHBoxLayout()
-        row.addStretch(1)
+        outer.setContentsMargins(36, 30, 36, 26)
         card = QFrame()
         card.setObjectName("decision")
-        card.setMaximumWidth(680)
-        row.addWidget(card, 3)
-        row.addStretch(1)
-        outer.addLayout(row)
-        outer.addStretch(2)
+
+        if shows is None:
+            # Held in the middle of the window rather than pinned to its top
+            # corner: a short message against a wall of empty black reads as
+            # a page that failed to load rather than one with nothing in it.
+            outer.addStretch(1)
+            row = QHBoxLayout()
+            row.addStretch(1)
+            card.setMaximumWidth(680)
+            row.addWidget(card, 3)
+            row.addStretch(1)
+            outer.addLayout(row)
+            outer.addStretch(2)
+        else:
+            # With the selection on the page there is nothing to centre: the
+            # words explain the frames underneath them.
+            outer.addWidget(card)
+            outer.addSpacing(14)
+            outer.addWidget(shows, 1)
 
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(30, 26, 30, 26)
-        layout.setSpacing(12)
+        layout.setContentsMargins(30, 24, 30, 22)
+        layout.setSpacing(10)
 
         heading = QLabel(title)
         heading.setObjectName("clusterTitle")
@@ -178,17 +194,17 @@ class Invitation(QWidget):
         heading.setWordWrap(True)
         layout.addWidget(heading)
 
-        lead = QLabel(body)
+        lead = Paragraph(body)
         lead.setObjectName("heroSub")
-        lead.setWordWrap(True)
         lead.setFont(theme.body(11))
+        lead.setMaximumWidth(900)
         layout.addWidget(lead)
 
         if note:
-            caution = QLabel(note)
+            caution = Paragraph(note)
             caution.setObjectName("hint")
-            caution.setWordWrap(True)
             caution.setFont(theme.body(9))
+            caution.setMaximumWidth(900)
             layout.addWidget(caution)
 
         layout.addSpacing(6)

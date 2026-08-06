@@ -41,6 +41,7 @@ from .finetune import FineTunePage
 from .previews import LibraryPreviewLoader, PreviewLoader
 from .providers import ProvidersDialog
 from .review import ReviewPage
+from .sheet import ContactSheet
 from .shell import Invitation, ProjectShell, first_open
 from .shortlist import ShortlistPage
 from .style import StyleDialog, StylePanel
@@ -681,19 +682,22 @@ class Launcher(QMainWindow):
     def _assessment_page(self, bench: Bench):
         if not bench.shortlist_path.is_file():
             culled = bench.culled()
-            frames = len(bench.report.data.get("clusters", []) or [])
+            frames = bench.selection()
+            count = len(frames)
             return Invitation(
                 "This folder has not been assessed",
                 "An assessment judges each frame in the selection for what it "
                 "could become. You then mark the ones worth developing, and "
                 "those are the ones that get editing suggestions.",
-                "Assess the keepers" if culled else "Assess every frame",
+                f"Assess these {count}" if culled else
+                f"Assess all {count} frames",
                 lambda: self.assess_project(bench.project),
-                "Every frame in the selection is read by a model, so this "
-                "costs." if culled else
+                f"These are the {count} frames the cull kept. Each is read by "
+                "a model, so this costs." if culled else
                 "This folder has not been culled, so the selection is every "
-                f"frame in it -- about {frames} model calls rather than one "
-                "per keeper. Culling first is usually cheaper.")
+                f"frame in it -- about {count} model calls rather than one "
+                "per keeper. Culling first is usually cheaper.",
+                shows=ContactSheet(frames, self._loader))
         return ShortlistPage(
             bench.shortlist, bench.shortlist_reviews, self._loader,
             directions=bench.directions)
@@ -750,9 +754,9 @@ class Launcher(QMainWindow):
             return
         bench = self.bench
         culled = bench.culled() if bench is not None else True
-        frames = 0
-        if not culled and bench is not None:
-            frames = len(bench.report.data.get("clusters", []) or [])
+        # The number the question quotes is the number the run will read,
+        # not a count of clusters that happens to match most of the time.
+        frames = 0 if culled or bench is None else len(bench.selection())
         name = str(project.get("name") or Path(
             str(project.get("photos", ""))).name)
         if not culled and not self.confirm_full_assessment(name, frames):

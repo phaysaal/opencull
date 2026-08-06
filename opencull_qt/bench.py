@@ -15,6 +15,7 @@ has no shortlist, and the phase that needed one is the phase that says so.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -137,6 +138,27 @@ class Bench:
             "workspace", lambda: workspace_for(self.report, self.photos.root))
 
     # --- what the phase bar needs to know ---------------------------------
+
+    def selection(self) -> list[str]:
+        """The photographs an assessment of this folder would read.
+
+        Computed by the kernel that will read them rather than by a second
+        rule here, so what the invitation shows and what the run assesses
+        cannot come apart.
+        """
+        from shortlist_kernel import chosen_photographs
+
+        review = default_review_path(self.report_path)
+        value = None
+        if review.is_file():
+            try:
+                value = json.loads(review.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                value = None
+        try:
+            return chosen_photographs(self.report.data, value)
+        except Exception:                            # noqa: BLE001 - absent
+            return []
 
     def culled(self) -> bool:
         """Whether a cull was actually run over this folder.

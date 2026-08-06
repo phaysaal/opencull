@@ -188,6 +188,34 @@ def workspace_title(report, photos_root=None) -> str:
     return stem
 
 
+class Paragraph(QLabel):
+    """A wrapped paragraph that is as tall as its own text.
+
+    A QLabel with wordWrap knows its height only once its width is settled,
+    and the layout holding it asks for a height before that -- so the last
+    line of a two-line paragraph is cut off. Asking Qt for the height at the
+    width the label actually got, each time it gets one, is the only answer
+    that survives the window being resized.
+    """
+
+    def __init__(self, text: str = "", parent=None):
+        super().__init__(text, parent)
+        self.setWordWrap(True)
+
+    def setText(self, text: str) -> None:  # noqa: N802 - Qt naming
+        super().setText(text)
+        self._fit()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        super().resizeEvent(event)
+        self._fit()
+
+    def _fit(self) -> None:
+        width = self.width()
+        if width > 0:
+            self.setMinimumHeight(self.heightForWidth(width))
+
+
 def short_path(value: str) -> str:
     """A path with the home directory written the way people write it."""
     home = str(Path.home())
