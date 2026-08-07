@@ -334,8 +334,8 @@
 
     <figure>
       <div class="plate">
-        <svg viewBox="0 0 1100 1800" role="img"
-             aria-label="Opening a folder writes a selection either way. Culling is optional: a cull is followed by validation, where you keep or drop any frame yourself or accept a whole cluster at once; approving the entire cull in one press is specified but not built. You are then asked whether to move the unselected duplicates to the system trash, which is also specified but not built; either answer leads to the selection. Skipping the cull leads to the selection directly, with every frame in it. You are then asked whether a model should judge the selection. If it should, you choose the criteria it judges under and the assessment proposes a tier for every frame; if not, the flow goes straight to rating. Either way you rate the frames yourself, your tier overruling the model’s while the model’s is kept beside it, and you mark what is worth developing. The personal profile, built separately, feeds the suggestion pass. Suggestions produce four treatments per marked frame, asked for one call per frame or one per scene with the scene's treatments shared, development renders them locally, fine tuning moves their compiled numbers, verification optionally checks a rendering against its promise, and export copies the finished renders out.">
+        <svg viewBox="0 0 1100 1900" role="img"
+             aria-label="Opening a folder writes a selection either way. Culling is optional: a cull is followed by validation, where you keep or drop any frame yourself or accept a whole cluster at once; approving the entire cull in one press is specified but not built. You are then asked whether to move the unselected duplicates to the system trash, which is also specified but not built; either answer leads to the selection. Skipping the cull leads to the selection directly, with every frame in it. You are then asked whether a model should judge the selection. If it should, you choose the criteria it judges under and the assessment proposes a tier for every frame; if not, the flow goes straight to rating. Either way you rate the frames yourself, your tier overruling the model’s while the model’s is kept beside it, and you mark what is worth developing. The personal profile, built separately, feeds the suggestion pass. Suggestions produce four treatments per marked frame, asked for one call per frame or one per scene with the scene's treatments shared, development renders them locally, fine tuning moves their compiled numbers, verification optionally checks a rendering against its promise, and export copies the finished renders out. A planned eighth phase, the debrief, reads the shoot's own evidence and says what to do differently next time.">
 
           <defs>
             <marker id="head" viewBox="0 0 10 10" refX="9" refY="5"
@@ -534,6 +534,12 @@
           <text class="n-title" x="440" y="1698">7 · EXPORT</text>
           <text class="n-sub" x="440" y="1719">Copies renders the manifest already knows</text>
           <text class="n-free" x="440" y="1738">nothing is re-rendered on the way out</text>
+
+          <line class="flow aside" x1="580" y1="1750" x2="580" y2="1790" marker-end="url(#head)" />
+          <rect class="node planned" x="420" y="1792" width="320" height="80" rx="8" />
+          <text class="n-title" x="440" y="1820">8 · DEBRIEF</text>
+          <text class="n-sub" x="440" y="1841">What this shoot says about the next one</text>
+          <text class="n-planned" x="440" y="1860">planned — one call over local aggregates</text>
         </svg>
       </div>
       <figcaption>
@@ -769,6 +775,88 @@
           Saying &ldquo;warm the shadows a little&rdquo; rather than moving the
           shadow control. The compiler already turns prose into bounded
           operations, so the path exists; what is missing is the asking.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>What the evidence makes possible</h2>
+    <p class="prose">
+      Everything above leaves a record: every judgement, every overrule,
+      every promise and its certificate, append-only and bound by hash.
+      These are ideas rather than commitments — but they are cheap here and
+      impossible elsewhere, because no other tool keeps the disagreements.
+      Three of them have reserved homes in the GUI plan.
+    </p>
+    <div class="rules">
+      <div class="rule">
+        <h3>The taste ledger</h3>
+        <p>
+          Every tier you overruled and every slider you pulled back is
+          already on disk. Compiled, it is your taste written down — fed
+          back into future prompts so the model argues less, and shown to
+          you as a portrait of how you actually judge. Reserved a home
+          beside the personal profiles.
+        </p>
+      </div>
+      <div class="rule">
+        <h3>The shoot debrief</h3>
+        <p>
+          Ten axes of judgement per frame, aggregated: which defects
+          repeat, which light scores, what never gets shot. It improves the
+          next shoot, not just this edit. Reserved as phase 8; one call
+          over local aggregates.
+        </p>
+      </div>
+      <div class="rule">
+        <h3>Decision archaeology</h3>
+        <p>
+          &ldquo;Why is this frame in the delivery?&rdquo; reconstructs
+          itself from the chain: kept, assessed, marked, treated, adjusted,
+          verified. Zero calls. Reserved: every frame, everywhere, offers
+          the question.
+        </p>
+      </div>
+      <div class="rule">
+        <h3>Style drift</h3>
+        <p>
+          Profiles are dated. Diffing this year&rsquo;s against last
+          year&rsquo;s is an instrument for the thing photographers care
+          most about and cannot see: their own evolution.
+        </p>
+      </div>
+      <div class="rule">
+        <h3>The client proof sheet</h3>
+        <p>
+          As-shot, treated, the intent in words, the certificate — a
+          shareable page per delivery that shows the craft a client is
+          paying for. Zero calls; the evidence is already the deliverable.
+        </p>
+      </div>
+      <div class="rule">
+        <h3>The jury</h3>
+        <p>
+          Assess contested frames under two stances and surface the
+          disagreements first: the frame artistic loves and professional
+          shrugs at is exactly the one worth your attention. Double cost,
+          on a chosen subset.
+        </p>
+      </div>
+      <div class="rule">
+        <h3>Borrow a look</h3>
+        <p>
+          Point the profile machinery at one finished photograph — &ldquo;move
+          this frame toward that one&rdquo; — and get the look as a bounded,
+          inspectable recipe rather than a preset.
+        </p>
+      </div>
+      <div class="rule">
+        <h3>The budget governor</h3>
+        <p>
+          Set a spend cap per shoot and the app plans the cheapest route
+          through the filter ladder to fit it. Arithmetic over this chart,
+          no calls at all.
         </p>
       </div>
     </div>
