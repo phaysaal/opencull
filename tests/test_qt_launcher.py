@@ -460,7 +460,7 @@ class LauncherWindowTests(unittest.TestCase):
         self.assertEqual(opened.call_args[0][1], phases.ASSESSMENT)
         services.jobs.add_professional.assert_not_called()
 
-    def test_assessing_an_unculled_folder_asks_before_spending(self):
+    def test_assessing_asks_for_the_bar_before_spending(self):
         window, services = self.build(projects=[])
         shoot = Path(tempfile.mkdtemp())
         report_path, photos_path = build_shoot(shoot)
@@ -471,7 +471,7 @@ class LauncherWindowTests(unittest.TestCase):
         self.addCleanup(window.show_projects)
         with mock.patch.object(window.bench, "culled", return_value=False), \
                 mock.patch.object(
-                    window, "confirm_full_assessment", return_value=False) as ask:
+                    window, "ask_criteria", return_value="") as ask:
             window.assess_project(project)
         ask.assert_called_once()
         services.jobs.add_professional.assert_not_called()
@@ -487,13 +487,13 @@ class LauncherWindowTests(unittest.TestCase):
         self.addCleanup(window.show_projects)
         with mock.patch.object(window.bench, "culled", return_value=False), \
                 mock.patch.object(
-                    window, "confirm_full_assessment", return_value=True) as ask:
+                    window, "ask_criteria", return_value="artistic") as ask:
             window.assess_project(project)
         # One cluster per frame in the everything-included selection.
         self.assertEqual(ask.call_args[0][1], 1)
         services.jobs.add_professional.assert_called_once()
 
-    def test_assessing_a_culled_folder_does_not_ask(self):
+    def test_a_culled_folder_is_asked_for_the_bar_too(self):
         window, services = self.build(projects=[])
         shoot = Path(tempfile.mkdtemp())
         report_path, photos_path = build_shoot(shoot)
@@ -503,10 +503,16 @@ class LauncherWindowTests(unittest.TestCase):
         window.open_project(project)
         self.addCleanup(window.show_projects)
         with mock.patch.object(window.bench, "culled", return_value=True), \
-                mock.patch.object(window, "confirm_full_assessment") as ask:
+                mock.patch.object(
+                    window, "ask_criteria", return_value="professional") as ask:
             window.assess_project(project)
-        ask.assert_not_called()
+        # Every run is asked for its bar, culled or not: a tier means nothing
+        # without knowing what it was measured against.
+        ask.assert_called_once()
         services.jobs.add_professional.assert_called_once()
+        self.assertEqual(
+            services.jobs.add_professional.call_args.kwargs["profile"],
+            "professional")
 
     def shoot_project(self, window):
         shoot = Path(tempfile.mkdtemp())
@@ -550,9 +556,11 @@ class LauncherWindowTests(unittest.TestCase):
         window, services = self.build(projects=[])
         shoot = Path(tempfile.mkdtemp())
         report_path, photos_path = build_shoot(shoot)
-        window.assess_project({
-            "id": "p1", "name": "A", "photos": str(photos_path),
-            "report": str(report_path)})
+        with mock.patch.object(
+                window, "ask_criteria", return_value="professional"):
+            window.assess_project({
+                "id": "p1", "name": "A", "photos": str(photos_path),
+                "report": str(report_path)})
         services.jobs.add_professional.assert_called_once()
         arguments = services.jobs.add_professional.call_args
         self.assertEqual(arguments[0][0], str(report_path))

@@ -1,0 +1,794 @@
+<title>Darkimiya — the flow</title>
+
+<style>
+  :root {
+    --ground: #131211;
+    --surface: #1B1918;
+    --raised: #232120;
+    --edge: #302C29;
+    --edge-soft: #262322;
+    --text: #EDE7DE;
+    --muted: #98908A;
+    --faint: #908880;
+    --amber: #FF9B47;
+    --verdigris: #5CB39E;
+    --alarm: #E8735A;
+
+    --display: "Ubuntu Condensed", "Roboto Condensed", "DejaVu Sans Condensed",
+               "Arial Narrow", system-ui, sans-serif;
+    --body: Ubuntu, "Adwaita Sans", Cantarell, "Segoe UI", system-ui, sans-serif;
+    --mono: "Ubuntu Mono", "DejaVu Sans Mono", "SF Mono", ui-monospace, monospace;
+
+    --measure: 68ch;
+    --gap: 1.15rem;
+  }
+
+  @media (prefers-color-scheme: light) {
+    :root {
+      --ground: #EDE7DE;
+      --surface: #E5DDD2;
+      --raised: #DED5C8;
+      --edge: #C6B9A8;
+      --edge-soft: #D6CBBC;
+      --text: #171514;
+      --muted: #6C6158;
+      --faint: #7C7166;
+      --amber: #A9540A;
+      --verdigris: #2C7462;
+      --alarm: #A93F28;
+    }
+  }
+
+  :root[data-theme="light"] {
+    --ground: #EDE7DE;
+    --surface: #E5DDD2;
+    --raised: #DED5C8;
+    --edge: #C6B9A8;
+    --edge-soft: #D6CBBC;
+    --text: #171514;
+    --muted: #6C6158;
+    --faint: #7C7166;
+    --amber: #A9540A;
+    --verdigris: #2C7462;
+    --alarm: #A93F28;
+  }
+
+  :root[data-theme="dark"] {
+    --ground: #131211;
+    --surface: #1B1918;
+    --raised: #232120;
+    --edge: #302C29;
+    --edge-soft: #262322;
+    --text: #EDE7DE;
+    --muted: #98908A;
+    --faint: #908880;
+    --amber: #FF9B47;
+    --verdigris: #5CB39E;
+    --alarm: #E8735A;
+  }
+
+  body {
+    background: var(--ground);
+    color: var(--text);
+    font-family: var(--body);
+    font-size: 16px;
+    line-height: 1.6;
+    margin: 0;
+    padding: 0 1.5rem 5rem;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .sheet {
+    max-width: 1140px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 3.25rem;
+  }
+
+  .prose { max-width: var(--measure); }
+
+  /* --- masthead ---------------------------------------------------- */
+
+  header {
+    display: flex;
+    flex-direction: column;
+    gap: 0.9rem;
+    padding: 3.5rem 0 0;
+  }
+
+  .mark {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    font-family: var(--display);
+    font-size: 0.72rem;
+    letter-spacing: 0.24em;
+    text-transform: uppercase;
+    color: var(--faint);
+  }
+
+  .mark::before {
+    content: "";
+    width: 9px;
+    height: 9px;
+    border-radius: 2px;
+    background: var(--amber);
+    flex: none;
+  }
+
+  h1 {
+    font-family: var(--display);
+    font-weight: 700;
+    font-size: clamp(2.3rem, 6vw, 3.6rem);
+    line-height: 1.02;
+    letter-spacing: 0.005em;
+    margin: 0;
+    text-wrap: balance;
+  }
+
+  .thesis {
+    font-size: 1.12rem;
+    color: var(--muted);
+    margin: 0;
+    max-width: var(--measure);
+    text-wrap: pretty;
+  }
+
+  /* --- sections ------------------------------------------------------ */
+
+  section {
+    display: flex;
+    flex-direction: column;
+    gap: var(--gap);
+  }
+
+  h2 {
+    font-family: var(--display);
+    font-size: 0.74rem;
+    letter-spacing: 0.26em;
+    text-transform: uppercase;
+    color: var(--faint);
+    margin: 0;
+    padding-bottom: 0.7rem;
+    border-bottom: 1px solid var(--edge-soft);
+    font-weight: 600;
+  }
+
+  p { margin: 0; text-wrap: pretty; }
+
+  /* --- figures -------------------------------------------------------- */
+
+  figure {
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+  }
+
+  .plate {
+    overflow-x: auto;
+    background: var(--surface);
+    border: 1px solid var(--edge-soft);
+    border-radius: 12px;
+    padding: 1.4rem 1.2rem;
+  }
+
+  .plate svg {
+    display: block;
+    width: 100%;
+    min-width: 760px;
+    height: auto;
+    color: var(--muted);
+  }
+
+  figcaption {
+    font-size: 0.88rem;
+    color: var(--muted);
+    max-width: var(--measure);
+  }
+
+  /* Diagram vocabulary. Amber marks a step that spends a model call;
+     everything unmarked runs on this machine for nothing. */
+  .node { fill: var(--raised); stroke: var(--edge); stroke-width: 1; }
+  .node.spends { stroke: var(--amber); }
+  .node.merge { fill: none; stroke: var(--edge); stroke-dasharray: 4 3; }
+  /* Specified here, not yet reachable in the window. Drawn hollow so the
+     chart never implies a step exists because it was described. */
+  .node.planned { fill: none; stroke: var(--faint); stroke-dasharray: 6 4; }
+  .n-planned { font-family: var(--body); font-size: 11.5px; fill: var(--faint); }
+  .flow { fill: none; stroke: currentColor; stroke-width: 1.4; }
+  .flow.aside { stroke-dasharray: 5 4; }
+  .n-title {
+    font-family: var(--display);
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 0.09em;
+    fill: var(--text);
+  }
+  .n-sub { font-family: var(--body); font-size: 11.5px; fill: var(--muted); }
+  .n-cost { font-family: var(--body); font-size: 11.5px; fill: var(--amber); }
+  .n-free { font-family: var(--body); font-size: 11.5px; fill: var(--verdigris); }
+  .e-label { font-family: var(--body); font-size: 11px; fill: var(--faint); }
+  .d-text {
+    font-family: var(--display);
+    font-size: 13.5px;
+    letter-spacing: 0.06em;
+    fill: var(--text);
+  }
+
+  /* --- tables --------------------------------------------------------- */
+
+  .grid { overflow-x: auto; }
+
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    min-width: 620px;
+    font-size: 0.94rem;
+  }
+
+  thead th {
+    font-family: var(--display);
+    font-size: 0.68rem;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--faint);
+    text-align: left;
+    font-weight: 600;
+    padding: 0 0.9rem 0.6rem 0;
+    border-bottom: 1px solid var(--edge);
+  }
+
+  tbody td {
+    padding: 0.72rem 0.9rem 0.72rem 0;
+    border-bottom: 1px solid var(--edge-soft);
+    vertical-align: top;
+    color: var(--muted);
+  }
+
+  tbody td:first-child {
+    color: var(--text);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+
+  tbody tr:last-child td { border-bottom: none; }
+
+  .spend { color: var(--amber); white-space: nowrap; }
+  .free { color: var(--verdigris); white-space: nowrap; }
+
+  /* --- rules ---------------------------------------------------------- */
+
+  .rules {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 1px;
+    background: var(--edge-soft);
+    border: 1px solid var(--edge-soft);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+
+  .rule {
+    background: var(--surface);
+    padding: 1.15rem 1.2rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+
+  .rule h3 {
+    font-family: var(--display);
+    font-size: 0.98rem;
+    letter-spacing: 0.03em;
+    margin: 0;
+    color: var(--text);
+    font-weight: 700;
+  }
+
+  .rule p { font-size: 0.9rem; color: var(--muted); }
+
+  code {
+    font-family: var(--mono);
+    font-size: 0.88em;
+    color: var(--text);
+    background: var(--raised);
+    padding: 0.1em 0.36em;
+    border-radius: 4px;
+  }
+
+  footer {
+    font-family: var(--mono);
+    font-size: 0.8rem;
+    color: var(--faint);
+    border-top: 1px solid var(--edge-soft);
+    padding-top: 1.1rem;
+    max-width: var(--measure);
+  }
+
+  a { color: var(--amber); }
+  :focus-visible { outline: 2px solid var(--amber); outline-offset: 3px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+</style>
+
+<div class="sheet">
+
+  <header>
+    <div class="mark">Darkimiya · process sheet</div>
+    <h1>How a shoot moves through the darkroom</h1>
+    <p class="thesis">
+      Seven phases, in order, with the gates between them. Amber marks every
+      step that spends a model call; everything else runs on this machine for
+      nothing. Nothing anywhere in it deletes a photograph.
+    </p>
+  </header>
+
+  <section>
+    <h2>The flow</h2>
+
+    <figure>
+      <div class="plate">
+        <svg viewBox="0 0 1100 1800" role="img"
+             aria-label="Opening a folder writes a selection either way. Culling is optional: a cull is followed by validation, where you keep or drop any frame yourself or accept a whole cluster at once; approving the entire cull in one press is specified but not built. You are then asked whether to move the unselected duplicates to the system trash, which is also specified but not built; either answer leads to the selection. Skipping the cull leads to the selection directly, with every frame in it. You are then asked whether a model should judge the selection. If it should, you choose the criteria it judges under and the assessment proposes a tier for every frame; if not, the flow goes straight to rating. Either way you rate the frames yourself, your tier overruling the model’s while the model’s is kept beside it, and you mark what is worth developing. The personal profile, built separately, feeds the suggestion pass. Suggestions produce four treatments per marked frame, development renders them locally, fine tuning moves their compiled numbers, verification optionally checks a rendering against its promise, and export copies the finished renders out.">
+
+          <defs>
+            <marker id="head" viewBox="0 0 10 10" refX="9" refY="5"
+                    markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor" />
+            </marker>
+          </defs>
+
+          <!-- legend -->
+          <line class="flow" x1="20" y1="30" x2="54" y2="30" stroke="var(--amber)" />
+          <text class="e-label" x="64" y="34">spends a model call</text>
+          <line class="flow" x1="20" y1="54" x2="54" y2="54" />
+          <text class="e-label" x="64" y="58">runs here, for nothing</text>
+          <line class="flow" x1="20" y1="78" x2="54" y2="78"
+                stroke="var(--faint)" stroke-dasharray="6 4" />
+          <text class="e-label" x="64" y="82">specified, not built yet</text>
+
+          <!-- open a folder -->
+          <rect class="node" x="420" y="24" width="320" height="52" rx="8" />
+          <text class="n-title" x="580" y="50" text-anchor="middle">OPEN A FOLDER</text>
+          <text class="n-sub" x="580" y="68" text-anchor="middle">a selection is written either way</text>
+          <line class="flow" x1="580" y1="76" x2="580" y2="106" marker-end="url(#head)" />
+
+          <!-- cull or not -->
+          <polygon class="node" points="580,108 700,150 580,192 460,150" />
+          <text class="d-text" x="580" y="155" text-anchor="middle">Cull it first?</text>
+
+          <text class="e-label" x="592" y="212">yes</text>
+          <line class="flow" x1="580" y1="192" x2="580" y2="226" marker-end="url(#head)" />
+
+          <text class="e-label" x="716" y="142">no</text>
+          <path class="flow" d="M 700 150 H 960 V 226" marker-end="url(#head)" />
+
+          <!-- 1 cull -->
+          <rect class="node spends" x="420" y="228" width="320" height="98" rx="8" />
+          <text class="n-title" x="440" y="256">1 · CULL</text>
+          <text class="n-sub" x="440" y="277">Groups the near-duplicates and proposes</text>
+          <text class="n-sub" x="440" y="294">one keeper from each group</text>
+          <text class="n-cost" x="440" y="315">one call per photograph</text>
+
+          <!-- no cull -->
+          <rect class="node" x="850" y="228" width="220" height="98" rx="8" />
+          <text class="n-title" x="868" y="256">NO CULL</text>
+          <text class="n-sub" x="868" y="277">Every frame stays in</text>
+          <text class="n-sub" x="868" y="294">the selection</text>
+          <text class="n-free" x="868" y="315">written locally</text>
+
+          <line class="flow" x1="580" y1="326" x2="580" y2="366" marker-end="url(#head)" />
+
+          <!-- validate -->
+          <rect class="node" x="420" y="368" width="320" height="98" rx="8" />
+          <text class="n-title" x="440" y="396">VALIDATE THE CULL</text>
+          <text class="n-sub" x="440" y="417">Keep or drop any frame yourself, or take</text>
+          <text class="n-sub" x="440" y="434">a whole group as proposed</text>
+          <text class="n-free" x="440" y="455">nothing is decided until you agree</text>
+
+          <!-- approve the lot -->
+          <rect class="node planned" x="40" y="368" width="250" height="98" rx="8" />
+          <text class="n-title" x="58" y="396">APPROVE THE LOT</text>
+          <text class="n-sub" x="58" y="417">Take every proposal</text>
+          <text class="n-sub" x="58" y="434">in one press</text>
+          <text class="n-planned" x="58" y="455">not built yet</text>
+          <text class="e-label" x="355" y="409" text-anchor="middle">instead of group by group</text>
+          <line class="flow aside" x1="290" y1="417" x2="414" y2="417" marker-end="url(#head)" />
+
+          <line class="flow" x1="580" y1="466" x2="580" y2="506" marker-end="url(#head)" />
+
+          <!-- trash or not -->
+          <polygon class="node" points="580,508 720,550 580,592 440,550" />
+          <text class="d-text" x="580" y="555" text-anchor="middle">Trash the rejects?</text>
+
+          <text class="e-label" x="736" y="542">yes</text>
+          <path class="flow" d="M 720 550 H 960 V 626" marker-end="url(#head)" />
+          <text class="e-label" x="592" y="616">no, leave them where they are</text>
+          <line class="flow" x1="580" y1="592" x2="580" y2="724" />
+
+          <!-- trash -->
+          <rect class="node planned" x="850" y="628" width="220" height="80" rx="8" />
+          <text class="n-title" x="868" y="656">TO THE TRASH</text>
+          <text class="n-sub" x="868" y="676">The unselected only,</text>
+          <text class="n-sub" x="868" y="693">and reversible</text>
+
+          <path class="flow" d="M 960 708 V 724 H 580" />
+          <line class="flow" x1="580" y1="724" x2="580" y2="746" marker-end="url(#head)" />
+
+          <!-- merge from the no-cull path -->
+          <path class="flow" d="M 960 326 V 356 H 790 V 724" />
+
+          <!-- the selection -->
+          <rect class="node merge" x="420" y="748" width="320" height="50" rx="8" />
+          <text class="n-title" x="580" y="774" text-anchor="middle">THE SELECTION</text>
+          <text class="n-sub" x="580" y="791" text-anchor="middle">your keepers · the models’ · or everything</text>
+
+          <line class="flow" x1="580" y1="798" x2="580" y2="834" marker-end="url(#head)" />
+
+          <!-- judged by a model, or not at all -->
+          <polygon class="node" points="580,836 740,878 580,920 420,878" />
+          <text class="d-text" x="580" y="883" text-anchor="middle">Have a model judge them?</text>
+
+          <text class="e-label" x="592" y="944">yes</text>
+          <line class="flow" x1="580" y1="920" x2="580" y2="956" marker-end="url(#head)" />
+
+          <text class="e-label" x="752" y="870">no, rate them yourself</text>
+          <path class="flow" d="M 740 878 H 960 V 1290 H 746" marker-end="url(#head)" />
+
+          <!-- choose the criteria -->
+          <rect class="node" x="420" y="958" width="320" height="98" rx="8" />
+          <text class="n-title" x="440" y="986">CHOOSE THE CRITERIA</text>
+          <text class="n-sub" x="440" y="1007">Judge as professional · artistic ·</text>
+          <text class="n-sub" x="440" y="1024">documentary · family</text>
+          <text class="n-planned" x="440" y="1045">which axes · releasable or not — not built yet</text>
+
+          <line class="flow" x1="580" y1="1056" x2="580" y2="1098" marker-end="url(#head)" />
+
+          <!-- 2 assessment -->
+          <rect class="node spends" x="420" y="1100" width="320" height="98" rx="8" />
+          <text class="n-title" x="440" y="1128">2 · ASSESSMENT</text>
+          <text class="n-sub" x="440" y="1149">Judges every frame of the selection and</text>
+          <text class="n-sub" x="440" y="1166">proposes a tier for each</text>
+          <text class="n-cost" x="440" y="1187">one call per frame in the selection</text>
+
+          <line class="flow" x1="580" y1="1198" x2="580" y2="1240" marker-end="url(#head)" />
+
+          <!-- rate them yourself -->
+          <rect class="node" x="420" y="1242" width="320" height="98" rx="8" />
+          <text class="n-title" x="440" y="1270">RATE THEM YOURSELF</text>
+          <text class="n-sub" x="440" y="1291">Your tier overrules; the model’s is kept beside</text>
+          <text class="n-sub" x="440" y="1308">it. You mark what is worth developing.</text>
+          <text class="n-free" x="440" y="1329">the marks are what the suggestion pass reads</text>
+
+          <line class="flow" x1="580" y1="1340" x2="580" y2="1380" marker-end="url(#head)" />
+
+          <!-- 3 profile -->
+          <rect class="node spends" x="40" y="1382" width="250" height="98" rx="8" />
+          <text class="n-title" x="58" y="1410">3 · PERSONAL PROFILE</text>
+          <text class="n-sub" x="58" y="1431">Reads photographs you</text>
+          <text class="n-sub" x="58" y="1448">already edited yourself</text>
+          <text class="n-cost" x="58" y="1469">one call per example</text>
+          <text class="e-label" x="355" y="1423" text-anchor="middle">the personal treatment</text>
+          <line class="flow aside" x1="290" y1="1431" x2="414" y2="1431" marker-end="url(#head)" />
+
+          <!-- 4 suggestions -->
+          <rect class="node spends" x="420" y="1382" width="320" height="98" rx="8" />
+          <text class="n-title" x="440" y="1410">4 · EDITING SUGGESTIONS</text>
+          <text class="n-sub" x="440" y="1431">Four treatments for every marked frame:</text>
+          <text class="n-sub" x="440" y="1448">intent · instructions · recipe · guardrails</text>
+          <text class="n-cost" x="440" y="1469">one call per marked frame</text>
+
+          <line class="flow" x1="580" y1="1480" x2="580" y2="1520" marker-end="url(#head)" />
+
+          <!-- 5 development -->
+          <rect class="node" x="420" y="1522" width="320" height="98" rx="8" />
+          <text class="n-title" x="440" y="1550">5 · DEVELOPMENT</text>
+          <text class="n-sub" x="440" y="1571">Compiles the prose into bounded numbers,</text>
+          <text class="n-sub" x="440" y="1588">decodes the frame, renders the proof.</text>
+          <text class="n-free" x="440" y="1609">the baseline needs no suggestion</text>
+
+          <!-- 6 fine tuning -->
+          <rect class="node" x="850" y="1522" width="220" height="98" rx="8" />
+          <text class="n-title" x="868" y="1550">6 · FINE TUNING</text>
+          <text class="n-sub" x="868" y="1571">Moves those numbers,</text>
+          <text class="n-sub" x="868" y="1588">never past their bounds</text>
+          <text class="n-free" x="868" y="1609">runs here</text>
+
+          <text class="e-label" x="795" y="1546" text-anchor="middle">its 17 controls</text>
+          <line class="flow" x1="740" y1="1554" x2="844" y2="1554" marker-end="url(#head)" />
+          <text class="e-label" x="795" y="1607" text-anchor="middle">its own version</text>
+          <line class="flow" x1="850" y1="1589" x2="746" y2="1589" marker-end="url(#head)" />
+
+          <!-- verify and export -->
+          <line class="flow" x1="580" y1="1620" x2="580" y2="1668" marker-end="url(#head)" />
+          <text class="e-label" x="770" y="1640" text-anchor="middle">optional</text>
+          <path class="flow aside" d="M 580 1648 H 960 V 1668" marker-end="url(#head)" />
+
+          <rect class="node spends" x="850" y="1670" width="220" height="80" rx="8" />
+          <text class="n-title" x="868" y="1698">VERIFY</text>
+          <text class="n-sub" x="868" y="1719">Did it do what it</text>
+          <text class="n-cost" x="868" y="1738">promised? one call</text>
+
+          <rect class="node" x="420" y="1670" width="320" height="80" rx="8" />
+          <text class="n-title" x="440" y="1698">7 · EXPORT</text>
+          <text class="n-sub" x="440" y="1719">Copies renders the manifest already knows</text>
+          <text class="n-free" x="440" y="1738">nothing is re-rendered on the way out</text>
+        </svg>
+      </div>
+      <figcaption>
+        Neither run decides anything on its own. A cull proposes and you
+        validate; an assessment proposes a tier and you rate. Both can be
+        skipped, and skipping does not skip the work — it moves it to you.
+        Skipping the cull in particular makes the selection every frame in the
+        folder, which is why the assessment then costs one call per photograph
+        instead of one per keeper. The profile is drawn to the side because it
+        belongs to you rather than to this shoot: built once, it feeds the
+        suggestion pass for every folder afterwards.
+      </figcaption>
+    </figure>
+  </section>
+
+  <section>
+    <h2>What each phase reads and writes</h2>
+    <div class="grid">
+      <table>
+        <thead>
+          <tr>
+            <th>Phase</th>
+            <th>Reads</th>
+            <th>Writes</th>
+            <th>Cost</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>1 · Cull</td>
+            <td>Every photograph in the folder</td>
+            <td>A report of clusters and proposed keepers</td>
+            <td class="spend">1 per photograph</td>
+          </tr>
+          <tr>
+            <td>· Validate</td>
+            <td>What the cull proposed</td>
+            <td>Your keep-and-drop decisions, as a review beside the report</td>
+            <td class="free">none</td>
+          </tr>
+          <tr>
+            <td>2 · Assessment</td>
+            <td>The selection, under the criteria you chose</td>
+            <td>A shortlist: ten axes, a tier and a score per frame</td>
+            <td class="spend">1 per frame</td>
+          </tr>
+          <tr>
+            <td>· Rate</td>
+            <td>Whatever the assessment proposed, if anything did</td>
+            <td>Your tier and your marks, beside the shortlist rather than over it</td>
+            <td class="free">none</td>
+          </tr>
+          <tr>
+            <td>3 · Personal profile</td>
+            <td>Finished photographs you choose, up to 64</td>
+            <td>A style profile, held for you rather than for a shoot</td>
+            <td class="spend">1 per example</td>
+          </tr>
+          <tr>
+            <td>4 · Editing suggestions</td>
+            <td>The shortlist, your marks, your profile</td>
+            <td>Four treatments per marked frame — standard, signature, creative, personal</td>
+            <td class="spend">1 per marked frame</td>
+          </tr>
+          <tr>
+            <td>5 · Development</td>
+            <td>A treatment and the frame itself</td>
+            <td>A bounded proof on screen; a full-size render when you ask</td>
+            <td class="free">none</td>
+          </tr>
+          <tr>
+            <td>6 · Fine tuning</td>
+            <td>The operations a treatment compiled into</td>
+            <td>An adjusted render, registered as its own version</td>
+            <td class="free">none</td>
+          </tr>
+          <tr>
+            <td>7 · Export</td>
+            <td>Renders the manifest already knows about</td>
+            <td>Copies, wherever you send them</td>
+            <td class="free">none</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>Specified here, not built yet</h2>
+    <p class="prose">
+      Two steps in the cull region are drawn hollow because the window cannot
+      reach them today. They are on the page so the intended flow is legible,
+      not to suggest they are finished.
+    </p>
+    <div class="rules">
+      <div class="rule">
+        <h3>Approve the whole cull at once</h3>
+        <p>
+          Today a proposal is taken group by group — <code>Accept AI</code> per
+          cluster, or frame by frame. There is no single press that accepts
+          every group, which is the natural thing to want when the cull was
+          simply right.
+        </p>
+      </div>
+      <div class="rule">
+        <h3>Move the rejects to the trash</h3>
+        <p>
+          The machinery exists and is careful: it refuses any scope but the
+          unselected frames, uses the platform&rsquo;s own trash so the move is
+          reversible, and records a batch that can be rolled back. Nothing in
+          the window calls it yet.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>The gates</h2>
+    <p class="prose">
+      A phase is closed only when it genuinely has no input. Nothing is closed
+      to protect you from a bad photograph, and closing something always comes
+      with the sentence that says how to open it.
+    </p>
+    <div class="grid">
+      <table>
+        <thead>
+          <tr>
+            <th>Phase</th>
+            <th>Open when</th>
+            <th>What it says when it is shut</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>1 · Cull</td>
+            <td>The folder is on disk</td>
+            <td>The photographs folder is not on disk.</td>
+          </tr>
+          <tr>
+            <td>2 · Assessment</td>
+            <td>A selection exists</td>
+            <td>An assessment reads a selection, and this folder has none yet.</td>
+          </tr>
+          <tr>
+            <td>3 · Personal profile</td>
+            <td>Always</td>
+            <td>Never shut — it is yours, not this shoot's</td>
+          </tr>
+          <tr>
+            <td>4 · Editing suggestions</td>
+            <td>Assessed, and at least one frame marked</td>
+            <td>Nothing is marked as worth developing. Mark frames in the assessment first.</td>
+          </tr>
+          <tr>
+            <td>5 · Development</td>
+            <td>Always</td>
+            <td>Never gated on the AI — the calibrated baseline needs no suggestion</td>
+          </tr>
+          <tr>
+            <td>6 · Fine tuning</td>
+            <td>A treatment exists to move</td>
+            <td>Fine tuning moves the numbers a treatment compiled into, so there has to be a treatment.</td>
+          </tr>
+          <tr>
+            <td>7 · Export</td>
+            <td>Something has been rendered</td>
+            <td>There is nothing rendered to deliver yet. Develop a frame first.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>How a RAW frame gets decoded</h2>
+
+    <figure>
+      <div class="plate">
+        <svg viewBox="0 0 940 290" role="img"
+             aria-label="A RAW frame is decoded by darktable when darktable-cli is installed; otherwise by OpenCull's own LibRaw baseline when dcraw_emu is installed; otherwise the camera's embedded JPEG is used, which the window states plainly is a judgement already made rather than a development.">
+          <defs>
+            <marker id="head2" viewBox="0 0 10 10" refX="9" refY="5"
+                    markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor" />
+            </marker>
+          </defs>
+
+          <rect class="node" x="20" y="112" width="170" height="62" rx="8" />
+          <text class="n-title" x="105" y="140" text-anchor="middle">A RAW FRAME</text>
+          <text class="n-sub" x="105" y="159" text-anchor="middle">to be developed</text>
+
+          <path class="flow" d="M 190 143 H 250 V 54 H 334" marker-end="url(#head2)" />
+          <path class="flow" d="M 190 143 H 334" marker-end="url(#head2)" />
+          <path class="flow" d="M 190 143 H 250 V 232 H 334" marker-end="url(#head2)" />
+
+          <text class="e-label" x="340" y="18">if darktable-cli is installed</text>
+          <rect class="node" x="340" y="24" width="560" height="60" rx="8" />
+          <text class="n-title" x="358" y="50">DARKTABLE</text>
+          <text class="n-sub" x="358" y="70">a RAW, demosaiced by darktable</text>
+
+          <text class="e-label" x="340" y="196">otherwise, and the window says so plainly</text>
+          <rect class="node" x="340" y="202" width="560" height="60" rx="8" />
+          <text class="n-title" x="358" y="228">THE CAMERA'S EMBEDDED JPEG</text>
+          <text class="n-sub" x="358" y="248">a judgement already made, not a development</text>
+
+          <text class="e-label" x="340" y="108">otherwise, if dcraw_emu is installed</text>
+          <rect class="node" x="340" y="114" width="560" height="60" rx="8" />
+          <text class="n-title" x="358" y="140">OPENCULL · LIBRAW BASELINE</text>
+          <text class="n-sub" x="358" y="160">scene-linear Rec.2020, deterministic</text>
+        </svg>
+      </div>
+      <figcaption>
+        The three are not equivalent and the window never implies they are: it
+        names the decoder it is about to use before it renders, so a proof made
+        from the camera's own rendering is never mistaken for a development.
+      </figcaption>
+    </figure>
+  </section>
+
+  <section>
+    <h2>What never happens</h2>
+    <div class="rules">
+      <div class="rule">
+        <h3>Nothing deletes a photograph</h3>
+        <p>
+          Source photographs are opened read-only. Removing a folder removes
+          the listing; culling only proposes.
+        </p>
+      </div>
+      <div class="rule">
+        <h3>An export never overwrites</h3>
+        <p>
+          If the name is taken the copy takes the next free one, and the page
+          says which name it used.
+        </p>
+      </div>
+      <div class="rule">
+        <h3>The manifest only grows</h3>
+        <p>
+          Every render, certificate and delivery is appended as evidence. An
+          earlier revision is never rewritten.
+        </p>
+      </div>
+      <div class="rule">
+        <h3>Guardrails can be read, not moved</h3>
+        <p>
+          A promise the treatment made is what verification checks. Switching
+          one off would leave a certificate judging a claim that no longer
+          holds.
+        </p>
+      </div>
+      <div class="rule">
+        <h3>Adjustments stay inside the bounds</h3>
+        <p>
+          The seventeen controls use the compiler's own ranges, so a value
+          refused from a model is refused from a person.
+        </p>
+      </div>
+      <div class="rule">
+        <h3>The same inputs make the same file</h3>
+        <p>
+          Renders are content-addressed, so nothing is rendered twice and an
+          adjusted proof never overwrites the suggested one.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    Drawn from the code, not from memory: seven phases, four treatments, ten
+    assessment axes, seventeen bounded controls, sixty-four style examples at
+    most, proofs bounded at 1600px.
+  </footer>
+
+</div>

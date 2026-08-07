@@ -12,6 +12,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QGuiApplication, QIcon
 from PySide6.QtWidgets import (
+    QDialog,
     QFileDialog,
     QFrame,
     QGridLayout,
@@ -36,6 +37,7 @@ from scan import classify_folder
 
 from . import theme
 from .bench import Bench
+from .criteria import CriteriaDialog
 from .develop import DevelopPage
 from .export import ExportPage
 from .finetune import FineTunePage
@@ -760,56 +762,46 @@ class Launcher(QMainWindow):
             return
         bench = self.bench
         culled = bench.culled() if bench is not None else True
-        # The number the question quotes is the number the run will read,
-        # not a count of clusters that happens to match most of the time.
-        frames = 0 if culled or bench is None else len(bench.selection())
+        # The number quoted is the number the run will read, not a count of
+        # clusters that happens to match most of the time.
+        frames = len(bench.selection()) if bench is not None else 0
         name = str(project.get("name") or Path(
             str(project.get("photos", ""))).name)
-        if not culled and not self.confirm_full_assessment(name, frames):
+        stance = self.ask_criteria(name, frames, culled)
+        if not stance:
             return
         photos = str(project.get("photos", ""))
         review = default_review_path(report_path)
         try:
             self.services.jobs.add_professional(
                 str(report_path), photos,
-                review=str(review) if review.is_file() else "")
+                review=str(review) if review.is_file() else "",
+                profile=stance)
         except Exception as exc:
             self._say(str(exc), "alarm")
             self.refresh()
             return
+        self.stance = stance
         self._say(
-            f"Assessing {name}. "
-            + ("Every frame the cull kept is read for its editing potential"
-               if culled else
-               f"All {frames} frames are read for their editing potential")
+            f"Assessing {name} against the {stance} bar. "
+            + ("Every frame the cull kept is read"
+               if culled else f"All {frames} frames are read")
             + "; the frames you then mark are the ones that get editing "
             "suggestions.", "ok")
         self.refresh()
 
-    def confirm_full_assessment(self, name: str, frames: int) -> bool:
-        """Ask before assessing a folder nothing has narrowed.
+    def ask_criteria(self, name: str, frames: int, culled: bool) -> str:
+        """Ask what the shoot is judged by, and confirm the spend with it.
 
-        The number is the point. "This costs" is a warning nobody weighs;
-        "about 23 calls instead of one per keeper" is one they can.
+        Returns the chosen stance, or an empty string if the run was called
+        off. One dialog rather than two: choosing the bar and agreeing to
+        pay for it are the same decision.
         """
-        box = QMessageBox(self)
-        box.setWindowTitle("Assess every frame?")
-        box.setIcon(QMessageBox.Icon.Warning)
-        box.setText(f"{name} has not been culled.")
-        box.setInformativeText(
-            f"Its selection is therefore every frame in the folder, so this "
-            f"reads about {frames} photograph"
-            f"{'' if frames == 1 else 's'} -- one model call each -- rather "
-            "than one per keeper.\n\n"
-            "Culling first narrows the folder and is usually cheaper. "
-            "Assessing everything is a legitimate choice if you want the "
-            "judgement on all of it.")
-        assess = box.addButton(
-            f"Assess all {frames}", QMessageBox.ButtonRole.DestructiveRole)
-        cancel = box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
-        box.setDefaultButton(cancel)
-        box.exec()
-        return box.clickedButton() is assess
+        dialog = CriteriaDialog(
+            name, frames, culled, getattr(self, "stance", ""), self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return ""
+        return dialog.stance()
 
     def rate_by_hand(self, bench: Bench) -> None:
         """Open the assessment with nobody's opinion in it but your own.
