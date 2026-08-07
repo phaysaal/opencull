@@ -127,14 +127,43 @@ class SuggestionsPageTests(unittest.TestCase):
 class AskingTests(SuggestionsPageTests):
     """Asking again costs a call per frame, so the scope is put to the user."""
 
-    def test_asking_with_nothing_answered_asks_for_all_of_them(self):
+    def test_a_fresh_ask_offers_the_scene_and_per_frame_prices(self):
+        # A.JPG and B.JPG share a cluster, so they share a scene: the ask
+        # offers one call instead of two, and the photographer chooses.
         page = self.page(marked=(NAMES[0], NAMES[1]), suggested=False)
+        asked = []
+        page.suggested.connect(lambda output, photos: asked.append(photos))
+        with mock.patch.object(
+                page, "_ask_scope", return_value="all") as scope:
+            page.suggest()
+        scope.assert_called_once_with(2, 0, 1)
+        self.assertEqual(asked, [sorted([NAMES[0], NAMES[1]])])
+
+    def test_choosing_scenes_asks_only_the_representatives(self):
+        from opencull_gui import scenes
+
+        page = self.page(marked=(NAMES[0], NAMES[1]), suggested=False)
+        asked = []
+        page.suggested.connect(lambda output, photos: asked.append(photos))
+        with mock.patch.object(page, "_ask_scope", return_value="scene"):
+            page.suggest()
+        # One scene, so one call -- for its best-ranked frame.
+        self.assertEqual(asked, [[NAMES[0]]])
+        # And the sharing the photographer agreed to is on disk, bound to
+        # this shortlist by hash.
+        plan = scenes.plan_path(
+            page.directions.recipes, page.shortlist.path.stem)
+        self.assertTrue(plan.is_file())
+
+    def test_a_shoot_with_no_saving_is_not_asked_about_scenes(self):
+        # One marked frame is one scene: no choice worth interrupting for.
+        page = self.page(marked=(NAMES[0],), suggested=False)
         asked = []
         page.suggested.connect(lambda output, photos: asked.append(photos))
         with mock.patch.object(page, "_ask_scope") as scope:
             page.suggest()
         scope.assert_not_called()
-        self.assertEqual(asked, [sorted([NAMES[0], NAMES[1]])])
+        self.assertEqual(asked, [[NAMES[0]]])
 
     def test_asking_when_some_are_answered_offers_only_the_rest(self):
         page = self.page(marked=(NAMES[0], NAMES[1]), answered=(NAMES[0],))

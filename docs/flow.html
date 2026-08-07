@@ -335,7 +335,7 @@
     <figure>
       <div class="plate">
         <svg viewBox="0 0 1100 1800" role="img"
-             aria-label="Opening a folder writes a selection either way. Culling is optional: a cull is followed by validation, where you keep or drop any frame yourself or accept a whole cluster at once; approving the entire cull in one press is specified but not built. You are then asked whether to move the unselected duplicates to the system trash, which is also specified but not built; either answer leads to the selection. Skipping the cull leads to the selection directly, with every frame in it. You are then asked whether a model should judge the selection. If it should, you choose the criteria it judges under and the assessment proposes a tier for every frame; if not, the flow goes straight to rating. Either way you rate the frames yourself, your tier overruling the model’s while the model’s is kept beside it, and you mark what is worth developing. The personal profile, built separately, feeds the suggestion pass. Suggestions produce four treatments per marked frame, development renders them locally, fine tuning moves their compiled numbers, verification optionally checks a rendering against its promise, and export copies the finished renders out.">
+             aria-label="Opening a folder writes a selection either way. Culling is optional: a cull is followed by validation, where you keep or drop any frame yourself or accept a whole cluster at once; approving the entire cull in one press is specified but not built. You are then asked whether to move the unselected duplicates to the system trash, which is also specified but not built; either answer leads to the selection. Skipping the cull leads to the selection directly, with every frame in it. You are then asked whether a model should judge the selection. If it should, you choose the criteria it judges under and the assessment proposes a tier for every frame; if not, the flow goes straight to rating. Either way you rate the frames yourself, your tier overruling the model’s while the model’s is kept beside it, and you mark what is worth developing. The personal profile, built separately, feeds the suggestion pass. Suggestions produce four treatments per marked frame, asked for one call per frame or one per scene with the scene's treatments shared, development renders them locally, fine tuning moves their compiled numbers, verification optionally checks a rendering against its promise, and export copies the finished renders out.">
 
           <defs>
             <marker id="head" viewBox="0 0 10 10" refX="9" refY="5"
@@ -496,7 +496,7 @@
           <text class="n-title" x="440" y="1410">4 · EDITING SUGGESTIONS</text>
           <text class="n-sub" x="440" y="1431">Four treatments for every marked frame:</text>
           <text class="n-sub" x="440" y="1448">intent · instructions · recipe · guardrails</text>
-          <text class="n-cost" x="440" y="1469">one call per marked frame</text>
+          <text class="n-cost" x="440" y="1469">one call per frame — or one per scene, shared</text>
 
           <line class="flow" x1="580" y1="1480" x2="580" y2="1520" marker-end="url(#head)" />
 
@@ -544,7 +544,10 @@
         folder, which is why the assessment then costs one call per photograph
         instead of one per keeper. The profile is drawn to the side because it
         belongs to you rather than to this shoot: built once, it feeds the
-        suggestion pass for every folder afterwards.
+        suggestion pass for every folder afterwards. And the arrows only look
+        one-way: every phase stays open after it has run, because seeing a
+        render often changes the marks. The bar above the window is a map,
+        not a corridor.
       </figcaption>
     </figure>
   </section>
@@ -628,7 +631,9 @@
         argument. A free filter in front of a paid one is worth more than any
         saving inside the paid one, because it removes whole calls rather
         than making them cheaper. Both prefilters are specified and neither is
-        built; today the cull reads the whole folder.
+        built; today the cull reads the whole folder. Scene-level suggestions,
+        which are built, cut the last stage the same way: one call per scene,
+        with the treatment shared by every marked frame in it.
       </figcaption>
     </figure>
   </section>
@@ -680,7 +685,7 @@
             <td>4 · Editing suggestions</td>
             <td>The shortlist, your marks, your profile</td>
             <td>Four treatments per marked frame — standard, signature, creative, personal</td>
-            <td class="spend">1 per marked frame</td>
+            <td class="spend">1 per marked frame · or 1 per scene</td>
           </tr>
           <tr>
             <td>5 · Development</td>
@@ -708,9 +713,9 @@
   <section>
     <h2>Specified here, not built yet</h2>
     <p class="prose">
-      Two steps in the cull region are drawn hollow because the window cannot
-      reach them today. They are on the page so the intended flow is legible,
-      not to suggest they are finished.
+      Steps drawn hollow are specified but the window cannot reach them yet.
+      They are on the page so the intended flow is legible, not to suggest
+      they are finished.
     </p>
     <div class="rules">
       <div class="rule">
@@ -747,6 +752,15 @@
           asking for a releasable-or-not verdict, need the kernel&rsquo;s typed
           schema, its normalizer and its validator changed together &mdash; and
           none of it can be shown to work without a live provider.
+        </p>
+      </div>
+      <div class="rule">
+        <h3>Cull by scene as well as by frame</h3>
+        <p>
+          The cull groups near-duplicates, where one frame survives. A scene
+          is the coarser order above it — same place, same light — where
+          every frame survives and one treatment serves them all. Suggestions
+          read scenes now; the cull review does not show them yet.
         </p>
       </div>
       <div class="rule">
@@ -907,6 +921,28 @@
         <p>
           Renders are content-addressed, so nothing is rendered twice and an
           adjusted proof never overwrites the suggested one.
+        </p>
+      </div>
+      <div class="rule">
+        <h3>You never pay for the same call twice</h3>
+        <p>
+          Every model call is memoised and every long run checkpoints as it
+          goes. A 2,000-call run that stops at 1,800 resumes at 1,801.
+        </p>
+      </div>
+      <div class="rule">
+        <h3>A paid run never holds the window</h3>
+        <p>
+          Culls, assessments and suggestion passes queue and run in the
+          background. Close the window; the work continues.
+        </p>
+      </div>
+      <div class="rule">
+        <h3>A stage in your toolchain, not a replacement</h3>
+        <p>
+          It begins at a folder opened read-only — ingest and backup stay
+          with the tools that do them well — and it ends in files plus
+          Lightroom-compatible XMP sidecars that any other tool can read.
         </p>
       </div>
     </div>

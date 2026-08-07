@@ -277,6 +277,18 @@ class SuggestionsPage(QWidget):
             self.body.addWidget(waiting)
             self.body.addStretch(1)
             return
+        shared_from = str(entry.get("derived_from") or "")
+        if shared_from:
+            # An inherited answer must say so where it is read, or a
+            # photographer will credit this frame with a judgement that was
+            # made about another one.
+            origin = QLabel(
+                f"Treatments shared from {shared_from} — same scene, "
+                "developed as one edit.")
+            origin.setObjectName("hint")
+            origin.setWordWrap(True)
+            origin.setFont(theme.body(9))
+            self.body.addWidget(origin)
         for style in STYLES:
             if not any(str(entry.get(f"{style}_{field}") or "").strip()
                        for field, _label in SECTIONS):
@@ -332,64 +344,10 @@ class SuggestionsPage(QWidget):
     # --- asking -----------------------------------------------------------
 
     def suggest(self) -> None:
-        """Ask for editing directions, having first asked what to spend.
+        launch_suggestions(self, self.payload())
 
-        Every frame is a separate call to a model, so redoing frames that
-        already have directions costs again for an answer already given.
-        The choice is put to the photographer rather than assumed.
-        """
-        payload = self.payload()
-        marked = set(payload.get("selected_photos") or [])
-        done = set(payload.get("processed_photos") or [])
-        waiting = sorted(marked - done)
-        if not marked:
-            return
-        if done and waiting:
-            choice = self._ask_scope(len(waiting), len(done))
-            if choice == "cancel":
-                return
-            photos = waiting if choice == "missing" else sorted(marked)
-        elif done:
-            if self._ask_scope(0, len(done)) == "cancel":
-                return
-            photos = sorted(marked)
-        else:
-            photos = sorted(marked)
-        self._report(
-            f"Asking for editing directions for {len(photos)} "
-            f"frame{'' if len(photos) == 1 else 's'}.")
-        self.suggested.emit(str(payload.get("default_path", "")), photos)
-
-    def _ask_scope(self, waiting: int, done: int) -> str:
-        box = QMessageBox(self)
-        box.setWindowTitle("Ask for editing directions?")
-        box.setIcon(QMessageBox.Icon.Question)
-        only = None
-        if waiting:
-            box.setText(
-                f"{done} of these frames already have editing directions.")
-            box.setInformativeText(
-                f"Asking again for all of them costs another call per frame "
-                f"for answers you already have.\n\n"
-                f"{waiting} frame{'' if waiting == 1 else 's'} "
-                f"{'has' if waiting == 1 else 'have'} no directions yet.")
-            only = box.addButton(
-                f"Only the {waiting} without", QMessageBox.ButtonRole.AcceptRole)
-            box.addButton(
-                "Redo all of them", QMessageBox.ButtonRole.DestructiveRole)
-        else:
-            box.setText("Every marked frame already has editing directions.")
-            box.setInformativeText(
-                "Asking again replaces answers you already have, and costs "
-                "another call for each frame.")
-            box.addButton("Ask again", QMessageBox.ButtonRole.DestructiveRole)
-        cancel = box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
-        box.setDefaultButton(only or cancel)
-        box.exec()
-        clicked = box.clickedButton()
-        if clicked is cancel:
-            return "cancel"
-        return "missing" if only is not None and clicked is only else "all"
+    def _ask_scope(self, waiting: int, done: int, scene_count: int = 0) -> str:
+        return ask_suggestion_scope(self, waiting, done, scene_count)
 
     def step(self, delta: int) -> None:
         if not self.photos:
@@ -407,3 +365,115 @@ class SuggestionsPage(QWidget):
             self.closed.emit()
         else:
             super().keyPressEvent(event)
+
+
+def ask_suggestion_scope(parent, waiting: int, done: int,
+                         scene_count: int = 0) -> str:
+    """What to spend, put as the choice it is.
+
+    "scene" asks once per scene and shares the answer; "missing" asks for
+    every frame without directions; "all" pays again for answers already
+    given, and is styled as the destructive act it is.
+    """
+    box = QMessageBox(parent)
+    box.setWindowTitle("Ask for editing directions?")
+    box.setIcon(QMessageBox.Icon.Question)
+    scene = only = None
+    if waiting and done:
+        box.setText(
+            f"{done} of these frames already have editing directions.")
+        box.setInformativeText(
+            f"Asking again for all of them costs another call per frame "
+            f"for answers you already have.\n\n"
+            f"{waiting} frame{'' if waiting == 1 else 's'} "
+            f"{'has' if waiting == 1 else 'have'} no directions yet.")
+        if scene_count:
+            scene = box.addButton(
+                f"The {waiting} without — one per scene "
+                f"({scene_count} call{'' if scene_count == 1 else 's'})",
+                QMessageBox.ButtonRole.AcceptRole)
+        only = box.addButton(
+            f"Only the {waiting} without",
+            QMessageBox.ButtonRole.AcceptRole)
+        box.addButton(
+            "Redo all of them", QMessageBox.ButtonRole.DestructiveRole)
+    elif waiting:
+        box.setText(
+            f"{waiting} marked frame{'' if waiting == 1 else 's'} fall into "
+            f"{scene_count} scene{'' if scene_count == 1 else 's'}.")
+        box.setInformativeText(
+            "One call per scene writes a treatment for each scene's "
+            "best-ranked frame and shares it with the rest, so a scene "
+            "develops as one edit rather than several that disagree. One "
+            "call per frame asks about every frame separately.")
+        scene = box.addButton(
+            f"One per scene ({scene_count} "
+            f"call{'' if scene_count == 1 else 's'})",
+            QMessageBox.ButtonRole.AcceptRole)
+        only = box.addButton(
+            f"Every frame ({waiting} calls)",
+            QMessageBox.ButtonRole.AcceptRole)
+    else:
+        box.setText("Every marked frame already has editing directions.")
+        box.setInformativeText(
+            "Asking again replaces answers you already have, and costs "
+            "another call for each frame.")
+        box.addButton("Ask again", QMessageBox.ButtonRole.DestructiveRole)
+    cancel = box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+    box.setDefaultButton(scene or only or cancel)
+    box.exec()
+    clicked = box.clickedButton()
+    if clicked is cancel:
+        return "cancel"
+    if scene is not None and clicked is scene:
+        return "scene"
+    return "missing" if only is not None and clicked is only else "all"
+
+
+def launch_suggestions(page, payload: dict) -> None:
+    """Ask for editing directions, having first asked what to spend.
+
+    Shared by the assessment page and the suggestions page, which are two
+    doors into the same decision. Every frame is a separate call to a
+    model, so the scope -- and whether scenes share one answer -- is put to
+    the photographer rather than assumed.
+    """
+    from opencull_gui import scenes
+
+    marked = set(payload.get("selected_photos") or [])
+    done = set(payload.get("processed_photos") or [])
+    waiting = sorted(marked - done)
+    if not marked:
+        return
+    targets = waiting if waiting else sorted(marked)
+    plan = scenes.plan_for(page.shortlist, targets)
+    # A scene plan is only worth offering when it actually saves calls.
+    scene_count = len(plan) if 0 < len(plan) < len(targets) else 0
+
+    if done and waiting:
+        choice = page._ask_scope(len(waiting), len(done), scene_count)
+    elif done:
+        choice = page._ask_scope(0, len(done), 0)
+    elif scene_count:
+        choice = page._ask_scope(len(targets), 0, scene_count)
+    else:
+        choice = "all"
+    if choice == "cancel":
+        return
+
+    if choice == "scene":
+        scenes.write_plan(
+            page.directions.recipes, page.shortlist.path,
+            int(payload.get("selection_revision") or 0), plan)
+        photos = sorted(scene["representative"] for scene in plan)
+        covered = sum(len(scene["photos"]) for scene in plan)
+        page._report(
+            f"Asking about {len(photos)} scene"
+            f"{'' if len(photos) == 1 else 's'}; the answers will be shared "
+            f"across {covered} frames.")
+    else:
+        photos = waiting if choice == "missing" else sorted(marked)
+        page._report(
+            f"Asking for editing directions for {len(photos)} "
+            f"frame{'' if len(photos) == 1 else 's'}.")
+    page.suggested.emit(str(payload.get("default_path", "")), photos)

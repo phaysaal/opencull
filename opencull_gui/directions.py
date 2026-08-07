@@ -117,6 +117,17 @@ class DirectionsIndex:
     # --- reading --------------------------------------------------------
 
     def payload(self) -> dict:
+        # A scene plan may be waiting for its representatives to be
+        # answered; extending them to their siblings happens the moment the
+        # directions are read, wherever they are read from. A failed
+        # derivation must not make the directions themselves unreadable --
+        # the siblings simply stay unanswered until it succeeds.
+        try:
+            from .scenes import derive_scene_entries
+
+            derive_scene_entries(self)
+        except Exception:                            # noqa: BLE001 - see above
+            pass
         review_state = self.reviews.public_state()
         revision = review_state["revision"]
         next_path = self.next_path(revision)

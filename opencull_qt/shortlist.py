@@ -21,7 +21,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QListWidget,
     QListWidgetItem,
-    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
@@ -36,6 +35,7 @@ from opencull_gui.shortlist_reviews import ShortlistReviewError
 from . import theme
 from .develop import PhotoLabel
 from .previews import PreviewLoader
+from .suggestions import ask_suggestion_scope, launch_suggestions
 
 ROW = 32
 
@@ -530,69 +530,13 @@ class ShortlistPage(QWidget):
             return []
 
     def suggest(self) -> None:
-        """Ask for editing directions, having first asked what to spend.
-
-        Every frame is a separate call to a model, so redoing frames that
-        already have directions costs again for an answer already given.
-        The choice is put to the photographer rather than assumed.
-        """
+        """Ask for directions from here too: same decision, same dialog."""
         if self.directions is None:
             return
-        payload = self.directions.payload()
-        marked = {
-            photo for photo, entry in self._state().get("entries", {}).items()
-            if isinstance(entry, dict) and entry.get("interesting") is True
-        }
-        done = set(payload.get("processed_photos") or [])
-        waiting = sorted(marked - done)
-        if not marked:
-            return
-        if done and waiting:
-            choice = self._ask_scope(len(waiting), len(done))
-            if choice == "cancel":
-                return
-            photos = waiting if choice == "missing" else sorted(marked)
-        elif done:
-            if self._ask_scope(0, len(done)) == "cancel":
-                return
-            photos = sorted(marked)
-        else:
-            photos = sorted(marked)
-        self._report(
-            f"Asking for editing directions for {len(photos)} "
-            f"frame{'' if len(photos) == 1 else 's'}.")
-        self.suggested.emit(str(payload.get("default_path", "")), photos)
+        launch_suggestions(self, self.directions.payload())
 
-    def _ask_scope(self, waiting: int, done: int) -> str:
-        box = QMessageBox(self)
-        box.setWindowTitle("Ask for editing directions?")
-        box.setIcon(QMessageBox.Icon.Question)
-        only = None
-        if waiting:
-            box.setText(
-                f"{done} of these frames already have editing directions.")
-            box.setInformativeText(
-                f"Asking again for all of them costs another call per frame "
-                f"for answers you already have.\n\n"
-                f"{waiting} frame{'' if waiting == 1 else 's'} "
-                f"{'has' if waiting == 1 else 'have'} no directions yet.")
-            only = box.addButton(
-                f"Only the {waiting} without", QMessageBox.ButtonRole.AcceptRole)
-            box.addButton(
-                "Redo all of them", QMessageBox.ButtonRole.DestructiveRole)
-        else:
-            box.setText("Every marked frame already has editing directions.")
-            box.setInformativeText(
-                "Asking again replaces answers you already have, and costs "
-                "another call for each frame.")
-            box.addButton("Ask again", QMessageBox.ButtonRole.DestructiveRole)
-        cancel = box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
-        box.setDefaultButton(only or cancel)
-        box.exec()
-        clicked = box.clickedButton()
-        if clicked is cancel:
-            return "cancel"
-        return "missing" if only is not None and clicked is only else "all"
+    def _ask_scope(self, waiting: int, done: int, scene_count: int = 0) -> str:
+        return ask_suggestion_scope(self, waiting, done, scene_count)
 
     def step(self, delta: int) -> None:
         if not self.entries:
