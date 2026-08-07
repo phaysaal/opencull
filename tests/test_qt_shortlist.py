@@ -347,3 +347,74 @@ class SuggestTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(QApplication is not None, "PySide6 is not installed")
+class RatingTests(ShortlistPageTests):
+    """The assessment's tier is a proposal; yours is the decision."""
+
+    def test_the_page_opens_on_the_tier_the_assessment_proposed(self):
+        page = self.page()
+        proposed = page.entry_for(page.current)["tier"]
+        self.assertEqual(page.rating(), proposed)
+
+    def test_rating_a_frame_yourself_is_what_gets_recorded(self):
+        page = self.page()
+        page.set_rating("reject")
+        page.save()
+        entry = page.reviews.public_state()["entries"][page.current]
+        self.assertEqual(entry["tier"], "reject")
+
+    def test_the_assessments_tier_is_never_overwritten(self):
+        page = self.page()
+        proposed = page.entry_for(page.current)["tier"]
+        page.set_rating("reject")
+        page.save()
+        self.assertEqual(page.entry_for(page.current)["tier"], proposed)
+
+    def test_disagreeing_shows_both_readings(self):
+        page = self.page()
+        proposed = page.entry_for(page.current)["tier"]
+        page.set_rating("reject")
+        page._show_verdict()
+        shown = page.verdict.text()
+        self.assertIn("REJECT", shown)
+        self.assertIn(f"the assessment said {proposed.upper()}", shown)
+
+    def test_agreeing_says_it_once(self):
+        page = self.page()
+        page.set_rating(page.entry_for(page.current)["tier"])
+        page._show_verdict()
+        self.assertNotIn("the assessment said", page.verdict.text())
+
+    def test_your_rating_survives_moving_away_and_back(self):
+        page = self.page()
+        first = page.current
+        page.set_rating("exceptional")
+        page.save()
+        page.step(1)
+        page.show_entry(first)
+        self.assertEqual(page.rating(), "exceptional")
+
+    def test_marking_worth_developing_does_not_reset_your_rating(self):
+        page = self.page()
+        page.set_rating("reject")
+        page.save()
+        page.set_interesting(True)
+        entry = page.reviews.public_state()["entries"][page.current]
+        self.assertEqual(entry["tier"], "reject")
+        self.assertTrue(entry["interesting"])
+
+    def test_the_list_shows_your_rating_and_marks_it_as_yours(self):
+        page = self.page()
+        page.set_rating("reject")
+        page.save()
+        row = page.list.item(0).text()
+        self.assertIn("reject", row)
+        self.assertIn("*", row)
+
+    def test_the_list_shows_the_assessments_tier_where_you_agreed(self):
+        page = self.page()
+        page.set_rating(page.entry_for(page.current)["tier"])
+        page.save()
+        self.assertNotIn("*", page.list.item(0).text())

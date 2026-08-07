@@ -29,6 +29,22 @@ ASSESSMENT_FIELDS = (
 )
 
 
+# What a frame is worth before anybody has said otherwise. A locally written
+# shortlist has to put something here, and the middle of the scale is the only
+# honest placeholder: it asserts nothing.
+UNRATED_TIER = "promising"
+
+# The loader refuses an entry with no rationale, and it is right to: every
+# row in a shortlist has to account for itself. So the row says what it
+# actually is instead of asserting something about the photograph.
+UNRATED_RATIONALE = "Not assessed. Laid out for rating by hand."
+
+# Every axis has to carry text too. Rather than weaken the validation that
+# protects a real shortlist, each axis says the same true thing, and the
+# interface hides them when it knows no model spoke.
+UNRATED_AXIS = "Not assessed."
+
+
 class ShortlistError(ValueError):
     """A professional shortlist is invalid or belongs to another report."""
 
@@ -170,3 +186,66 @@ def load_shortlist(
         {entry["photo"]: entry for entry in normalized},
         assets,
     )
+
+
+def write_manual_shortlist(
+    report: ReportIndex, photos: list[str], destination: Path,
+    stance: str = "",
+) -> Path:
+    """Write a shortlist nobody was paid to produce.
+
+    A photographer who wants to rate their own work should not have to buy a
+    model's opinion first in order to disagree with it. This lays out the
+    same shortlist the assessment would produce -- the same frames, in the
+    same order, in the same format -- with every judgement left blank and
+    every tier at the middle of the scale.
+
+    Nothing here asserts anything about a photograph. The frames arrive
+    unrated, in the order the cull left them, and every rating on top of this
+    is the photographer's own.
+    """
+    destination = Path(destination).expanduser()
+    cluster_of = {
+        name: cluster_id
+        for cluster_id, cluster in report.cluster_by_id.items()
+        for name in cluster.get("photos", [])
+    }
+    entries = []
+    for rank, photo in enumerate(photos, start=1):
+        cluster_id = cluster_of.get(photo)
+        if cluster_id is None:
+            continue
+        entries.append({
+            "rank": rank,
+            "photo": photo,
+            "cluster_id": cluster_id,
+            "tier": UNRATED_TIER,
+            "score": 0,
+            "confidence": 0,
+            "rationale": UNRATED_RATIONALE,
+            "raw_files": [],
+            "assessment": dict.fromkeys(ASSESSMENT_FIELDS, UNRATED_AXIS),
+            "warnings": [],
+        })
+    value = {
+        "format": SHORTLIST_FORMAT,
+        "source_report_sha256": report.sha256,
+        "candidate_policy": "effective",
+        "candidate_signature": "manual",
+        # Read by the interface so it never presents a blank row as a
+        # judgement, and never shows a model's confidence that no model gave.
+        "rated_by": "photographer",
+        "stance": str(stance or ""),
+        "entries": entries,
+    }
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_name(f".{destination.name}.tmp")
+    temporary.write_text(
+        json.dumps(value, indent=2, ensure_ascii=False), encoding="utf-8")
+    temporary.replace(destination)
+    return destination
+
+
+def rated_by_hand(shortlist: ShortlistIndex) -> bool:
+    """Whether this shortlist was laid out locally rather than assessed."""
+    return str(getattr(shortlist, "data", {}).get("rated_by", "")) == "photographer"

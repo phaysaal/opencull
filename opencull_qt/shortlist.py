@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QCheckBox,
     QFrame,
     QHBoxLayout,
@@ -29,7 +30,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from opencull_gui.shortlist import ASSESSMENT_FIELDS
+from opencull_gui.shortlist import ASSESSMENT_FIELDS, rated_by_hand
 from opencull_gui.shortlist_reviews import ShortlistReviewError
 
 from . import theme
@@ -92,6 +93,7 @@ class ShortlistPage(QWidget):
         self.loader = loader
         self.directions = directions
         self.entries = list(shortlist.entries)
+        self.by_hand = rated_by_hand(shortlist)
         self.current = str(self.entries[0]["photo"]) if self.entries else ""
 
         self.loader.ready.connect(self._painted)
@@ -155,6 +157,7 @@ class ShortlistPage(QWidget):
 
         self.verdict = QLabel("")
         self.verdict.setObjectName("rowState")
+        self.verdict.setWordWrap(True)
         self.verdict.setFont(theme.display(9))
         judgement.addWidget(self.verdict)
 
@@ -239,6 +242,28 @@ class ShortlistPage(QWidget):
         self.edit_raw.setCursor(Qt.CursorShape.PointingHandCursor)
         self.edit_raw.clicked.connect(lambda: self.save())
         row.addWidget(self.edit_raw)
+        row.addSpacing(10)
+
+        # Your own rating. The assessment's word is a proposal like any other
+        # in this application, and the store has always been able to hold a
+        # human tier -- there was simply no way to say one.
+        rating = QLabel("YOUR RATING")
+        rating.setObjectName("eyebrow")
+        rating.setFont(theme.display(7))
+        row.addWidget(rating)
+
+        self.tiers = QButtonGroup(self)
+        self.tiers.setExclusive(True)
+        for index, tier in enumerate(TIER_ORDER):
+            button = QPushButton(tier.title())
+            button.setObjectName("tier")
+            button.setCheckable(True)
+            button.setFont(theme.body(9))
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.setProperty("tone", _tone(tier))
+            self.tiers.addButton(button, index)
+            row.addWidget(button)
+        self.tiers.idClicked.connect(self._rated)
         row.addStretch(1)
 
         self.status = QLabel("")
@@ -300,9 +325,17 @@ class ShortlistPage(QWidget):
             # One line: the default item delegate does not wrap, it replaces a
             # newline with an ellipsis, so a second line silently truncates
             # the first.
+            # Your rating where you gave one, because that is the tier the
+            # rest of the pipeline reads. A list showing the assessment's
+            # word beside a decision that overruled it is a list lying about
+            # what will happen next.
+            rated = str(marks.get(photo, {}).get("tier") or entry["tier"])
+            evidence = (
+                "" if self.by_hand else f"  {float(entry['score']):.0f}")
+            overruled = " *" if rated != str(entry["tier"]) else ""
             item = QListWidgetItem(
                 f" {mark}  {entry['rank']:>2}.  {photo}"
-                f"   ·   {entry['tier']}  {float(entry['score']):.0f}")
+                f"   ·   {rated}{evidence}{overruled}")
             item.setData(Qt.ItemDataRole.UserRole, photo)
             item.setSizeHint(QSize(0, ROW))
             self.list.addItem(item)
@@ -348,16 +381,11 @@ class ShortlistPage(QWidget):
             self._set_frame(pixmap)
 
         self.heading.setText(photo)
-        tier = str(entry.get("tier", ""))
-        score = float(entry.get("score", 0))
-        confidence = float(entry.get("confidence", 0))
-        self.verdict.setText(
-            f"{tier.upper()}   ·   {score:.0f}/100   ·   "
-            f"{confidence:.0%} confident")
-        self.verdict.setProperty("tone", _tone(tier))
-        self.verdict.style().unpolish(self.verdict)
-        self.verdict.style().polish(self.verdict)
-        self.rationale.setText(str(entry.get("rationale", "")))
+        mark = self._state().get("entries", {}).get(photo, {})
+        self.set_rating(str(mark.get("tier") or entry.get("tier", "")))
+        self._show_verdict()
+        self.rationale.setText(
+            "" if self.by_hand else str(entry.get("rationale", "")))
 
         while self.axes.count():
             item = self.axes.takeAt(0)
@@ -367,11 +395,20 @@ class ShortlistPage(QWidget):
             if widget is not None:
                 widget.setParent(None)
                 widget.deleteLater()
-        assessment = entry.get("assessment", {}) or {}
-        for field in ASSESSMENT_FIELDS:
-            text = str(assessment.get(field, "")).strip()
-            if text:
-                self.axes.addWidget(Axis(AXIS_LABELS.get(field, field), text))
+        if self.by_hand:
+            # Ten rows of "Not assessed." is not information. Say once that
+            # nobody was asked, and leave the page to the photograph.
+            self.axes.addWidget(Axis(
+                "NOT ASSESSED",
+                "No model has looked at this shoot. The rating below is "
+                "yours, and the frames are in the order the cull left them."))
+        else:
+            assessment = entry.get("assessment", {}) or {}
+            for field in ASSESSMENT_FIELDS:
+                text = str(assessment.get(field, "")).strip()
+                if text:
+                    self.axes.addWidget(
+                        Axis(AXIS_LABELS.get(field, field), text))
         self.axes.addStretch(1)
 
         mark = self._state().get("entries", {}).get(photo, {})
@@ -385,6 +422,28 @@ class ShortlistPage(QWidget):
             self.list.setCurrentRow(row)
             self.list.blockSignals(False)
         self._report("")
+
+    def _show_verdict(self) -> None:
+        """What the assessment said, and what you said, in that order."""
+        entry = self.entry_for(self.current)
+        proposed = str(entry.get("tier", ""))
+        yours = self.rating()
+        if self.by_hand:
+            shown = f"{yours.upper()}   ·   your rating"
+        else:
+            score = float(entry.get("score", 0))
+            confidence = float(entry.get("confidence", 0))
+            shown = (f"{yours.upper()}   ·   {score:.0f}/100   ·   "
+                     f"{confidence:.0%} confident")
+            if proposed and yours != proposed:
+                # Never overwritten, only disagreed with: the shortlist is
+                # immutable evidence and the two readings stay side by side.
+                shown += (f"\n└─ the assessment said {proposed.upper()} · "
+                          f"you set {yours.upper()}")
+        self.verdict.setText(shown)
+        self.verdict.setProperty("tone", _tone(yours))
+        self.verdict.style().unpolish(self.verdict)
+        self.verdict.style().polish(self.verdict)
 
     def _set_frame(self, pixmap) -> None:
         # PhotoLabel scales in its own resizeEvent: a parent's is too early,
@@ -409,22 +468,43 @@ class ShortlistPage(QWidget):
     def toggle_interesting(self) -> None:
         self.set_interesting(not self.interesting.isChecked())
 
-    def save(self, interesting: bool | None = None) -> None:
-        """Record this frame's decision, keeping the models' tier as given.
+    def rating(self) -> str:
+        """The tier this page is currently showing as the photographer's."""
+        checked = self.tiers.checkedId()
+        if 0 <= checked < len(TIER_ORDER):
+            return TIER_ORDER[checked]
+        return str(self.entry_for(self.current).get("tier", "ordinary"))
 
-        The tier is the assessment's own word and is not something this page
-        argues with; what a person decides here is whether the frame is worth
-        developing, and why.
+    def set_rating(self, tier: str) -> None:
+        button = self.tiers.button(
+            TIER_ORDER.index(tier) if tier in TIER_ORDER else -1)
+        if button is not None:
+            button.setChecked(True)
+        elif self.tiers.checkedButton() is not None:
+            self.tiers.setExclusive(False)
+            self.tiers.checkedButton().setChecked(False)
+            self.tiers.setExclusive(True)
+
+    def _rated(self, _index: int) -> None:
+        self.save()
+        self._show_verdict()
+
+    def save(self, interesting: bool | None = None) -> None:
+        """Record this frame's decision, including how you rated it.
+
+        The assessment's tier is a proposal like every other judgement this
+        application makes. What is written here is yours; the models' stays
+        in the shortlist, which is immutable, so the two can always be read
+        against each other.
         """
         if not self.current:
             return
         state = self._state()
-        entry = self.entry_for(self.current)
         chosen = (self.interesting.isChecked() if interesting is None
                   else interesting)
         try:
             self.reviews.update(
-                self.current, str(entry.get("tier", "ordinary")),
+                self.current, self.rating(),
                 self.edit_raw.isChecked(), self.note.toPlainText(),
                 True, state.get("revision"), chosen)
         except ShortlistReviewError as exc:

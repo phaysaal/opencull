@@ -30,6 +30,7 @@ from opencull_gui import phases
 from opencull_gui.project import load_or_create_folder_project
 from opencull_gui.project_catalog import ProjectCatalogError
 from opencull_gui.reviews import default_review_path
+from opencull_gui.shortlist import write_manual_shortlist
 from opencull_gui.style import StyleProfileStore
 from scan import classify_folder
 
@@ -701,7 +702,8 @@ class Launcher(QMainWindow):
                 "This folder has not been culled, so the selection is every "
                 f"frame in it -- about {count} model calls rather than one "
                 "per keeper. Culling first is usually cheaper.",
-                shows=ContactSheet(frames, self._loader))
+                shows=ContactSheet(frames, self._loader),
+                instead=("Rate them myself", lambda: self.rate_by_hand(bench)))
         return ShortlistPage(
             bench.shortlist, bench.shortlist_reviews, self._loader,
             directions=bench.directions)
@@ -808,6 +810,29 @@ class Launcher(QMainWindow):
         box.setDefaultButton(cancel)
         box.exec()
         return box.clickedButton() is assess
+
+    def rate_by_hand(self, bench: Bench) -> None:
+        """Open the assessment with nobody's opinion in it but your own.
+
+        Rating your own work should not require buying a model's judgement
+        first in order to disagree with it. This lays out the same shortlist
+        the assessment would produce, unrated, and costs nothing.
+        """
+        try:
+            write_manual_shortlist(
+                bench.report, bench.selection(), bench.shortlist_path)
+        except Exception as exc:                     # noqa: BLE001 - reported
+            self._say(f"That could not be laid out: {exc}", "alarm")
+            return
+        shell = self.review_page
+        if isinstance(shell, ProjectShell):
+            # The invitation is stale the moment the shortlist exists.
+            shell.drop(phases.ASSESSMENT)
+            shell.show_plan(self.phase_plan(bench.project, bench))
+            shell.open_phase(phases.ASSESSMENT)
+        self._say(
+            "Rate them however you like. Nothing here has been assessed, and "
+            "no model has been asked.", "ok")
 
     def suggest_edits(self, shortlist, reviews, photos, output: str,
                       wanted: list, project: dict) -> None:

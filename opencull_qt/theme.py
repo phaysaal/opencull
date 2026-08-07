@@ -251,6 +251,20 @@ QCheckBox::indicator:checked {{
 }}
 QCheckBox#gate {{ font-weight: 600; }}
 
+/* A tier a photographer set themselves. Unchosen it is quiet; chosen it
+   carries the tone of the judgement it makes. */
+QPushButton#tier {{
+    background: transparent; color: {MUTED};
+    border: 1px solid {EDGE}; border-radius: 6px;
+    padding: 4px 9px;
+}}
+QPushButton#tier:hover {{ background: {RAISED}; color: {PAPER}; }}
+QPushButton#tier:checked {{
+    background: {RAISED}; color: {PAPER}; border-color: {SAFELIGHT};
+}}
+QPushButton#tier:checked[tone="ready"] {{ border-color: {FIXED}; }}
+QPushButton#tier:checked[tone="failed"] {{ border-color: {ALARM}; }}
+
 /* --- develop page --- */
 QFrame#panel {{ background: {SURFACE}; border-left: 1px solid {EDGE_SOFT}; }}
 QFrame#pane {{

@@ -508,6 +508,44 @@ class LauncherWindowTests(unittest.TestCase):
         ask.assert_not_called()
         services.jobs.add_professional.assert_called_once()
 
+    def shoot_project(self, window):
+        shoot = Path(tempfile.mkdtemp())
+        report_path, photos_path = build_shoot(shoot)
+        return {"id": "p1", "name": "A", "photos": str(photos_path),
+                "report": str(report_path), "available": True,
+                "report_available": True}
+
+    def test_rating_by_hand_costs_nothing_and_asks_nobody(self):
+        window, services = self.build(projects=[])
+        project = self.shoot_project(window)
+        window.open_project(project)
+        self.addCleanup(window.show_projects)
+        window.rate_by_hand(window.bench)
+        services.jobs.add_professional.assert_not_called()
+        self.assertTrue(window.bench.shortlist_path.is_file())
+
+    def test_rating_by_hand_opens_the_assessment_on_what_it_wrote(self):
+        from opencull_qt.shortlist import ShortlistPage
+
+        window, _ = self.build(projects=[])
+        project = self.shoot_project(window)
+        window.open_project(project)
+        self.addCleanup(window.show_projects)
+        window.rate_by_hand(window.bench)
+        page = window.review_page.page_for(phases.ASSESSMENT)
+        self.assertIsInstance(page, ShortlistPage)
+        self.assertTrue(page.by_hand)
+
+    def test_what_it_wrote_holds_every_frame_of_the_selection(self):
+        window, _ = self.build(projects=[])
+        project = self.shoot_project(window)
+        window.open_project(project)
+        self.addCleanup(window.show_projects)
+        selection = window.bench.selection()
+        window.rate_by_hand(window.bench)
+        page = window.review_page.page_for(phases.ASSESSMENT)
+        self.assertEqual([item["photo"] for item in page.entries], selection)
+
     def test_assessing_queues_the_shortlist_with_the_culling_review(self):
         window, services = self.build(projects=[])
         shoot = Path(tempfile.mkdtemp())

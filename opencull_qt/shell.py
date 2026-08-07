@@ -156,6 +156,7 @@ class Invitation(QWidget):
 
     def __init__(self, title: str, body: str, action: str, on_action,
                  note: str = "", shows: QWidget | None = None,
+                 instead: tuple[str, object] | None = None,
                  parent: QWidget | None = None):
         super().__init__(parent)
         self.setObjectName("page")
@@ -215,6 +216,20 @@ class Invitation(QWidget):
         self.button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.button.clicked.connect(on_action)
         actions.addWidget(self.button)
+
+        # A second way through, for the photographer who wants the phase
+        # without the run. Offered beside the primary rather than hidden
+        # behind it: not paying is a choice, not a fallback.
+        self.other = None
+        if instead is not None:
+            label, handler = instead
+            self.other = QPushButton(label)
+            self.other.setObjectName("ghost")
+            self.other.setFont(theme.body(10))
+            self.other.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.other.clicked.connect(handler)
+            actions.addWidget(self.other)
+
         actions.addStretch(1)
         layout.addLayout(actions)
 
@@ -359,6 +374,22 @@ class ProjectShell(QWidget):
 
     def page_for(self, key: str) -> QWidget | None:
         return self._pages.get(key)
+
+    def drop(self, key: str) -> None:
+        """Forget a built page, so the next opening builds it afresh.
+
+        Used when what a page was built from has changed underneath it --
+        an invitation whose run has now happened is not worth keeping.
+        """
+        page = self._pages.pop(key, None)
+        if page is None:
+            return
+        if hasattr(page, "shutdown"):
+            page.shutdown()
+        self.pages.removeWidget(page)
+        page.deleteLater()
+        if self.current == key:
+            self.current = ""
 
     def shutdown(self) -> None:
         for page in self._pages.values():
