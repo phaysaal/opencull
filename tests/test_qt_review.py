@@ -90,8 +90,16 @@ class ReviewPageTests(unittest.TestCase):
     # --- rendering ------------------------------------------------------
 
     def test_every_cluster_is_listed(self):
+        from PySide6.QtCore import Qt
+
         page = self.page()
-        self.assertEqual(page.clusters.count(), 2)
+        cluster_rows = [
+            page.clusters.item(row).data(Qt.ItemDataRole.UserRole)
+            for row in range(page.clusters.count())
+            if page.clusters.item(row).data(Qt.ItemDataRole.UserRole)]
+        self.assertEqual(len(cluster_rows), 2)
+        # Two scenes apart in the shooting order, so each gets its header.
+        self.assertEqual(page.clusters.count() - len(cluster_rows), 2)
 
     def test_the_first_cluster_opens_with_its_frames(self):
         page = self.page()

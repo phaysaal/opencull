@@ -261,7 +261,79 @@ class ReviewPage(QWidget):
         self.indicator = self.progress
         return bar
 
-    # --- clusters -------------------------------------------------------
+    # --- clusters, in scenes --------------------------------------------
+
+    def scenes(self) -> list[dict]:
+        """The review's groups, gathered into scenes.
+
+        Same place, same light: the coarser order above the near-duplicate
+        groups, computed by the same rules the suggestion pass shares
+        treatments across. One scene means the grouping adds nothing, and
+        the list stays flat.
+        """
+        from opencull_gui.scenes import scene_groups
+
+        entries = [
+            {"photo": photo, "cluster_id": cluster_id}
+            for cluster_id, cluster in self.report.cluster_by_id.items()
+            for photo in cluster.get("photos", [])
+        ]
+        found = []
+        for group in scene_groups(entries, self.reviews.photos_root):
+            ordered: list[str] = []
+            for photo in group["photos"]:
+                for cluster_id, cluster in self.report.cluster_by_id.items():
+                    if photo in cluster.get("photos", []):
+                        if cluster_id not in ordered:
+                            ordered.append(cluster_id)
+                        break
+            found.append({"id": group["id"], "clusters": ordered})
+        return found
+
+    def _scene_header(self, scene: dict, state: dict) -> QWidget:
+        holder = QWidget()
+        row = QHBoxLayout(holder)
+        row.setContentsMargins(12, 4, 8, 4)
+        row.setSpacing(8)
+        count = len(scene["clusters"])
+        label = QLabel(
+            f"{scene['id'].replace('scene-', 'SCENE ').lstrip('0')}"
+            f" · {count} group{'' if count == 1 else 's'}")
+        label.setObjectName("axisName")
+        label.setFont(theme.display(7))
+        row.addWidget(label)
+        row.addStretch(1)
+        waiting = sum(
+            1 for cluster_id in scene["clusters"]
+            if not (state["clusters"].get(cluster_id) or {}).get("reviewed"))
+        if waiting:
+            accept = QPushButton("Accept scene")
+            accept.setObjectName("ghost")
+            accept.setFont(theme.body(8))
+            accept.setCursor(Qt.CursorShape.PointingHandCursor)
+            accept.setToolTip(
+                f"Take the proposal for the {waiting} unreviewed group"
+                f"{'' if waiting == 1 else 's'} of this scene. Groups you "
+                "decided stay as you left them.")
+            accept.clicked.connect(
+                lambda _=False, clusters=list(scene["clusters"]):
+                self.accept_scene(clusters))
+            row.addWidget(accept)
+        return holder
+
+    def accept_scene(self, clusters: list[str]) -> None:
+        """Agree with the proposal for one scene's unreviewed groups."""
+        try:
+            written = approve_remaining(
+                self.reviews, only_clusters=clusters)
+        except ReviewError as exc:
+            self._report(str(exc), "alarm")
+            return
+        self._fill_clusters()
+        self.show_cluster(self.current)
+        self._report(
+            f"Accepted the proposal for {written} group"
+            f"{'' if written == 1 else 's'} of that scene.", "ok")
 
     def _fill_clusters(self) -> None:
         state = self.reviews.public_state()
@@ -269,7 +341,10 @@ class ReviewPage(QWidget):
             self.report, self.reviews.photos_root).upper())
         self.clusters.blockSignals(True)
         self.clusters.clear()
-        for cluster_id in self.cluster_ids:
+        scenes = self.scenes()
+        show_headers = len(scenes) > 1
+
+        def add_cluster(cluster_id: str) -> None:
             cluster = self.report.cluster_by_id[cluster_id]
             decided = state["clusters"].get(cluster_id, {})
             kept = len(decided.get("keepers", []) or [])
@@ -278,14 +353,38 @@ class ReviewPage(QWidget):
                 f" {mark}  {cluster_id}   {kept}/{len(cluster['photos'])}")
             item.setData(Qt.ItemDataRole.UserRole, cluster_id)
             self.clusters.addItem(item)
+
+        if show_headers:
+            for scene in scenes:
+                header = QListWidgetItem("")
+                # A header is a place, not a choice.
+                header.setFlags(Qt.ItemFlag.ItemIsEnabled)
+                self.clusters.addItem(header)
+                widget = self._scene_header(scene, state)
+                header.setSizeHint(widget.sizeHint())
+                self.clusters.setItemWidget(header, widget)
+                for cluster_id in scene["clusters"]:
+                    add_cluster(cluster_id)
+        else:
+            for cluster_id in self.cluster_ids:
+                add_cluster(cluster_id)
         self.clusters.blockSignals(False)
         status = state["status"]
         self.progress.setText(
             f"{status['reviewed_clusters']} of {status['total_clusters']} reviewed")
 
+    def _row_of(self, cluster_id: str) -> int:
+        for row in range(self.clusters.count()):
+            item = self.clusters.item(row)
+            if item.data(Qt.ItemDataRole.UserRole) == cluster_id:
+                return row
+        return -1
+
     def _chose_row(self, row: int) -> None:
-        if 0 <= row < len(self.cluster_ids):
-            self.show_cluster(self.cluster_ids[row])
+        item = self.clusters.item(row)
+        cluster_id = item.data(Qt.ItemDataRole.UserRole) if item else None
+        if cluster_id:
+            self.show_cluster(str(cluster_id))
 
     def show_cluster(self, cluster_id: str) -> None:
         self.current = cluster_id
@@ -324,8 +423,10 @@ class ReviewPage(QWidget):
             if pixmap is not None:
                 frame.set_pixmap(pixmap)
 
-        row = self.cluster_ids.index(cluster_id)
-        if self.clusters.currentRow() != row:
+        # Rows are found by their data, not their index: scene headers sit
+        # between clusters, so index arithmetic would land on the wrong row.
+        row = self._row_of(cluster_id)
+        if row >= 0 and self.clusters.currentRow() != row:
             self.clusters.blockSignals(True)
             self.clusters.setCurrentRow(row)
             self.clusters.blockSignals(False)

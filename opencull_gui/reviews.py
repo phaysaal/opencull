@@ -447,20 +447,27 @@ def narrow_selection(
     return written
 
 
-def approve_remaining(store: ReviewStore, action: str = "approve") -> int:
+def approve_remaining(
+    store: ReviewStore, action: str = "approve",
+    only_clusters: list[str] | None = None,
+) -> int:
     """Accept the curator's proposal for every cluster nobody has reviewed.
 
-    A decision already made by hand is never touched: approving the lot
-    means agreeing with what was proposed wherever you had not already
-    spoken, not overwriting where you had.
+    A decision already made by hand is never touched: approving means
+    agreeing with what was proposed wherever you had not already spoken,
+    not overwriting where you had. ``only_clusters`` narrows the agreement
+    to one scene's worth of groups.
     """
     if store.stale_reason:
         raise ReviewError(store.stale_reason)
+    wanted = set(only_clusters) if only_clusters is not None else None
     state = store.public_state()
     revision = state["revision"]
     clusters = state.get("clusters", {})
     written = 0
     for cluster_id in store.report.cluster_by_id:
+        if wanted is not None and cluster_id not in wanted:
+            continue
         human = clusters.get(cluster_id) or {}
         if human.get("reviewed") is True:
             continue

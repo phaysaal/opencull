@@ -187,3 +187,42 @@ class ReviewPageWholeCullTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(QApplication is not None, "PySide6 is not installed")
+class SceneReviewTests(ReviewPageWholeCullTests):
+    """The review's groups, gathered into scenes."""
+
+    def test_scenes_follow_the_shooting_order(self):
+        page = self.page()
+        scenes = page.scenes()
+        # A1/A2, B1, C1/C2 are adjacent in sequence: one scene.
+        self.assertEqual(len(scenes), 1)
+        self.assertEqual(scenes[0]["clusters"], ["g1", "g2", "g3"])
+
+    def test_a_single_scene_grows_no_headers(self):
+        from PySide6.QtCore import Qt
+
+        page = self.page()
+        rows = [
+            page.clusters.item(row).data(Qt.ItemDataRole.UserRole)
+            for row in range(page.clusters.count())]
+        self.assertNotIn(None, rows)
+
+    def test_accepting_a_scene_reviews_only_its_groups(self):
+        page = self.page()
+        page.accept_scene(["g1", "g2"])
+        state = self.reviews.public_state()
+        self.assertTrue(state["clusters"]["g1"]["reviewed"])
+        self.assertTrue(state["clusters"]["g2"]["reviewed"])
+        self.assertNotIn("g3", state["clusters"])
+        self.assertIn("Accepted the proposal for 2 groups",
+                      page.status.text())
+
+    def test_accepting_a_scene_never_overrules_a_decision(self):
+        page = self.page()
+        self.reviews.update_cluster("g1", ["A2.JPG"], "mine", True, 0)
+        page.accept_scene(["g1", "g2"])
+        self.assertEqual(
+            self.reviews.public_state()["clusters"]["g1"]["keepers"],
+            ["A2.JPG"])
