@@ -84,6 +84,7 @@ class ShortlistPage(QWidget):
 
     closed = Signal()
     suggested = Signal(str, list)   # output path, photographs to ask about
+    why_wanted = Signal(str)        # the frame whose story is asked for
 
     def __init__(self, shortlist, reviews, loader: PreviewLoader,
                  directions=None, parent: QWidget | None = None):
@@ -139,10 +140,23 @@ class ShortlistPage(QWidget):
         stage_column = QVBoxLayout(stage)
         stage_column.setContentsMargins(14, 12, 14, 12)
         stage_column.setSpacing(8)
+        head = QHBoxLayout()
+        head.setSpacing(10)
         self.heading = QLabel("")
         self.heading.setObjectName("clusterTitle")
         self.heading.setFont(theme.display(17))
-        stage_column.addWidget(self.heading)
+        head.addWidget(self.heading)
+        why = QPushButton("Why?")
+        why.setObjectName("ghost")
+        why.setFont(theme.body(9))
+        why.setCursor(Qt.CursorShape.PointingHandCursor)
+        why.setToolTip(
+            "The recorded story of this frame: culled, reviewed, assessed, "
+            "rated. Nothing is computed; nothing is asked.")
+        why.clicked.connect(lambda: self.why_wanted.emit(self.current))
+        head.addWidget(why)
+        head.addStretch(1)
+        stage_column.addLayout(head)
         self.frame = PhotoLabel()
         self.frame.setObjectName("paneImage")
         stage_column.addWidget(self.frame, 1)

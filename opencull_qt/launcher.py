@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
 from opencull_gui import phases
 from opencull_gui.project import load_or_create_folder_project
 from opencull_gui.project_catalog import ProjectCatalogError
+from opencull_gui.provenance import frame_story
 from opencull_gui.reviews import (
     ReviewError,
     default_review_path,
@@ -46,6 +47,7 @@ from .develop import DevelopPage
 from .export import ExportPage
 from .finetune import FineTunePage
 from .previews import LibraryPreviewLoader, PreviewLoader
+from .provenance import ProvenanceDialog
 from .providers import ProvidersDialog
 from .review import ReviewPage
 from .sheet import ContactSheet
@@ -755,9 +757,11 @@ class Launcher(QMainWindow):
                      f"Assess all {count} frames") if chosen == count
                     else f"Assess {chosen} of these {count}"))
             return invitation
-        return ShortlistPage(
+        page = ShortlistPage(
             bench.shortlist, bench.shortlist_reviews, self._loader,
             directions=bench.directions)
+        page.why_wanted.connect(self.explain_frame)
+        return page
 
     def _profile_page(self, bench: Bench):
         panel = StylePanel(
@@ -768,6 +772,7 @@ class Launcher(QMainWindow):
     def _suggestions_page(self, bench: Bench):
         page = SuggestionsPage(
             bench.shortlist, bench.shortlist_reviews, bench.directions)
+        page.why_wanted.connect(self.explain_frame)
         page.suggested.connect(
             lambda output, wanted: self.suggest_edits(
                 bench.shortlist, bench.shortlist_reviews, bench.photos,
@@ -778,6 +783,7 @@ class Launcher(QMainWindow):
         page = DevelopPage(bench.report, bench.workspace, self._loader)
         page.verification_wanted.connect(
             lambda request: self.verify_render(bench.workspace, request))
+        page.why_wanted.connect(self.explain_frame)
         return page
 
     def _finetune_page(self, bench: Bench):
@@ -1034,6 +1040,14 @@ class Launcher(QMainWindow):
         except Exception as exc:
             self.report(str(exc), "alarm")
         self.refresh()
+
+    def explain_frame(self, photo: str) -> None:
+        """Answer "why is this frame here?" from the records alone."""
+        bench = self.bench
+        if bench is None or not photo:
+            return
+        dialog = ProvenanceDialog(photo, frame_story(bench, photo), self)
+        dialog.exec()
 
     def show_studio(self) -> None:
         """One room for the photographer's own things."""

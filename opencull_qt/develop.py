@@ -426,6 +426,7 @@ class DevelopPage(QWidget):
 
     closed = Signal()
     verification_wanted = Signal(dict)
+    why_wanted = Signal(str)        # the frame whose story is asked for
 
     def __init__(self, report, workspace: DevelopmentWorkspace,
                  loader: PreviewLoader, parent: QWidget | None = None):
@@ -533,10 +534,21 @@ class DevelopPage(QWidget):
         layout.setContentsMargins(18, 18, 18, 18)
         layout.setSpacing(10)
 
+        head = QHBoxLayout()
+        head.setSpacing(8)
         heading = QLabel("TREATMENT")
         heading.setObjectName("bandTitle")
         heading.setFont(theme.display(8))
-        layout.addWidget(heading)
+        head.addWidget(heading)
+        head.addStretch(1)
+        why = QPushButton("Why?")
+        why.setObjectName("ghost")
+        why.setFont(theme.body(9))
+        why.setCursor(Qt.CursorShape.PointingHandCursor)
+        why.setToolTip("The recorded story of this frame.")
+        why.clicked.connect(lambda: self.why_wanted.emit(self.current))
+        head.addWidget(why)
+        layout.addLayout(head)
 
         self.treatments = QListWidget()
         self.treatments.setObjectName("treatmentList")

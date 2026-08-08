@@ -109,6 +109,7 @@ class SuggestionsPage(QWidget):
 
     closed = Signal()
     suggested = Signal(str, list)   # output path, photographs to ask about
+    why_wanted = Signal(str)        # the frame whose story is asked for
 
     def __init__(self, shortlist, reviews, directions,
                  parent: QWidget | None = None):
@@ -148,10 +149,21 @@ class SuggestionsPage(QWidget):
         column.setContentsMargins(22, 16, 22, 14)
         column.setSpacing(12)
 
+        head = QHBoxLayout()
+        head.setSpacing(10)
         self.heading = QLabel("")
         self.heading.setObjectName("clusterTitle")
         self.heading.setFont(theme.display(17))
-        column.addWidget(self.heading)
+        head.addWidget(self.heading)
+        why = QPushButton("Why?")
+        why.setObjectName("ghost")
+        why.setFont(theme.body(9))
+        why.setCursor(Qt.CursorShape.PointingHandCursor)
+        why.setToolTip("The recorded story of this frame.")
+        why.clicked.connect(lambda: self.why_wanted.emit(self.current))
+        head.addWidget(why)
+        head.addStretch(1)
+        column.addLayout(head)
 
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
