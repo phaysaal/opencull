@@ -30,7 +30,11 @@ from PySide6.QtWidgets import (
 from opencull_gui import phases
 from opencull_gui.project import load_or_create_folder_project
 from opencull_gui.project_catalog import ProjectCatalogError
-from opencull_gui.reviews import default_review_path
+from opencull_gui.reviews import (
+    ReviewError,
+    default_review_path,
+    narrow_selection,
+)
 from opencull_gui.shortlist import write_manual_shortlist
 from opencull_gui.style import StyleProfileStore
 from scan import classify_folder
@@ -564,13 +568,16 @@ class Launcher(QMainWindow):
                 f"Cull it, or go straight to {treatment.lower()}.")
         self.refresh()
 
-    def cull_project(self, project: dict, again: bool = False) -> None:
+    def cull_project(self, project: dict, again: bool = False,
+                     only_photos: list[str] | None = None) -> None:
         name = str(project.get("name") or Path(str(project.get("photos", ""))).name)
         if again and not self.confirm_recull(name):
             return
         photos = str(project.get("photos", ""))
         try:
-            self.services.jobs.add(photos, "", 2, True, "family", "", None, 5, 4)
+            self.services.jobs.add(
+                photos, "", 2, True, "family", "", None, 5, 4,
+                only_photos=only_photos)
         except Exception as exc:
             # A missing provider credential surfaces here, and is the most
             # common reason a cull cannot start, so say so plainly.
@@ -644,6 +651,28 @@ class Launcher(QMainWindow):
             marked=bench.marked(), culled=bench.culled(),
             suggested=bench.suggested())
 
+    @staticmethod
+    def _wire_selection(invitation, sheet, label) -> None:
+        """Keep the paid button's count equal to the sheet's selection.
+
+        The price on the button is the price paid, so unticking a frame
+        re-counts it immediately. Nothing chosen disables the buttons with
+        the reason where the press would have been.
+        """
+        def recount() -> None:
+            count = len(sheet.chosen())
+            invitation.button.setText(label(count))
+            nothing = count == 0
+            reason = ("Every frame is unticked, so there is nothing for "
+                      "the run to read. Tick at least one frame.")
+            for button in (invitation.button, invitation.other):
+                if button is None:
+                    continue
+                button.setEnabled(not nothing)
+                button.setToolTip(reason if nothing else "")
+        sheet.changed.connect(recount)
+        recount()
+
     # --- the pages behind the phases -------------------------------------
 
     def _phase_page(self, bench: Bench, key: str):
@@ -674,16 +703,30 @@ class Launcher(QMainWindow):
         if not bench.culled():
             frames = list(bench.report.photo_names)
             count = len(frames)
-            return Invitation(
+            sheet = ContactSheet(frames, self._loader, selectable=True)
+            invitation = Invitation(
                 "This folder has not been culled",
                 "A cull reads every frame, groups the near-duplicates, and "
                 "proposes which one of each group to keep. You review what it "
-                "proposes; nothing is deleted, ever.",
+                "proposes; nothing is deleted, ever. Click a frame to leave "
+                "it out of the run.",
                 f"Cull these {count} photographs",
-                lambda: self.cull_project(bench.project),
+                lambda: self.cull_project(
+                    bench.project,
+                    # Full selection stays byte-identical to an unfiltered
+                    # cull: same command, same manifest, same checkpoints.
+                    only_photos=(
+                        sheet.chosen()
+                        if len(sheet.chosen()) < count else None)),
                 f"These are the {count} photographs in the folder. Every one "
-                "is read by a model, so this costs.",
-                shows=ContactSheet(frames, self._loader))
+                "ticked is read by a model, so this costs.",
+                shows=sheet)
+            self._wire_selection(
+                invitation, sheet,
+                lambda chosen: (
+                    f"Cull these {count} photographs" if chosen == count
+                    else f"Cull {chosen} of these {count} photographs"))
+            return invitation
         return ReviewPage(bench.report, bench.reviews, self._loader)
 
     def _assessment_page(self, bench: Bench):
@@ -691,21 +734,33 @@ class Launcher(QMainWindow):
             culled = bench.culled()
             frames = bench.selection()
             count = len(frames)
-            return Invitation(
+            sheet = ContactSheet(frames, self._loader, selectable=True)
+            invitation = Invitation(
                 "This folder has not been assessed",
                 "An assessment judges each frame in the selection for what it "
                 "could become. You then mark the ones worth developing, and "
-                "those are the ones that get editing suggestions.",
+                "those are the ones that get editing suggestions. Click a "
+                "frame to leave it out.",
                 f"Assess these {count}" if culled else
                 f"Assess all {count} frames",
-                lambda: self.assess_project(bench.project),
-                f"These are the {count} frames the cull kept. Each is read by "
-                "a model, so this costs." if culled else
-                "This folder has not been culled, so the selection is every "
-                f"frame in it -- about {count} model calls rather than one "
-                "per keeper. Culling first is usually cheaper.",
-                shows=ContactSheet(frames, self._loader),
-                instead=("Rate them myself", lambda: self.rate_by_hand(bench)))
+                lambda: self.assess_project(bench.project, sheet.chosen()),
+                (f"These are the {count} frames the cull kept. Each ticked "
+                 "frame is read by a model, so this costs." if culled else
+                 "This folder has not been culled, so the selection is every "
+                 f"frame in it -- about {count} model calls rather than one "
+                 "per keeper. Culling first is usually cheaper.")
+                + " Frames left out are recorded in the cull review, where "
+                "the choice can be reversed.",
+                shows=sheet,
+                instead=("Rate them myself",
+                         lambda: self.rate_by_hand(bench, sheet.chosen())))
+            self._wire_selection(
+                invitation, sheet,
+                lambda chosen: (
+                    (f"Assess these {count}" if culled else
+                     f"Assess all {count} frames") if chosen == count
+                    else f"Assess {chosen} of these {count}"))
+            return invitation
         return ShortlistPage(
             bench.shortlist, bench.shortlist_reviews, self._loader,
             directions=bench.directions)
@@ -748,13 +803,14 @@ class Launcher(QMainWindow):
     def open_shortlist(self, project: dict) -> None:
         self.open_project(project, phases.ASSESSMENT)
 
-    def assess_project(self, project: dict) -> None:
-        """Queue the assessment of a folder's selection.
+    def assess_project(self, project: dict,
+                       chosen: list[str] | None = None) -> None:
+        """Queue the assessment of what stayed ticked.
 
-        Every other run that costs money is confirmed before it starts. This
-        one is confirmed only when it would cost more than the photographer
-        is likely to expect -- an unculled folder has every frame in its
-        selection, so the assessment reads all of them.
+        The prefilter is written only after the criteria dialog accepts, so
+        cancelling leaves no trace anywhere -- and it is written as an
+        ordinary human review, through the same store the review page uses,
+        so the run, the counts, and any open review agree.
         """
         report_path = Path(str(project.get("report", "")))
         if not report_path.is_file():
@@ -762,14 +818,41 @@ class Launcher(QMainWindow):
             return
         bench = self.bench
         culled = bench.culled() if bench is not None else True
-        # The number quoted is the number the run will read, not a count of
-        # clusters that happens to match most of the time.
-        frames = len(bench.selection()) if bench is not None else 0
+        selection = bench.selection() if bench is not None else []
+        # The number quoted is the number the run will read.
+        frames = len(chosen) if chosen is not None else len(selection)
+        if chosen is not None and not chosen:
+            self._say("Every frame is unticked; there is nothing to assess.",
+                      "alarm")
+            return
         name = str(project.get("name") or Path(
             str(project.get("photos", ""))).name)
         stance = self.ask_criteria(name, frames, culled)
         if not stance:
             return
+        if (
+            bench is not None and chosen is not None
+            and set(chosen) != set(selection)
+        ):
+            try:
+                narrow_selection(bench.reviews, chosen)
+            except ReviewError as exc:
+                # Whatever was written before the failure is a valid
+                # recorded decision, but the price shown is no longer the
+                # price that would be paid -- so nothing is queued.
+                self._say(f"The prefilter could not be recorded: {exc}",
+                          "alarm")
+                return
+            shell = self.review_page
+            if isinstance(shell, ProjectShell):
+                # A built review page shares the memoized store and would
+                # show keepers the prefilter just changed.
+                shell.drop(phases.CULL)
+            if set(bench.selection()) != set(chosen):
+                self._say(
+                    "The recorded selection does not match what was ticked, "
+                    "so nothing was queued.", "alarm")
+                return
         photos = str(project.get("photos", ""))
         review = default_review_path(report_path)
         try:
@@ -784,8 +867,10 @@ class Launcher(QMainWindow):
         self.stance = stance
         self._say(
             f"Assessing {name} against the {stance} bar. "
-            + ("Every frame the cull kept is read"
-               if culled else f"All {frames} frames are read")
+            + (f"{frames} frame{'' if frames == 1 else 's'} are read"
+               if chosen is not None and len(chosen) != len(selection)
+               else "Every frame the cull kept is read" if culled
+               else f"All {frames} frames are read")
             + "; the frames you then mark are the ones that get editing "
             "suggestions.", "ok")
         self.refresh()
@@ -803,14 +888,19 @@ class Launcher(QMainWindow):
             return ""
         return dialog.stance()
 
-    def rate_by_hand(self, bench: Bench) -> None:
+    def rate_by_hand(self, bench: Bench,
+                     chosen: list[str] | None = None) -> None:
         """Open the assessment with nobody's opinion in it but your own.
 
         Rating your own work should not require buying a model's judgement
         first in order to disagree with it. This lays out the same shortlist
-        the assessment would produce, unrated, and costs nothing.
+        the assessment would produce, unrated, and costs nothing. Frames
+        unticked on the sheet are recorded in the cull review first, so the
+        by-hand path and any later paid run agree about the selection.
         """
         try:
+            if chosen is not None and set(chosen) != set(bench.selection()):
+                narrow_selection(bench.reviews, chosen)
             write_manual_shortlist(
                 bench.report, bench.selection(), bench.shortlist_path)
         except Exception as exc:                     # noqa: BLE001 - reported

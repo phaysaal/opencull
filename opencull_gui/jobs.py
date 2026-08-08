@@ -447,6 +447,7 @@ class JobManager:
             f"keep_per_group={job['keep_per_group']}",
             f"recursive={'true' if job['recursive'] else 'false'}",
             f"profile={job['profile']}",
+            f"only_photos={json.dumps(job.get('only_photos') or [])}",
             "resume=true",
         ]
 
@@ -478,6 +479,7 @@ class JobManager:
         judge_panel: Any = None,
         judge_votes: Any = 5,
         judge_required: Any = 4,
+        only_photos: list[str] | None = None,
     ) -> dict[str, Any]:
         source = Path(str(photos)).expanduser().resolve()
         if not source.is_dir():
@@ -547,6 +549,12 @@ class JobManager:
                 "recursive": bool(recursive),
                 "profile": profile,
                 "judgment_policy": judgment_policy,
+                # The photographer's prefilter. Empty means the whole folder,
+                # and the command line then stays what it always was.
+                "only_photos": [
+                    str(item).strip() for item in (only_photos or [])
+                    if str(item).strip()
+                ],
                 "status": "queued",
                 "message": "Waiting for the culling worker.",
                 "pid": None,

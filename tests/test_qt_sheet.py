@@ -77,6 +77,74 @@ class ContactSheetTests(unittest.TestCase):
         self.assertEqual(len(self.sheet(many, limit=10).selection), 500)
 
 
+@unittest.skipUnless(QApplication is not None, "PySide6 is not installed")
+class SelectableSheetTests(ContactSheetTests):
+    """The sheet as the prefilter: leaving out is a visible decision."""
+
+    def selectable(self, names=None, **kwargs):
+        return self.sheet(
+            list(names if names is not None else NAMES),
+            selectable=True, **kwargs)
+
+    def test_everything_starts_ticked(self):
+        sheet = self.selectable()
+        self.assertEqual(sheet.chosen(), list(NAMES))
+
+    def test_a_click_leaves_a_frame_out_and_says_so(self):
+        sheet = self.selectable()
+        changes = []
+        sheet.changed.connect(lambda: changes.append(True))
+        sheet.toggle(NAMES[1])
+        self.assertEqual(sheet.chosen(), [NAMES[0], NAMES[2]])
+        self.assertFalse(sheet.tiles[NAMES[1]].included)
+        self.assertEqual(len(changes), 1)
+
+    def test_a_second_click_brings_it_back(self):
+        sheet = self.selectable()
+        sheet.toggle(NAMES[1])
+        sheet.toggle(NAMES[1])
+        self.assertEqual(sheet.chosen(), list(NAMES))
+        self.assertTrue(sheet.tiles[NAMES[1]].included)
+
+    def test_frames_past_the_draw_cap_cannot_be_left_out(self):
+        many = [f"F{index:04d}.JPG" for index in range(500)]
+        sheet = self.selectable(many, limit=10)
+        sheet.toggle(many[3])
+        self.assertEqual(len(sheet.chosen()), 499)
+        # And nothing beyond the cap can be touched: no tile, no toggle.
+        sheet.toggle(many[400])
+        self.assertEqual(len(sheet.chosen()), 499)
+
+    def test_the_capped_notice_says_only_shown_frames_can_be_left_out(self):
+        many = [f"F{index:04d}.JPG" for index in range(500)]
+        shown = self.text(self.selectable(many, limit=10))
+        self.assertIn("All 500 are included", shown)
+        self.assertIn("only the frames shown can be left out", shown)
+
+    def test_a_display_sheet_ignores_clicks_entirely(self):
+        sheet = self.sheet(list(NAMES))
+        sheet.toggle(NAMES[0])
+        self.assertEqual(sheet.chosen(), list(NAMES))
+
+    def test_space_toggles_the_focused_tile(self):
+        from PySide6.QtCore import QEvent, Qt
+        from PySide6.QtGui import QKeyEvent
+
+        sheet = self.selectable()
+        tile = sheet.tiles[NAMES[0]]
+        tile.keyPressEvent(QKeyEvent(
+            QEvent.Type.KeyPress, Qt.Key.Key_Space,
+            Qt.KeyboardModifier.NoModifier))
+        self.assertNotIn(NAMES[0], sheet.chosen())
+
+    def test_set_all_unticks_and_reticks_every_drawn_tile(self):
+        sheet = self.selectable()
+        sheet.set_all(False)
+        self.assertEqual(sheet.chosen(), [])
+        sheet.set_all(True)
+        self.assertEqual(sheet.chosen(), list(NAMES))
+
+
 class SelectionRuleTests(unittest.TestCase):
     """The page must show the list the run will actually read."""
 

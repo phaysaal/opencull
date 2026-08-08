@@ -391,17 +391,50 @@ def scan_directory(
     time_window: float = 8.0,
     hash_distance: float = 14,
     comparison_window: float = 16,
+    only_photos: str = "[]",
 ) -> str:
     """Read a photo directory and return its complete manifest as JSON.
 
     This is the Kimiya-facing kernel function: deterministic for a fixed
     directory state, read-only, and free of output-file side effects.
+
+    ``only_photos`` is a JSON list of root-relative names: the photographer's
+    prefilter, applied before anything is measured so an excluded frame is
+    never read at all. A name the folder does not hold is an error rather
+    than a silent shrink -- a run must never quietly cover less than it was
+    asked to. An empty list leaves the manifest byte-identical to an
+    unfiltered scan, so existing checkpoints keyed on the manifest hash
+    stay valid.
     """
     root = Path(str(directory)).expanduser().resolve()
     if not root.is_dir():
         raise ValueError(f"not a directory: {root}")
 
+    try:
+        wanted_list = json.loads(str(only_photos) or "[]")
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"only_photos must be a JSON list of photograph names: {exc}"
+        ) from exc
+    if not isinstance(wanted_list, list) or any(
+        not isinstance(name, str) for name in wanted_list
+    ):
+        raise ValueError("only_photos must be a JSON list of photograph names")
+    wanted = {name for name in wanted_list if name.strip()}
+
     paths = image_files(root, bool(recursive))
+    if wanted:
+        names = {path.relative_to(root).as_posix() for path in paths}
+        unknown = sorted(wanted - names)
+        if unknown:
+            raise ValueError(
+                "only_photos names not present in the folder: "
+                + ", ".join(unknown[:5])
+                + ("…" if len(unknown) > 5 else ""))
+        paths = [
+            path for path in paths
+            if path.relative_to(root).as_posix() in wanted
+        ]
     if not paths:
         raise ValueError(f"no supported photographs in {root}")
 
@@ -430,6 +463,10 @@ def scan_directory(
             "hash_distance": int(hash_distance),
             "comparison_window": int(comparison_window),
             "recursive": bool(recursive),
+            # Recorded only when a prefilter was applied: a full scan's
+            # manifest -- and every checkpoint keyed on its hash -- must not
+            # change because this parameter now exists.
+            **({"only_photos": sorted(wanted)} if wanted else {}),
         },
         "groups": [
             {

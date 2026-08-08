@@ -552,6 +552,138 @@ class LauncherWindowTests(unittest.TestCase):
         page = window.review_page.page_for(phases.ASSESSMENT)
         self.assertEqual([item["photo"] for item in page.entries], selection)
 
+    def invitation_for(self, window, phase):
+        return window.review_page.page_for(phase)
+
+    def keep_everything(self, project) -> None:
+        """Widen the fixture's cull to keep all frames, so a prefilter has
+        something to narrow."""
+        import json as _json
+
+        path = Path(project["report"])
+        value = _json.loads(path.read_text(encoding="utf-8"))
+        for cluster, decision in zip(value["clusters"], value["keep"]):
+            decision["photos"] = list(cluster["photos"])
+        path.write_text(_json.dumps(value), encoding="utf-8")
+
+    def test_unticking_a_frame_recounts_the_paid_button(self):
+        window, _ = self.build(projects=[])
+        project = self.shoot_project(window)
+        project["report_available"] = False
+        with mock.patch.object(
+                window.services.projects, "manual_selection_report",
+                return_value=Path(project["report"])):
+            window.open_project(project)
+        self.addCleanup(window.show_projects)
+        invitation = self.invitation_for(window, phases.CULL)
+        sheet = invitation.shows
+        self.assertIn("3 photographs", invitation.button.text())
+        sheet.toggle(sheet.selection[0])
+        self.assertIn("Cull 2 of these 3", invitation.button.text())
+
+    def test_nothing_ticked_disables_the_press_and_says_why(self):
+        window, _ = self.build(projects=[])
+        project = self.shoot_project(window)
+        project["report_available"] = False
+        with mock.patch.object(
+                window.services.projects, "manual_selection_report",
+                return_value=Path(project["report"])):
+            window.open_project(project)
+        self.addCleanup(window.show_projects)
+        invitation = self.invitation_for(window, phases.CULL)
+        invitation.shows.set_all(False)
+        self.assertFalse(invitation.button.isEnabled())
+        self.assertIn("nothing for the run to read",
+                      invitation.button.toolTip())
+
+    def test_a_partial_cull_carries_the_prefilter_to_the_job(self):
+        window, services = self.build(projects=[])
+        project = self.shoot_project(window)
+        project["report_available"] = False
+        with mock.patch.object(
+                window.services.projects, "manual_selection_report",
+                return_value=Path(project["report"])):
+            window.open_project(project)
+        self.addCleanup(window.show_projects)
+        invitation = self.invitation_for(window, phases.CULL)
+        sheet = invitation.shows
+        sheet.toggle(sheet.selection[1])
+        invitation.button.click()
+        self.assertEqual(
+            services.jobs.add.call_args.kwargs["only_photos"],
+            [sheet.selection[0], sheet.selection[2]])
+
+    def test_a_full_cull_stays_exactly_what_it_always_was(self):
+        window, services = self.build(projects=[])
+        project = self.shoot_project(window)
+        project["report_available"] = False
+        with mock.patch.object(
+                window.services.projects, "manual_selection_report",
+                return_value=Path(project["report"])):
+            window.open_project(project)
+        self.addCleanup(window.show_projects)
+        self.invitation_for(window, phases.CULL).button.click()
+        self.assertIsNone(services.jobs.add.call_args.kwargs["only_photos"])
+
+    def test_a_narrowed_assessment_writes_the_review_then_queues(self):
+        window, services = self.build(projects=[])
+        project = self.shoot_project(window)
+        self.keep_everything(project)
+        window.open_project(project)
+        self.addCleanup(window.show_projects)
+        selection = window.bench.selection()
+        self.assertGreater(len(selection), 1)
+        chosen = selection[:1]
+        with mock.patch.object(
+                window, "ask_criteria", return_value="professional"):
+            window.assess_project(project, chosen)
+        services.jobs.add_professional.assert_called_once()
+        self.assertEqual(window.bench.selection(), chosen)
+        # And the review it queued with is the one just written.
+        self.assertTrue(
+            services.jobs.add_professional.call_args.kwargs["review"])
+
+    def test_cancelling_the_criteria_dialog_writes_no_prefilter(self):
+        window, services = self.build(projects=[])
+        project = self.shoot_project(window)
+        window.open_project(project)
+        self.addCleanup(window.show_projects)
+        before = window.bench.selection()
+        with mock.patch.object(window, "ask_criteria", return_value=""):
+            window.assess_project(project, before[:1])
+        services.jobs.add_professional.assert_not_called()
+        self.assertEqual(window.bench.selection(), before)
+
+    def test_a_refused_prefilter_queues_nothing(self):
+        from opencull_gui.reviews import ReviewError
+
+        window, services = self.build(projects=[])
+        project = self.shoot_project(window)
+        self.keep_everything(project)
+        window.open_project(project)
+        self.addCleanup(window.show_projects)
+        chosen = window.bench.selection()[:1]
+        with mock.patch.object(
+                window, "ask_criteria", return_value="professional"), \
+                mock.patch(
+                    "opencull_qt.launcher.narrow_selection",
+                    side_effect=ReviewError("review is stale")):
+            window.assess_project(project, chosen)
+        services.jobs.add_professional.assert_not_called()
+
+    def test_rating_by_hand_honours_the_unticking(self):
+        window, _ = self.build(projects=[])
+        project = self.shoot_project(window)
+        self.keep_everything(project)
+        window.open_project(project)
+        self.addCleanup(window.show_projects)
+        selection = window.bench.selection()
+        self.assertGreater(len(selection), 1)
+        window.rate_by_hand(window.bench, selection[:1])
+        page = window.review_page.page_for(phases.ASSESSMENT)
+        self.assertEqual(
+            [item["photo"] for item in page.entries], selection[:1])
+
     def test_assessing_queues_the_shortlist_with_the_culling_review(self):
         window, services = self.build(projects=[])
         shoot = Path(tempfile.mkdtemp())

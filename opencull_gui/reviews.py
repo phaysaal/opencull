@@ -7,6 +7,7 @@ import os
 import shutil
 import tempfile
 import threading
+from collections.abc import Iterable
 from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path
@@ -397,3 +398,50 @@ class ReviewStore:
                     "clusters retain clearly labelled AI recommendations."
                 ),
             }
+
+
+# What a prefiltered cluster's note says when the photographer left none of
+# their own. An existing note is never touched: the decision is recorded
+# beside what is already there, not over it.
+PREFILTER_NOTE = "Left out by hand on the contact sheet, before the run."
+
+
+def narrow_selection(
+    store: ReviewStore, keep: Iterable[str], action: str = "prefilter",
+) -> int:
+    """Record that only ``keep`` should enter the next paid run.
+
+    A prefilter is not new machinery: it is an ordinary human review,
+    written through the same store the review page writes through, so the
+    run, the counts on the buttons, and any open review all read the same
+    decision. Each changed cluster is one ``update_cluster`` call, feeding
+    the revision each call returns into the next.
+
+    Returns the number of clusters written. Clusters whose effective
+    keepers already lie inside ``keep`` are not touched -- a review that
+    was not made must not be claimed.
+    """
+    if store.stale_reason:
+        raise ReviewError(store.stale_reason)
+    wanted = {str(name) for name in keep}
+    state = store.public_state()
+    revision = state["revision"]
+    clusters = state.get("clusters", {})
+    written = 0
+    for cluster_id in store.report.cluster_by_id:
+        human = clusters.get(cluster_id) or {}
+        reviewed = human.get("reviewed") is True
+        if reviewed:
+            effective = [str(name) for name in human.get("keepers") or []]
+        else:
+            decision = store.report.decision_by_id.get(cluster_id, {})
+            effective = [str(name) for name in decision.get("photos") or []]
+        narrowed = [name for name in effective if name in wanted]
+        if narrowed == effective:
+            continue
+        note = str(human.get("note") or "") or PREFILTER_NOTE
+        result = store.update_cluster(
+            cluster_id, narrowed, note, True, revision, None, action)
+        revision = result["revision"]
+        written += 1
+    return written

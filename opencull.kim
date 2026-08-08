@@ -17,6 +17,10 @@ param tuning_budget: num = 8
 param profile: text = "family"
 param resume: bool = true
 param checkpoint: text = ""
+-- The photographer's prefilter: a JSON list of root-relative names, applied
+-- before anything is measured. Empty means the whole folder, and leaves the
+-- manifest -- and every checkpoint keyed on its hash -- unchanged.
+param only_photos: text = "[]"
 
 use "agents.kim"
 use python "scan.py"
@@ -52,7 +56,7 @@ schema FrameReading:
     uncertainty: text
     confidence: num
 
-initial_manifest := scan_directory(photos, recursive, time_window, hash_distance, comparison_window)
+initial_manifest := scan_directory(photos, recursive, time_window, hash_distance, comparison_window, only_photos)
 manifest := initial_manifest
 source_directory := manifest_source(initial_manifest)
 assessments := []
@@ -70,7 +74,7 @@ if check adaptive:
             assessments := assessments + [cluster_assessment_json(assessment, review)]
     plan := build_tuning_plan(assessments, hash_distance, time_window)
     if check plan.changed:
-        tuned_manifest := scan_directory(photos, recursive, plan.time_window, plan.hash_distance, comparison_window)
+        tuned_manifest := scan_directory(photos, recursive, plan.time_window, plan.hash_distance, comparison_window, only_photos)
         manifest := accept_tuned_manifest(initial_manifest, tuned_manifest, plan)
 
 groups := parse_manifest(manifest)

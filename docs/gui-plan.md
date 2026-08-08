@@ -149,7 +149,7 @@ Studio ledger will feed into the prompts.
 Cheap-and-shaping first; provider-gated last.
 
 1. **Selectable contact sheet** — prefilter before cull and assessment
-   (free, largest cost lever, reuses built parts)
+   (free, largest cost lever, reuses built parts) — **built**
 2. **Approve the lot + trash the rejects** — completes the cull story
    (backend exists)
 3. **Studio page** — profile naming, providers move, ledger placeholder
