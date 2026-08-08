@@ -21,6 +21,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, QRunnable, QSize, Qt, QThreadPool, Signal
 from PySide6.QtWidgets import (
+    QCheckBox,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -33,6 +34,7 @@ from PySide6.QtWidgets import (
 )
 
 from opencull_gui.development import DevelopmentWorkspace
+from opencull_gui.proofsheet import write_proof_sheet
 
 from . import theme
 from .widgets import short_path
@@ -58,17 +60,19 @@ class _DeliveryJob(QRunnable):
     """
 
     def __init__(self, workspace: DevelopmentWorkspace, photo: str,
-                 source: str, destination: str):
+                 source: str, destination: str, sequence: int | None = None):
         super().__init__()
         self.workspace = workspace
         self.photo = photo
         self.source = source
         self.destination = destination
+        self.sequence = sequence
         self.signals = _DeliverySignals()
 
     def run(self) -> None:
         try:
-            record = self.workspace.export_render(self.source, self.destination)
+            record = self.workspace.export_render(
+                self.source, self.destination, self.sequence)
         except Exception as exc:                     # noqa: BLE001 - reported
             self.signals.failed.emit(self.photo, str(exc))
             return
@@ -92,8 +96,10 @@ class Deliverer(QObject):
         self.pool = pool or QThreadPool()
         self.pending = 0
 
-    def deliver(self, photo: str, source: str, destination: str) -> None:
-        job = _DeliveryJob(self.workspace, photo, source, destination)
+    def deliver(self, photo: str, source: str, destination: str,
+                sequence: int | None = None) -> None:
+        job = _DeliveryJob(
+            self.workspace, photo, source, destination, sequence)
         job.signals.done.connect(self._one_done)
         job.signals.failed.connect(self._one_failed)
         self.pending += 1
@@ -136,6 +142,7 @@ class ExportPage(QWidget):
         self._written: list[str] = []
         self._renamed = 0
         self._refused = 0
+        self._sent: list[dict] = []
         self._build()
         self.refresh()
 
@@ -163,6 +170,13 @@ class ExportPage(QWidget):
         self.list.setObjectName("treatmentList")
         self.list.itemChanged.connect(lambda _item: self._count_chosen())
         self.list.setMaximumWidth(MEASURE)
+        # The delivery's order is a decision: drag to make it, and it is
+        # recorded on every export record.
+        self.list.setDragDropMode(
+            QListWidget.DragDropMode.InternalMove)
+        self.list.setToolTip(
+            "Drag to set the delivery order. The order is recorded with "
+            "the delivery.")
         column.addWidget(self.list)
 
         where = QHBoxLayout()
@@ -178,6 +192,15 @@ class ExportPage(QWidget):
         where.addWidget(choose)
         where.addWidget(self.folder, 1)
         column.addLayout(where)
+
+        self.proof = QCheckBox("Also write a proof sheet")
+        self.proof.setFont(theme.body(10))
+        self.proof.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.proof.setToolTip(
+            "One self-contained page beside the delivery: each frame as "
+            "delivered next to the frame as shot, with its treatment's "
+            "intent and its certificate. Nothing is spent.")
+        column.addWidget(self.proof)
 
         actions = QHBoxLayout()
         actions.setSpacing(10)
@@ -260,6 +283,7 @@ class ExportPage(QWidget):
 
         self.list.blockSignals(True)
         self.list.clear()
+        by_row: list[dict] = []
         for render in self.renders:
             photo = str(render.get("source_photo") or "")
             variant = str(render.get("variant") or "render")
@@ -269,7 +293,11 @@ class ExportPage(QWidget):
                        or Path(str(render.get("path", ""))).name)
             item = QListWidgetItem(
                 f"  {photo}   ·   {variant}   →   {name}{mark}")
-            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setData(Qt.ItemDataRole.UserRole, len(by_row))
+            by_row.append(render)
+            item.setFlags(
+                item.flags() | Qt.ItemFlag.ItemIsUserCheckable
+                | Qt.ItemFlag.ItemIsDragEnabled)
             # Already-delivered renders start unticked: delivering the shoot
             # again should not silently make a second copy of everything.
             item.setCheckState(
@@ -295,10 +323,16 @@ class ExportPage(QWidget):
         self._count_chosen()
 
     def chosen(self) -> list[dict]:
-        return [
-            render for row, render in enumerate(self.renders)
-            if self.list.item(row) is not None
-            and self.list.item(row).checkState() == Qt.CheckState.Checked]
+        """The ticked renders, in the order the list currently tells them."""
+        by_row: list[dict] = []
+        for row in range(self.list.count()):
+            item = self.list.item(row)
+            if item is None or item.checkState() != Qt.CheckState.Checked:
+                continue
+            index = item.data(Qt.ItemDataRole.UserRole)
+            if isinstance(index, int) and 0 <= index < len(self.renders):
+                by_row.append(self.renders[index])
+        return by_row
 
     def _count_chosen(self) -> None:
         count = len(self.chosen())
@@ -337,18 +371,20 @@ class ExportPage(QWidget):
         self._written = []
         self._renamed = 0
         self._refused = 0
+        self._sent = list(renders)
         self.deliver_button.setEnabled(False)
         self._report(
             f"Delivering {len(renders)} rendering"
             f"{'' if len(renders) == 1 else 's'} to "
             f"{short_path(str(self.destination))}.")
-        for render in renders:
+        for position, render in enumerate(renders, start=1):
             name = str(render.get("suggested_filename")
                        or Path(str(render.get("path", ""))).name)
             self.deliverer.deliver(
                 str(render.get("source_photo") or name),
                 str(render.get("path", "")),
-                str(self.destination / name))
+                str(self.destination / name),
+                sequence=position)
 
     def _delivered(self, photo: str, requested: str, written: str) -> None:
         self._written.append(written)
@@ -373,6 +409,15 @@ class ExportPage(QWidget):
             message += (
                 f" {self._renamed} took a new name, because a file of that "
                 "name was already there and Darkimiya does not write over one.")
+        if self.proof.isChecked() and self._sent:
+            try:
+                sheet = write_proof_sheet(
+                    self.workspace, self._sent, self.destination,
+                    Path(str(self.workspace.payload().get(
+                        "source_folder") or "Delivery")).name)
+                message += f" Proof sheet: {short_path(str(sheet))}."
+            except Exception as exc:                 # noqa: BLE001 - reported
+                message += f" The proof sheet could not be written: {exc}."
         self._report(message, "alarm" if self._refused else "ok")
         self.refresh()
 

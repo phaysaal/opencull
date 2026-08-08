@@ -163,3 +163,55 @@ class ExportPageTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(QApplication is not None, "PySide6 is not installed")
+class DeliveryOrderTests(ExportPageTests):
+    """The delivery's order is a decision, and it is recorded."""
+
+    def test_the_order_delivered_is_the_order_recorded(self):
+        page = self.page(renders=(("A.JPG", "standard"), ("B.JPG", "creative")))
+        # Drag B above A: same rows, reversed.
+        first = page.list.takeItem(0)
+        page.list.insertItem(1, first)
+        first.setCheckState(Qt.CheckState.Checked)
+        page.deliver()
+        self.settle(page)
+        exports = page.workspace.export_payload()["exports"]
+        ordered = sorted(exports, key=lambda item: item.get("sequence", 0))
+        self.assertEqual(
+            [Path(item["source"]).name.split("-")[0] for item in ordered],
+            ["B.JPG", "A.JPG"])
+        self.assertEqual([item["sequence"] for item in ordered], [1, 2])
+
+    def test_a_proof_sheet_is_written_when_asked(self):
+        page = self.page()
+        page.proof.setChecked(True)
+        page.deliver()
+        self.settle(page)
+        sheets = list(self.destination.glob("*proof sheet*.html"))
+        self.assertEqual(len(sheets), 1)
+        body = sheets[0].read_text(encoding="utf-8")
+        self.assertIn("A.JPG", body)
+        self.assertIn("data:image/jpeg;base64,", body)
+        self.assertNotIn("http://", body)
+        self.assertNotIn("https://", body)
+        self.assertIn("Proof sheet:", page.status.text())
+
+    def test_no_sheet_appears_unasked(self):
+        page = self.page()
+        page.deliver()
+        self.settle(page)
+        self.assertEqual(list(self.destination.glob("*.html")), [])
+
+    def test_a_second_sheet_never_overwrites_the_first(self):
+        page = self.page()
+        page.proof.setChecked(True)
+        page.deliver()
+        self.settle(page)
+        page.refresh()
+        page.list.item(0).setCheckState(Qt.CheckState.Checked)
+        page.deliver()
+        self.settle(page)
+        self.assertEqual(
+            len(list(self.destination.glob("*proof sheet*.html"))), 2)

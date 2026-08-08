@@ -735,7 +735,8 @@ class DevelopmentWorkspace:
                 "default_export_directory": str(self.project_layout["Exports"]),
                 "project_sha256": project_sha256(self.project_path)}
 
-    def export_render(self, source: str, destination: str) -> dict:
+    def export_render(self, source: str, destination: str,
+                      sequence: int | None = None) -> dict:
         """Copy one registered render out to where it was asked for.
 
         Only a render the manifest knows about can leave, so an export is
@@ -761,6 +762,11 @@ class DevelopmentWorkspace:
         record = {"source": source_path, "destination": str(destination_path),
                   "requested_destination": str(requested_path),
                   "created_at": datetime.now(UTC).isoformat(),
+                  # Where this frame sits in the delivery's telling. An
+                  # album's order is a decision like any other, so it is
+                  # recorded like any other.
+                  **({"sequence": int(sequence)} if sequence is not None
+                     else {}),
                   "sha256": hashlib.sha256(destination_path.read_bytes()).hexdigest()}
         exports = list(self.project.get("artifacts", {}).get("exports", []) or [])
         exports.append(record)
