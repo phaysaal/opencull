@@ -236,8 +236,9 @@ def normalize_edit_direction(value: Any) -> dict[str, Any]:
         recipe_text = clean.get(field, "")
         if not recipe_text:
             continue
+        parsed = None
         try:
-            json.loads(recipe_text)
+            parsed = json.loads(recipe_text)
         except json.JSONDecodeError:
             # Vision models occasionally close the final JSON object but omit
             # the final recipe-section array bracket. Repair only that narrow,
@@ -246,11 +247,17 @@ def normalize_edit_direction(value: Any) -> dict[str, Any]:
             if recipe_text.endswith('"}'):
                 repaired = f"{recipe_text[:-1]}]}}"
                 try:
-                    json.loads(repaired)
+                    parsed = json.loads(repaired)
                 except json.JSONDecodeError:
-                    pass
-                else:
-                    clean[field] = repaired
+                    parsed = None
+        if isinstance(parsed, dict):
+            # A section the model honestly had nothing to say for arrives
+            # missing; it becomes an explicit empty list rather than a
+            # reason to reject the whole treatment. The first live run
+            # rejected every direction twice over exactly this.
+            for section in RECIPE_SECTIONS:
+                parsed.setdefault(section, [])
+            clean[field] = json.dumps(parsed, sort_keys=True)
     return clean
 
 
@@ -270,11 +277,12 @@ def valid_edit_direction(value: Any) -> bool:
             and set(recipe) == set(RECIPE_SECTIONS)
             and all(
                 isinstance(recipe[section], list)
-                and recipe[section]
                 and all(isinstance(step, str) and step.strip()
                         for step in recipe[section])
                 for section in RECIPE_SECTIONS
             )
+            # Empty sections are honest; an empty recipe is not.
+            and any(recipe[section] for section in RECIPE_SECTIONS)
         )
     return (
         isinstance(value, dict)
