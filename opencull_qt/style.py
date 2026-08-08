@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QListWidget,
     QListWidgetItem,
@@ -115,6 +116,16 @@ class StylePanel(QWidget):
             "model, so this costs.")
         self.build_button.clicked.connect(self.build)
         actions.addWidget(self.build_button)
+
+        self.name_button = QPushButton("Name it…")
+        self.name_button.setObjectName("ghost")
+        self.name_button.setFont(theme.body(10))
+        self.name_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.name_button.setToolTip(
+            "Call this profile what you call it. Several profiles otherwise "
+            "all read as \"Personal style\".")
+        self.name_button.clicked.connect(self.rename)
+        actions.addWidget(self.name_button)
 
         self.forget_button = QPushButton("Stop using it")
         self.forget_button.setObjectName("ghost")
@@ -236,6 +247,29 @@ class StylePanel(QWidget):
         self._report(
             f"{self.available[row]['name']} is the profile suggestions will "
             "use.", "ok")
+
+    def rename(self) -> None:
+        """Name the highlighted profile, so several can be told apart."""
+        row = self.profiles.currentRow()
+        if not (0 <= row < len(self.available)):
+            self._report("Choose a profile to name first.", "alarm")
+            return
+        item = self.available[row]
+        name, accepted = QInputDialog.getText(
+            self, "Name this profile",
+            "What should this profile be called?",
+            text=str(item.get("name") or ""))
+        if not accepted:
+            return
+        try:
+            self.store.set_name(item["path"], name)
+        except StyleProfileError as exc:
+            self._report(str(exc), "alarm")
+            return
+        self.refresh()
+        self._report(
+            f"It is called {name.strip()} now." if name.strip()
+            else "Back to the profile's own name.", "ok")
 
     def forget(self) -> None:
         self.store.forget()

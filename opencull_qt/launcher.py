@@ -51,6 +51,7 @@ from .review import ReviewPage
 from .sheet import ContactSheet
 from .shell import Invitation, ProjectShell, first_open
 from .shortlist import ShortlistPage
+from .studio import StudioPage
 from .style import StyleDialog, StylePanel
 from .suggestions import SuggestionsPage
 from .widgets import ProjectCard, Row, band, replace_rows, short_path
@@ -275,22 +276,15 @@ class Launcher(QMainWindow):
         layout.addWidget(title)
         layout.addStretch(1)
 
-        self.style_button = QPushButton("Style")
-        self.style_button.setObjectName("ghost")
-        self.style_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.style_button.setFont(theme.body(10))
-        self.style_button.setToolTip(
-            "The personal style profile suggestions edit in. It belongs to "
-            "you, not to a folder.")
-        self.style_button.clicked.connect(self.edit_style)
-        layout.addWidget(self.style_button)
-
-        self.providers_button = QPushButton("Providers")
-        self.providers_button.setObjectName("ghost")
-        self.providers_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.providers_button.setFont(theme.body(10))
-        self.providers_button.clicked.connect(self.edit_providers)
-        layout.addWidget(self.providers_button)
+        self.studio_button = QPushButton("The Studio")
+        self.studio_button.setObjectName("ghost")
+        self.studio_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.studio_button.setFont(theme.body(10))
+        self.studio_button.setToolTip(
+            "Your own things: profiles, the taste ledger, providers. They "
+            "serve every folder alike.")
+        self.studio_button.clicked.connect(self.show_studio)
+        layout.addWidget(self.studio_button)
         return bar
 
     def _hero(self) -> QWidget:
@@ -1040,6 +1034,17 @@ class Launcher(QMainWindow):
         except Exception as exc:
             self.report(str(exc), "alarm")
         self.refresh()
+
+    def show_studio(self) -> None:
+        """One room for the photographer's own things."""
+        if getattr(self, "studio_page", None) is None:
+            self.studio_page = StudioPage(
+                self.style_profiles, self.services.jobs,
+                self.services.providers, self.edit_providers)
+            self.studio_page.closed.connect(self.show_projects)
+            self.pages.addWidget(self.studio_page)
+        self.studio_page.panel.refresh()
+        self.pages.setCurrentWidget(self.studio_page)
 
     def edit_providers(self) -> None:
         dialog = ProvidersDialog(self.services.providers, self)

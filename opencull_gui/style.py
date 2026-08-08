@@ -139,17 +139,59 @@ class StyleProfileStore:
         # the selection file still says.
         return chosen if chosen and Path(chosen).is_file() else ""
 
+    def _stored(self) -> dict[str, Any]:
+        if not self.path.is_file():
+            return {}
+        try:
+            value = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        return value if isinstance(value, dict) else {}
+
     def select(self, path: str | Path) -> dict[str, Any]:
         resolved = Path(str(path)).expanduser().resolve()
         read_profile(resolved)
         _atomic_json(self.path, {
-            "format": SELECTION_FORMAT, "selected": str(resolved)})
+            "format": SELECTION_FORMAT, "selected": str(resolved),
+            "names": self._stored().get("names") or {}})
         return self.public()
 
     def forget(self) -> dict[str, Any]:
         """Stop using a profile without deleting it."""
-        _atomic_json(self.path, {"format": SELECTION_FORMAT, "selected": ""})
+        _atomic_json(self.path, {
+            "format": SELECTION_FORMAT, "selected": "",
+            "names": self._stored().get("names") or {}})
         return self.public()
+
+    # --- naming ---------------------------------------------------------
+
+    def set_name(self, path: str | Path, name: str) -> dict[str, Any]:
+        """Call a profile what the photographer calls it.
+
+        The name lives beside the selection rather than inside the profile,
+        because the profile file is a kernel's output and is not edited.
+        Several profiles otherwise all display as "Personal style", which
+        makes choosing between them a guess.
+        """
+        resolved = str(Path(str(path)).expanduser().resolve())
+        read_profile(Path(resolved))
+        stored = self._stored()
+        names = dict(stored.get("names") or {})
+        cleaned = str(name).strip()[:80]
+        if cleaned:
+            names[resolved] = cleaned
+        else:
+            names.pop(resolved, None)
+        _atomic_json(self.path, {
+            "format": SELECTION_FORMAT,
+            "selected": str(stored.get("selected") or ""),
+            "names": names,
+        })
+        return self.public()
+
+    def name_for(self, path: str | Path) -> str:
+        names = self._stored().get("names") or {}
+        return str(names.get(str(Path(str(path)).expanduser().resolve()), ""))
 
     # --- discovery ------------------------------------------------------
 
@@ -164,8 +206,12 @@ class StyleProfileStore:
             except StyleProfileError:
                 continue
             summary = profile_summary(value)
+            given = self.name_for(path)
             found.append({
-                **summary, "path": str(path),
+                **summary,
+                # The photographer's own name for it wins over the file's.
+                **({"name": given} if given else {}),
+                "path": str(path),
                 "modified": path.stat().st_mtime_ns})
         found.sort(key=lambda item: item["modified"], reverse=True)
         return found
@@ -176,6 +222,9 @@ class StyleProfileStore:
         if chosen:
             try:
                 summary = profile_summary(read_profile(Path(chosen)))
+                given = self.name_for(chosen)
+                if given:
+                    summary["name"] = given
             except StyleProfileError:
                 summary = None
         return {

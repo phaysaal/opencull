@@ -280,3 +280,111 @@ class StyleDialogTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NamingTests(unittest.TestCase):
+    """Several profiles must be tellable apart."""
+
+    def setUp(self):
+        self._temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self._temporary.name)
+        self.results = self.root / "results"
+        self.results.mkdir()
+        self.store = StyleProfileStore(
+            self.root / "style-profile.json", self.results)
+        write_profile(self.results / "personal-style-1.json")
+        write_profile(self.results / "personal-style-2.json")
+        self.addCleanup(self._temporary.cleanup)
+
+    def path(self, number: int) -> Path:
+        return self.results / f"personal-style-{number}.json"
+
+    def test_a_named_profile_lists_under_its_name(self):
+        self.store.set_name(self.path(1), "Hard editorial")
+        names = {item["path"]: item["name"]
+                 for item in self.store.available()}
+        self.assertEqual(names[str(self.path(1))], "Hard editorial")
+
+    def test_the_name_survives_selecting_and_forgetting(self):
+        self.store.set_name(self.path(1), "Hard editorial")
+        self.store.select(self.path(2))
+        self.store.forget()
+        self.assertEqual(self.store.name_for(self.path(1)), "Hard editorial")
+
+    def test_the_selected_profiles_summary_carries_the_name(self):
+        self.store.set_name(self.path(2), "Muted film")
+        self.store.select(self.path(2))
+        self.assertEqual(self.store.public()["profile"]["name"], "Muted film")
+
+    def test_an_empty_name_goes_back_to_the_profiles_own(self):
+        self.store.set_name(self.path(1), "Hard editorial")
+        self.store.set_name(self.path(1), "  ")
+        self.assertEqual(self.store.name_for(self.path(1)), "")
+
+    def test_a_name_cannot_be_hung_on_a_file_that_is_not_a_profile(self):
+        stray = self.results / "not-a-profile.json"
+        stray.write_text("{}", encoding="utf-8")
+        with self.assertRaises(StyleProfileError):
+            self.store.set_name(stray, "anything")
+
+
+@unittest.skipUnless(QApplication is not None, "PySide6 is not installed")
+class StudioTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.application = QApplication.instance() or QApplication([])
+
+    def setUp(self):
+        from unittest import mock
+
+        self._temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self._temporary.name)
+        self.results = self.root / "results"
+        self.results.mkdir()
+        self.store = StyleProfileStore(
+            self.root / "style-profile.json", self.results)
+        self.jobs = mock.Mock()
+        self.providers = mock.Mock()
+        self.providers.public.return_value = {"profiles": []}
+        self.addCleanup(self._temporary.cleanup)
+
+    def studio(self, open_providers=None):
+        from opencull_qt.studio import StudioPage
+
+        page = StudioPage(
+            self.store, self.jobs, self.providers,
+            open_providers or (lambda: None))
+        self.addCleanup(page.deleteLater)
+        return page
+
+    def text(self, page) -> str:
+        from PySide6.QtWidgets import QLabel
+
+        return "\n".join(
+            label.text() for label in page.findChildren(QLabel))
+
+    def test_the_studio_holds_the_photographers_three_things(self):
+        shown = self.text(self.studio())
+        self.assertIn("PERSONAL PROFILES", shown)
+        self.assertIn("THE TASTE LEDGER", shown)
+        self.assertIn("PROVIDERS", shown)
+
+    def test_the_ledger_is_honest_about_being_reserved(self):
+        self.assertIn("Not built yet", self.text(self.studio()))
+
+    def test_the_providers_door_opens_the_providers(self):
+        opened = []
+        page = self.studio(lambda: opened.append(True))
+        from PySide6.QtWidgets import QPushButton
+
+        button = next(
+            b for b in page.findChildren(QPushButton)
+            if b.text() == "Providers…")
+        button.click()
+        self.assertTrue(opened)
+
+    def test_the_profile_panel_inside_is_the_real_one(self):
+        write_profile(self.results / "personal-style-1.json")
+        page = self.studio()
+        page.panel.refresh()
+        self.assertEqual(len(page.panel.available), 1)
