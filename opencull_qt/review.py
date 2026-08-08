@@ -195,6 +195,9 @@ class ReviewPage(QWidget):
         actions.setSpacing(9)
         for label, slot, tip in (
             ("Accept AI  (A)", self.accept_ai, "Take the curator's selection"),
+            ("Accept scene  (S)", self.accept_current_scene,
+             "Take the proposal for every unreviewed group of this scene. "
+             "Groups you decided stay as you left them."),
             ("Keep none  (N)", self.keep_none, "Reject every frame in this cluster"),
             ("Unreviewed  (U)", self.mark_unreviewed, "Undo your decision here"),
         ):
@@ -290,36 +293,19 @@ class ReviewPage(QWidget):
             found.append({"id": group["id"], "clusters": ordered})
         return found
 
-    def _scene_header(self, scene: dict, state: dict) -> QWidget:
-        holder = QWidget()
-        row = QHBoxLayout(holder)
-        row.setContentsMargins(12, 4, 8, 4)
-        row.setSpacing(8)
-        count = len(scene["clusters"])
-        label = QLabel(
-            f"{scene['id'].replace('scene-', 'SCENE ').lstrip('0')}"
-            f" · {count} group{'' if count == 1 else 's'}")
-        label.setObjectName("axisName")
-        label.setFont(theme.display(7))
-        row.addWidget(label)
-        row.addStretch(1)
-        waiting = sum(
-            1 for cluster_id in scene["clusters"]
-            if not (state["clusters"].get(cluster_id) or {}).get("reviewed"))
-        if waiting:
-            accept = QPushButton("Accept scene")
-            accept.setObjectName("ghost")
-            accept.setFont(theme.body(8))
-            accept.setCursor(Qt.CursorShape.PointingHandCursor)
-            accept.setToolTip(
-                f"Take the proposal for the {waiting} unreviewed group"
-                f"{'' if waiting == 1 else 's'} of this scene. Groups you "
-                "decided stay as you left them.")
-            accept.clicked.connect(
-                lambda _=False, clusters=list(scene["clusters"]):
-                self.accept_scene(clusters))
-            row.addWidget(accept)
-        return holder
+    def scene_of(self, cluster_id: str) -> dict | None:
+        """The scene the given group belongs to, if scenes apply."""
+        for scene in self.scenes():
+            if cluster_id in scene["clusters"]:
+                return scene
+        return None
+
+    def accept_current_scene(self) -> None:
+        """Agree with the proposal for the current frame's whole scene."""
+        scene = self.scene_of(self.current)
+        if scene is None:
+            return
+        self.accept_scene(list(scene["clusters"]))
 
     def accept_scene(self, clusters: list[str]) -> None:
         """Agree with the proposal for one scene's unreviewed groups."""
@@ -356,13 +342,18 @@ class ReviewPage(QWidget):
 
         if show_headers:
             for scene in scenes:
-                header = QListWidgetItem("")
-                # A header is a place, not a choice.
+                number = scene["id"].replace("scene-", "").lstrip("0") or "1"
+                count = len(scene["clusters"])
+                header = QListWidgetItem(
+                    f"SCENE {number} · {count} "
+                    f"group{'' if count == 1 else 's'}")
+                # A header is a place, not a choice: enabled so it is not
+                # dimmed, but never selectable. Accepting a scene lives in
+                # the action row below, beside Accept AI, where every other
+                # whole-cluster act already lives.
                 header.setFlags(Qt.ItemFlag.ItemIsEnabled)
+                header.setFont(theme.display(7))
                 self.clusters.addItem(header)
-                widget = self._scene_header(scene, state)
-                header.setSizeHint(widget.sizeHint())
-                self.clusters.setItemWidget(header, widget)
                 for cluster_id in scene["clusters"]:
                     add_cluster(cluster_id)
         else:
@@ -634,6 +625,8 @@ class ReviewPage(QWidget):
             self.toggle_index(key - Qt.Key.Key_1)
         elif key == Qt.Key.Key_A:
             self.accept_ai()
+        elif key == Qt.Key.Key_S:
+            self.accept_current_scene()
         elif key == Qt.Key.Key_N:
             self.keep_none()
         elif key == Qt.Key.Key_U:

@@ -226,3 +226,11 @@ class SceneReviewTests(ReviewPageWholeCullTests):
         self.assertEqual(
             self.reviews.public_state()["clusters"]["g1"]["keepers"],
             ["A2.JPG"])
+
+
+    def test_the_s_key_accepts_the_current_frames_scene(self):
+        page = self.page()
+        page.accept_current_scene()
+        state = self.reviews.public_state()
+        # One scene holds all three groups here, so S reviews them all.
+        self.assertEqual(state["status"]["reviewed_clusters"], 3)

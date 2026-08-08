@@ -26,7 +26,9 @@ from PySide6.QtGui import QColor, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
+    QHBoxLayout,
     QLabel,
+    QPushButton,
     QScrollArea,
     QVBoxLayout,
     QWidget,
@@ -173,6 +175,25 @@ class ContactSheet(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
+
+        if selectable:
+            row = QHBoxLayout()
+            row.setContentsMargins(0, 0, 0, 2)
+            row.setSpacing(8)
+            hint = QLabel("Click a frame to leave it out.")
+            hint.setObjectName("hint")
+            hint.setFont(theme.body(9))
+            row.addWidget(hint)
+            row.addStretch(1)
+            for label, included in (("Tick all", True), ("Untick all", False)):
+                button = QPushButton(label)
+                button.setObjectName("ghost")
+                button.setFont(theme.body(9))
+                button.setCursor(Qt.CursorShape.PointingHandCursor)
+                button.clicked.connect(
+                    lambda _=False, value=included: self.set_all(value))
+                row.addWidget(button)
+            layout.addLayout(row)
 
         dropped = len(self.selection) - len(self.names)
         if dropped:
