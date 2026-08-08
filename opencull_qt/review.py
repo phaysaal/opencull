@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QListWidget,
     QListWidgetItem,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -25,8 +26,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from opencull_gui.actions import (
+    ActionError,
+    Operation,
+    build_plan,
+    default_journal_path,
+)
 from opencull_gui.report import ReportIndex
-from opencull_gui.reviews import ReviewError, ReviewStore
+from opencull_gui.reviews import ReviewError, ReviewStore, approve_remaining
 
 from . import theme
 from .previews import PreviewLoader, scaled
@@ -116,6 +123,8 @@ class ReviewPage(QWidget):
     """Clusters on the left, their frames on the right."""
 
     closed = Signal()
+    # The trash worker runs in its own thread; Qt marshals the result back.
+    _trash_done = Signal(dict)
 
     def __init__(self, report: ReportIndex, reviews: ReviewStore,
                  loader: PreviewLoader, parent: QWidget | None = None):
@@ -128,6 +137,8 @@ class ReviewPage(QWidget):
         self.current = self.cluster_ids[0] if self.cluster_ids else ""
 
         self.loader.ready.connect(self._painted)
+        self._trash_operation = None
+        self._trash_done.connect(self._trash_finished)
         self._build()
         self._fill_clusters()
         if self.current:
@@ -224,6 +235,23 @@ class ReviewPage(QWidget):
         self.title.setFont(theme.display(11))
         layout.addWidget(self.title)
         layout.addStretch(1)
+
+        self.approve_button = QPushButton("Approve the lot")
+        self.approve_button.setObjectName("ghost")
+        self.approve_button.setFont(theme.body(10))
+        self.approve_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.approve_button.setToolTip(
+            "Accept the proposal for every group you have not reviewed. "
+            "Groups you already decided stay exactly as you left them.")
+        self.approve_button.clicked.connect(self.approve_the_lot)
+        layout.addWidget(self.approve_button)
+
+        self.trash_button = QPushButton("Trash the rejects…")
+        self.trash_button.setObjectName("ghost")
+        self.trash_button.setFont(theme.body(10))
+        self.trash_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.trash_button.clicked.connect(self.trash_rejects)
+        layout.addWidget(self.trash_button)
 
         self.progress = QLabel("")
         self.progress.setObjectName("hint")
@@ -347,6 +375,137 @@ class ReviewPage(QWidget):
         order = self.report.cluster_by_id[self.current]["photos"]
         if 0 <= index < len(order):
             self.toggle(order[index])
+
+    # --- the whole cull at once -----------------------------------------
+
+    def approve_the_lot(self) -> None:
+        """Accept every proposal nobody has reviewed, in one press."""
+        state = self.reviews.public_state()
+        status = state.get("status", {})
+        total = int(status.get("total_clusters", 0))
+        reviewed = int(status.get("reviewed_clusters", 0))
+        waiting = total - reviewed
+        if waiting <= 0:
+            self._report("Every group is already reviewed.", "ok")
+            return
+        if not self.confirm_approve(waiting, reviewed):
+            return
+        try:
+            written = approve_remaining(self.reviews)
+        except ReviewError as exc:
+            self._report(str(exc), "alarm")
+            return
+        self._fill_clusters()
+        self.show_cluster(self.current)
+        self._report(
+            f"Approved the proposal for {written} group"
+            f"{'' if written == 1 else 's'}. Your own decisions were not "
+            "touched.", "ok")
+
+    def confirm_approve(self, waiting: int, reviewed: int) -> bool:
+        box = QMessageBox(self)
+        box.setWindowTitle("Approve every proposal?")
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setText(
+            f"{waiting} group{'' if waiting == 1 else 's'} "
+            f"{'is' if waiting == 1 else 'are'} still unreviewed.")
+        box.setInformativeText(
+            "Approving takes the curator's proposal for each of them."
+            + (f" The {reviewed} group{'' if reviewed == 1 else 's'} you "
+               "already decided stay exactly as you left them."
+               if reviewed else "")
+            + " Any group can still be reopened afterwards.")
+        approve = box.addButton(
+            f"Approve {waiting}", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(approve)
+        box.exec()
+        return box.clickedButton() is approve
+
+    # --- the rejects ----------------------------------------------------
+
+    def trash_rejects(self) -> None:
+        """Move every unselected frame to the system trash, reversibly.
+
+        The first control in this application that moves a photographer's
+        files. It refuses to run over an unfinished review, moves only
+        the unselected, uses the platform's own trash, and records a
+        journal the move can be rolled back from.
+        """
+        state = self.reviews.public_state()
+        status = state.get("status", {})
+        total = int(status.get("total_clusters", 0))
+        reviewed = int(status.get("reviewed_clusters", 0))
+        if reviewed < total:
+            self._report(
+                f"{total - reviewed} group{'' if total - reviewed == 1 else 's'} "
+                "are not reviewed yet. The rejects are only rejects once "
+                "every group has been decided.", "alarm")
+            return
+        try:
+            plan = build_plan(
+                self.report, self.reviews, self.loader.store, None,
+                "effective", "trash", "opensull",
+                selection_scope="unselected")
+        except ActionError as exc:
+            self._report(str(exc), "alarm")
+            return
+        summary = plan.get("summary", {})
+        errors = list(summary.get("errors") or [])
+        if errors:
+            self._report("; ".join(errors), "alarm")
+            return
+        count = int(summary.get("files", 0))
+        if not self.confirm_trash(count, int(summary.get("bytes", 0))):
+            return
+        self.trash_button.setEnabled(False)
+        self._report(
+            f"Moving {count} frame{'' if count == 1 else 's'} to the trash.")
+        operation = Operation(
+            plan, default_journal_path(self.report, plan),
+            on_complete=lambda journal: self._trash_done.emit(dict(journal)))
+        self._trash_operation = operation
+        operation.start()
+
+    def confirm_trash(self, count: int, size: int) -> bool:
+        box = QMessageBox(self)
+        box.setWindowTitle("Move the rejects to the trash?")
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setText(
+            f"{count} unselected frame{'' if count == 1 else 's'} "
+            f"({size / 1_000_000:.0f} MB) would move to the system trash.")
+        box.setInformativeText(
+            "Only frames no review kept are moved -- never a keeper. They "
+            "go in one named batch, to the same trash your file manager "
+            "uses, so they can be brought back from there; Darkimiya also "
+            "records the batch and can roll the move back itself.\n\n"
+            "Nothing is deleted.")
+        move = box.addButton(
+            f"Move {count} to the trash",
+            QMessageBox.ButtonRole.DestructiveRole)
+        keep = box.addButton("Keep them where they are",
+                             QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(keep)
+        box.exec()
+        return box.clickedButton() is move
+
+    def _trash_finished(self, journal: dict) -> None:
+        self.trash_button.setEnabled(True)
+        moved = int(journal.get("completed_files", 0))
+        # The completion hook fires before the journal's status flips, by
+        # design: per-item statuses are already durable. Judge by those.
+        done = moved == len(journal.get("items") or []) and not journal.get(
+            "error")
+        if done:
+            self._report(
+                f"{moved} frame{'' if moved == 1 else 's'} moved to the "
+                "trash, in one batch. They can be brought back from the "
+                "trash, or rolled back from the operation journal.", "ok")
+        else:
+            self._report(
+                f"The move stopped: {journal.get('error') or 'unknown'}. "
+                f"{moved} moved so far; the journal can resume or roll "
+                "back.", "alarm")
 
     def accept_ai(self) -> None:
         decision = self.report.decision_by_id.get(self.current, {})

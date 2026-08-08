@@ -445,3 +445,32 @@ def narrow_selection(
         revision = result["revision"]
         written += 1
     return written
+
+
+def approve_remaining(store: ReviewStore, action: str = "approve") -> int:
+    """Accept the curator's proposal for every cluster nobody has reviewed.
+
+    A decision already made by hand is never touched: approving the lot
+    means agreeing with what was proposed wherever you had not already
+    spoken, not overwriting where you had.
+    """
+    if store.stale_reason:
+        raise ReviewError(store.stale_reason)
+    state = store.public_state()
+    revision = state["revision"]
+    clusters = state.get("clusters", {})
+    written = 0
+    for cluster_id in store.report.cluster_by_id:
+        human = clusters.get(cluster_id) or {}
+        if human.get("reviewed") is True:
+            continue
+        proposed = [
+            str(name) for name in
+            store.report.decision_by_id.get(cluster_id, {}).get("photos") or []
+        ]
+        result = store.update_cluster(
+            cluster_id, proposed, str(human.get("note") or ""), True,
+            revision, None, action)
+        revision = result["revision"]
+        written += 1
+    return written
