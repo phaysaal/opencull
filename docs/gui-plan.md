@@ -151,13 +151,17 @@ Cheap-and-shaping first; provider-gated last.
 1. **Selectable contact sheet** — prefilter before cull and assessment
    (free, largest cost lever, reuses built parts) — **built**
 2. **Approve the lot + trash the rejects** — completes the cull story
-   (backend exists)
+   (backend exists) — **built**
 3. **Studio page** — profile naming, providers move, ledger placeholder
+   — **built**
 4. **Provenance drawer** — archaeology everywhere (free, evidence exists)
-5. **Scene headers in cull review** — machinery exists
-6. **Fine-tune prompt box, local stage** — free, uses the compiler
+   — **built**
+5. **Scene headers in cull review** — machinery exists — **built**
+6. **Fine-tune prompt box, local stage** — free, uses the compiler —
+   **built**
 7. **Debrief phase** — aggregates first, memo call behind the usual gate
-8. **Proof sheet + sequencing** on export
+   — **built** (aggregates; the memo needs a kernel)
+8. **Proof sheet + sequencing** on export — **built**
 9. **Axes chooser + verdict** — provider-gated
 10. **Taste ledger compilation, jury, borrow-a-look, budget governor** —
     after a live provider has proven the stages they depend on
