@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 )
 
 from opencull_gui import phases
+from opencull_gui.debrief import aggregate as debrief_aggregate
 from opencull_gui.project import load_or_create_folder_project
 from opencull_gui.project_catalog import ProjectCatalogError
 from opencull_gui.provenance import frame_story
@@ -43,6 +44,7 @@ from scan import classify_folder
 from . import theme
 from .bench import Bench
 from .criteria import CriteriaDialog
+from .debrief import DebriefPage
 from .develop import DevelopPage
 from .export import ExportPage
 from .finetune import FineTunePage
@@ -680,6 +682,7 @@ class Launcher(QMainWindow):
             phases.DEVELOPMENT: self._development_page,
             phases.FINE_TUNING: self._finetune_page,
             phases.EXPORT: self._export_page,
+            phases.DEBRIEF: self._debrief_page,
         }
         build = builders.get(key)
         if build is None:
@@ -791,6 +794,9 @@ class Launcher(QMainWindow):
 
     def _export_page(self, bench: Bench):
         return ExportPage(bench.workspace)
+
+    def _debrief_page(self, bench: Bench):
+        return DebriefPage(debrief_aggregate(bench))
 
     # --- starting the runs behind the phases ------------------------------
 

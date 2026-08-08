@@ -209,3 +209,23 @@ class ManifestTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DebriefTests(unittest.TestCase):
+    def test_the_debrief_needs_judgements_to_read(self):
+        plan = phases.plan(project(report_available=True), manifest={})
+        self.assertEqual(state(plan, phases.DEBRIEF), "blocked")
+        self.assertIn("Assess first", reason(plan, phases.DEBRIEF))
+
+    def test_an_assessed_shoot_can_be_read_back(self):
+        plan = phases.plan(
+            project(report_available=True, shortlist_available=True),
+            marked=1, manifest={})
+        self.assertEqual(state(plan, phases.DEBRIEF), "ready")
+
+    def test_it_is_never_done_because_it_can_always_be_reread(self):
+        plan = phases.plan(
+            project(report_available=True, shortlist_available=True),
+            marked=1,
+            manifest=manifest(edit_directions=1, renders=1, exports=1))
+        self.assertEqual(state(plan, phases.DEBRIEF), "ready")

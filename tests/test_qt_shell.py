@@ -108,7 +108,7 @@ class FirstOpenTests(unittest.TestCase):
         for value in (project(available=True), culled()):
             self.assertNotEqual(self.first(value), phases.PROFILE)
 
-    def test_a_folder_with_nothing_outstanding_opens_on_its_last_finished(self):
+    def test_a_finished_shoot_opens_on_its_own_debrief(self):
         from opencull_qt.shell import first_open
 
         plan = phases.plan(
@@ -117,7 +117,8 @@ class FirstOpenTests(unittest.TestCase):
                 "edit_directions": [{}],
                 "renders": [{"adjustments": ["op-001"]}],
                 "exports": [{}]}})
-        self.assertEqual(first_open(plan), phases.EXPORT)
+        # Everything is delivered; the one thing left is reading it back.
+        self.assertEqual(first_open(plan), phases.DEBRIEF)
 
 
 @unittest.skipUnless(QApplication is not None, "PySide6 is not installed")

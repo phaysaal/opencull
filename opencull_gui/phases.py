@@ -41,9 +41,10 @@ SUGGESTIONS = "suggestions"
 DEVELOPMENT = "development"
 FINE_TUNING = "fine_tuning"
 EXPORT = "export"
+DEBRIEF = "debrief"
 
 ORDER = (CULL, ASSESSMENT, PROFILE, SUGGESTIONS, DEVELOPMENT, FINE_TUNING,
-         EXPORT)
+         EXPORT, DEBRIEF)
 
 TITLES = {
     CULL: "Cull",
@@ -53,6 +54,7 @@ TITLES = {
     DEVELOPMENT: "Development",
     FINE_TUNING: "Advanced fine tuning",
     EXPORT: "Export",
+    DEBRIEF: "Debrief",
 }
 
 # What each phase is for, in one sentence, shown wherever there is room.
@@ -64,6 +66,8 @@ PURPOSE = {
     DEVELOPMENT: "Render a treatment and compare it against the frame as shot.",
     FINE_TUNING: "Move the numbers a treatment compiled into, within their bounds.",
     EXPORT: "Write the finished rendering where it is going.",
+    DEBRIEF: "Read the shoot back: what each filter passed, and where "
+             "you disagreed.",
 }
 
 ACTIVE = {"queued", "running"}
@@ -242,6 +246,18 @@ def plan(
         phases.append(entry(
             EXPORT, "blocked",
             "There is nothing rendered to deliver yet. Develop a frame first."))
+
+    # The debrief reads judgements, so it needs some to read. It is never
+    # "done": a shoot can be read back as often as it is added to.
+    if assessed:
+        phases.append(entry(
+            DEBRIEF, "ready",
+            detail="Counts over this shoot's own records; nothing is spent."))
+    else:
+        phases.append(entry(
+            DEBRIEF, "blocked",
+            "A debrief reads the assessment's judgements, and there are "
+            "none yet. Assess first."))
 
     return phases
 
