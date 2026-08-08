@@ -327,11 +327,72 @@ def mark_edit_direction_validation(
     return marked
 
 
+def validation_failures(value: Any) -> list[str]:
+    """Name every reason a direction fails validation, for the record."""
+    if not isinstance(value, dict):
+        return [f"direction is {type(value).__name__}, not a mapping"]
+    failures = []
+    for field in REQUIRED_FIELDS:
+        if field == "confidence":
+            continue
+        text = value.get(field)
+        if not (isinstance(text, str) and text.strip()):
+            failures.append(f"{field} is missing or blank")
+    confidence = value.get("confidence")
+    if not (isinstance(confidence, (int, float))
+            and 0 <= confidence <= 1):
+        failures.append("confidence is not a number between 0 and 1")
+    titles = {
+        str(value.get(f"{kind}_title", "")).casefold()
+        for kind in ("standard", "signature", "creative")
+    }
+    if len(titles) != 3:
+        failures.append("the three treatment titles are not distinct")
+    for field in (
+        "standard_recipe", "signature_recipe",
+        "creative_recipe", "personal_recipe",
+    ):
+        raw = value.get(field)
+        if not raw:
+            continue
+        try:
+            recipe = json.loads(raw)
+        except (TypeError, json.JSONDecodeError):
+            failures.append(f"{field} is not valid JSON")
+            continue
+        if not isinstance(recipe, dict):
+            failures.append(f"{field} is not a JSON object")
+            continue
+        missing = set(RECIPE_SECTIONS) - set(recipe)
+        extra = set(recipe) - set(RECIPE_SECTIONS)
+        if missing:
+            failures.append(
+                f"{field} lacks sections: {', '.join(sorted(missing))}")
+        if extra:
+            failures.append(
+                f"{field} has unknown sections: {', '.join(sorted(extra))}")
+        malformed = [
+            section for section in RECIPE_SECTIONS
+            if section in recipe and not (
+                isinstance(recipe[section], list)
+                and all(isinstance(step, str) and step.strip()
+                        for step in recipe[section]))
+        ]
+        if malformed:
+            failures.append(
+                f"{field} sections are not lists of steps: "
+                + ", ".join(malformed))
+        if not any(recipe.get(section) for section in RECIPE_SECTIONS):
+            failures.append(f"{field} has no steps at all")
+    return failures
+
+
 def rejected_edit_direction_json(
-    candidate: dict[str, Any], format_repaired: bool = False
+    candidate: dict[str, Any], format_repaired: bool = False,
+    direction: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Keep a failed photograph auditable without fabricating edit advice."""
-    return {
+    entry = {
         "photo": candidate["photo"],
         "format_repaired": bool(format_repaired),
         "kimiya_validation": {
@@ -343,6 +404,10 @@ def rejected_edit_direction_json(
             ),
         },
     }
+    if direction is not None:
+        entry["kimiya_validation"]["failures"] = (
+            validation_failures(direction)[:8])
+    return entry
 
 
 def edit_direction_needs_validation(entry: dict[str, Any]) -> bool:

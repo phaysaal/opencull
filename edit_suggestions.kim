@@ -61,7 +61,7 @@ forall candidate in pending:
     if check valid_edit_direction(direction):
         entry := edit_direction_json(direction, candidate, format_repaired)
     else:
-        entry := rejected_edit_direction_json(candidate, format_repaired)
+        entry := rejected_edit_direction_json(candidate, format_repaired, direction)
     entries := entries + [entry]
     state := build_edit_checkpoint(request, entries, false)
     check len(state) > 0
