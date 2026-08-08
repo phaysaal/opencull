@@ -226,3 +226,58 @@ def describe(control: dict[str, Any]) -> str:
         return f"as asked: {written(control['value'], control['unit'])}"
     return (f"model asked {written(control['asked'], control['unit'])} · "
             f"you set {written(control['value'], control['unit'])}")
+
+
+# The sections the compiler's grammar is keyed by, in the order a phrase is
+# tried against them. A phrase that compiles under an earlier section never
+# reaches a later one.
+_SPOKEN_SECTIONS = (
+    "global_exposure",
+    "hdr_levels_curves",
+    "white_balance_and_color",
+    "detail_and_noise",
+    "finishing_and_output",
+)
+
+
+def compile_words(text: str) -> tuple[list[dict[str, Any]], list[str]]:
+    """Turn typed words into bounded operations, locally, for nothing.
+
+    The same compiler that turns a model's prose into a recipe reads the
+    photographer's own words, so the grammar is one grammar: whatever a
+    suggestion could say, a person can type. Returns the operations that
+    were heard and the phrases that were not -- and the not-heard are
+    reported, never dropped, because words that silently do nothing teach
+    the wrong lesson about what the box is.
+    """
+    from recipe_compiler import RecipeCompileError, compile_recipe
+
+    heard: list[dict[str, Any]] = []
+    unheard: list[str] = []
+    phrases = [
+        phrase.strip()
+        for chunk in str(text).replace(";", ",").splitlines()
+        for phrase in chunk.split(",")
+        if phrase.strip()
+    ]
+    for phrase in phrases:
+        found = None
+        for section in _SPOKEN_SECTIONS:
+            try:
+                compiled = compile_recipe(
+                    "spoken", "standard", "Spoken", "",
+                    json.dumps({section: [phrase]}), "", "jpeg")
+            except RecipeCompileError:
+                continue
+            operations = [
+                item for item in compiled.get("operations", [])
+                if isinstance(item, dict) and item.get("op") in RANGES
+            ]
+            if operations:
+                found = operations
+                break
+        if found:
+            heard.extend(found)
+        else:
+            unheard.append(phrase)
+    return heard, unheard

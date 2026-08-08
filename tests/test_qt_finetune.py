@@ -179,6 +179,39 @@ class FineTunePageTests(unittest.TestCase):
         page.show_treatment("signature")
         self.assertEqual(page.changes, {})
 
+    # --- saying it --------------------------------------------------------
+
+    def test_typed_words_move_the_sliders(self):
+        page = self.page()
+        page.prompt.setText("shadows +7, contrast +2")
+        page.speak()
+        shadow = self.control(page, "tone.shadow")
+        # The recipe asked +18; the words nudge from there.
+        self.assertAlmostEqual(shadow.value(), 25.0, delta=0.2)
+        self.assertIn("Moved Shadows", page.status.text())
+        self.assertEqual(page.prompt.text(), "")
+
+    def test_an_absolute_word_sets_rather_than_nudges(self):
+        page = self.page()
+        page.prompt.setText("temperature 6000 kelvin")
+        page.speak()
+        temperature = self.control(page, "color.temperature")
+        self.assertAlmostEqual(temperature.value(), 6000.0, delta=30)
+
+    def test_free_words_are_reported_and_kept_in_the_box(self):
+        page = self.page()
+        page.prompt.setText("shadows +5, make it moody")
+        page.speak()
+        self.assertIn("Not understood", page.status.text())
+        self.assertIn("make it moody", page.status.text())
+        self.assertEqual(page.prompt.text(), "shadows +5, make it moody")
+
+    def test_a_control_this_treatment_does_not_have_is_named(self):
+        page = self.page()
+        page.prompt.setText("vignette -10")
+        page.speak()
+        self.assertIn("no Vignette to move", page.status.text())
+
     # --- keeping one ------------------------------------------------------
 
     def test_keeping_renders_at_full_size_with_the_adjustments(self):

@@ -179,3 +179,28 @@ class ReadingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SpokenTests(unittest.TestCase):
+    """Typed words compile through the same grammar as the suggestions."""
+
+    def test_plain_moves_are_heard(self):
+        heard, unheard = adjustments.compile_words(
+            "shadows +12, vignette -8, temperature 5400 kelvin")
+        self.assertEqual(
+            [(op["op"], op["value"]) for op in heard],
+            [("tone.shadow", 12.0), ("finish.vignette", -8.0),
+             ("color.temperature", 5400.0)])
+        self.assertEqual(unheard, [])
+
+    def test_free_words_are_said_back_not_swallowed(self):
+        heard, unheard = adjustments.compile_words("make it moody")
+        self.assertEqual(heard, [])
+        self.assertEqual(unheard, ["make it moody"])
+
+    def test_lines_and_semicolons_separate_phrases_too(self):
+        heard, _ = adjustments.compile_words("exposure +0.3; contrast +4\nclarity +10")
+        self.assertEqual(len(heard), 3)
+
+    def test_an_empty_box_is_nothing_at_all(self):
+        self.assertEqual(adjustments.compile_words("   "), ([], []))

@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QListWidget,
     QListWidgetItem,
     QPushButton,
@@ -251,6 +252,17 @@ class FineTunePage(QWidget):
         self.treatment_list.currentRowChanged.connect(self._chose_treatment)
         layout.addWidget(self.treatment_list)
 
+        self.prompt = QLineEdit()
+        self.prompt.setFont(theme.body(10))
+        self.prompt.setPlaceholderText(
+            "Say it: shadows +12, vignette -8, temperature 5400 kelvin")
+        self.prompt.setToolTip(
+            "Typed words compile on this machine, through the same grammar "
+            "the suggestions use, and move the controls below. No model is "
+            "asked and nothing is spent.")
+        self.prompt.returnPressed.connect(self.speak)
+        layout.addWidget(self.prompt)
+
         scroll = QScrollArea()
         scroll.setObjectName("controlScroll")
         scroll.setWidgetResizable(True)
@@ -433,6 +445,54 @@ class FineTunePage(QWidget):
     def _control_changed(self, key: str, change: dict) -> None:
         self.changes.setdefault(key, {}).update(change)
         self.render()
+
+    def speak(self) -> None:
+        """Move the controls by saying so.
+
+        The words compile locally through the recipe grammar; what was
+        heard moves, what was not is said back. Free words a model would
+        have to interpret are named as exactly that, not swallowed.
+        """
+        text = self.prompt.text().strip()
+        if not text:
+            return
+        heard, unheard = adjustments.compile_words(text)
+        by_op = {widget.control["op"]: widget for widget in self.controls}
+        moved: list[str] = []
+        absent: list[str] = []
+        for operation in heard:
+            widget = by_op.get(str(operation["op"]))
+            label = adjustments.LABELS.get(
+                str(operation["op"]), str(operation["op"]))
+            if widget is None:
+                absent.append(label)
+                continue
+            if str(operation.get("mode")) == "absolute":
+                value = float(operation["value"])
+            else:
+                value = widget.value() + float(operation["value"])
+            widget.slider.setValue(
+                widget._tick(adjustments.clamp(widget.control, value)))
+            moved.append(
+                f"{label} {adjustments.written(widget.value(), widget.control['unit'])}")
+        parts = []
+        if moved:
+            parts.append("Moved " + " · ".join(moved) + ".")
+        if absent:
+            parts.append(
+                "This treatment has no "
+                + ", ".join(dict.fromkeys(absent))
+                + " to move.")
+        if unheard:
+            parts.append(
+                "Not understood: "
+                + "; ".join(f"“{phrase}”" for phrase in unheard)
+                + " — free words need a model to read them, and that is "
+                "not built yet.")
+        self._report(" ".join(parts) or "Nothing to do.",
+                     "alarm" if (unheard or absent) and not moved else "ok")
+        if moved and not unheard:
+            self.prompt.clear()
 
     def reset(self) -> None:
         """Put every control back to what the model asked for."""
