@@ -517,7 +517,8 @@ class JobManager:
         )
         with self._lock:
             if any(
-                Path(job["photos"]) == source
+                str(job.get("photos") or "").strip()
+                and Path(str(job["photos"])) == source
                 and job.get("status") not in TERMINAL
                 for job in self._state["jobs"]
             ):

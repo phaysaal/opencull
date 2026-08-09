@@ -3066,6 +3066,26 @@ class GuiJobTests(unittest.TestCase):
             finally:
                 manager.shutdown()
 
+    def test_queue_guard_tolerates_jobs_that_have_no_folder(self):
+        """A verification job carries no photos; it must not break culling."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            photos = root / "photos"
+            photos.mkdir()
+            manager = JobManager(
+                root / "jobs.json", root, command_builder=lambda job: [],
+                autostart=False)
+            try:
+                manager._state["jobs"].append({
+                    "id": "v1", "kind": "semantic_verification",
+                    "checkpoint": str(root / "v1.json"),
+                    "log": str(root / "v1.log"), "status": "queued"})
+                manager.add(str(photos), str(root / "result.json"))
+                self.assertEqual(
+                    manager.public()["jobs"][-1]["kind"], "culling")
+            finally:
+                manager.shutdown()
+
 
 class GuiHttpTests(unittest.TestCase):
     def test_development_payload_reloads_worker_registered_render(self):
