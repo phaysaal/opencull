@@ -979,6 +979,13 @@ def report_evidence(manifest: str, report: str) -> str:
     zero_ids = {
         item.get("cluster_id") for item in keep if not item.get("photos")
     }
+    keep_by_id = {item.get("cluster_id"): item for item in keep}
+    singletons_kept = all(
+        group.get("candidates", [])[0].get("name")
+        in keep_by_id.get(group.get("id"), {}).get("photos", [])
+        for group in groups
+        if len(group.get("candidates", [])) == 1
+    )
     warned_ids = {
         item.get("cluster_id") for item in report_data.get("warnings", [])
     }
@@ -994,6 +1001,10 @@ def report_evidence(manifest: str, report: str) -> str:
             item.get("cluster_id") for item in keep
         ] == [group.get("id") for group in groups],
         "all_selected_filenames_known": selected_known,
+        # Checked here, not by a judge: whether a one-photo group kept its
+        # photo is arithmetic over the manifest, and an eight-token judge
+        # asked to cross-reference it can only guess.
+        "every_singleton_keeps_its_photo": singletons_kept,
         "maximum_selected_in_any_group": max(
             (len(item.get("photos", [])) for item in keep), default=0),
         "zero_selection_ids": sorted(zero_ids),
@@ -1051,8 +1062,8 @@ def report_policy(keep_per_group: float) -> str:
         "manifest_group_count; cluster_ids_match_in_order and "
         "keep_ids_match_in_order are true; all_selected_filenames_known is "
         f"true; maximum_selected_in_any_group is at most {count} (any value "
-        "from 0 up to that maximum satisfies this); every singleton group "
-        "keeps its sole known photo; if zero_selection_ids is non-empty "
+        "from 0 up to that maximum satisfies this); "
+        "every_singleton_keeps_its_photo is true; if zero_selection_ids is non-empty "
         "then zero_selections_have_warnings is true, and this holds "
         "vacuously when zero_selection_ids is empty; the sampled rationales "
         "do not contradict the measurements shown beside them; and "
