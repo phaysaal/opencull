@@ -573,9 +573,12 @@ class Launcher(QMainWindow):
             return
         photos = str(project.get("photos", ""))
         try:
+            # The stored provider drives the cull like every other stage.
+            # With no profile configured this stays empty and the run falls
+            # back to the legacy local program, which still works offline.
             self.services.jobs.add(
-                photos, "", 2, True, "family", "", None, 5, 4,
-                only_photos=only_photos)
+                photos, "", 2, True, "family", self.provider_id(),
+                None, 5, 4, only_photos=only_photos)
         except Exception as exc:
             # A missing provider credential surfaces here, and is the most
             # common reason a cull cannot start, so say so plainly.

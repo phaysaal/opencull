@@ -720,6 +720,20 @@ class LauncherWindowTests(unittest.TestCase):
         confirm.assert_not_called()
         self.assertEqual(services.added, ["/p/a"])
 
+    def test_culling_uses_the_stored_provider(self):
+        window, services = self.build(projects=[])
+        services.providers = mock.Mock()
+        services.providers.public.return_value = {
+            "profiles": [{"id": "abc123def456", "kind": "openrouter"}]}
+        window.cull_project({"name": "A", "photos": "/p/a"})
+        self.assertEqual(
+            services.jobs.add.call_args.args[5], "abc123def456")
+
+    def test_culling_without_a_provider_falls_back_to_the_legacy_run(self):
+        window, services = self.build(projects=[])
+        window.cull_project({"name": "A", "photos": "/p/a"})
+        self.assertEqual(services.jobs.add.call_args.args[5], "")
+
     def test_reculling_is_refused_unless_confirmed(self):
         window, services = self.build(projects=[])
         with mock.patch.object(window, "confirm_recull", return_value=False):
