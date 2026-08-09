@@ -426,7 +426,7 @@ class LauncherWindowTests(unittest.TestCase):
         self.folder(window, "raw")
         window.refresh()
         buttons = self.buttons(self.cards(window)[0])
-        self.assertIn("Assessment", buttons)
+        self.assertIn("Marks", buttons)
         self.assertNotIn("Assess", buttons)
 
     def test_an_assessed_folder_says_so(self):
