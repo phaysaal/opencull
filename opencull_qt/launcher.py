@@ -463,8 +463,11 @@ class Launcher(QMainWindow):
         # Assessment reads the cull and its review, so it is only offered
         # once there is a cull to read.
         if culled and not running:
+            # "Marks" opens the ratings that already exist; "Assess" starts
+            # one. The longer word "Assessment" cannot fit four-abreast on
+            # a fixed-width card without being clipped mid-word.
             actions.append((
-                "Assessment" if project.get("shortlist_available") else "Assess",
+                "Marks" if project.get("shortlist_available") else "Assess",
                 lambda p=project: self.assess_project(p)))
         contents = self.folder_contents(project)
         treatment = treatment_label(contents["kind"])
