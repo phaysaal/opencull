@@ -489,6 +489,10 @@ class ProjectCard(QFrame):
             for label, handler in actions:
                 button = QPushButton(label)
                 button.setObjectName("ghost")
+                # Four actions share a fixed-width card; at the ghost
+                # button's full padding they overflow it and Qt clips the
+                # labels to gibberish. Slim padding keeps every word whole.
+                button.setProperty("slim", True)
                 button.setCursor(Qt.CursorShape.PointingHandCursor)
                 button.setFont(theme.body(9))
                 button.clicked.connect(lambda _=False, run=handler: run())

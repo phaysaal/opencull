@@ -76,6 +76,34 @@ class ProjectCatalogTests(unittest.TestCase):
             self.assertEqual(state["projects"][0]["culling"]["id"], "job-1")
             self.assertEqual(queue["jobs"][0]["status"], "running")
 
+    def test_an_old_failure_does_not_shadow_the_run_that_succeeded(self):
+        """The current job is the one in flight, else the newest by order."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            photos = root / "Shoot"; photos.mkdir()
+            manifest = project_manifest_path(photos)
+            catalog = ProjectCatalog(root / "support" / "projects.json")
+            catalog.add(str(photos))
+            project = load_project(manifest)
+            common = {"project_id": project["id"],
+                      "project": str(manifest), "photos": str(photos)}
+            queue = {"jobs": [
+                {"id": "cull-lost", "kind": "culling", "status": "failed",
+                 "created_at": "2026-01-01T00:00:00+00:00", **common},
+                {"id": "cull-won", "kind": "culling", "status": "completed",
+                 "created_at": "2026-01-01T01:00:00+00:00", **common},
+                {"id": "assess-lost", "kind": "professional_shortlist",
+                 "status": "failed",
+                 "created_at": "2026-01-01T02:00:00+00:00", **common},
+                {"id": "assess-won", "kind": "professional_shortlist",
+                 "status": "completed",
+                 "created_at": "2026-01-01T03:00:00+00:00", **common},
+            ]}
+            state = catalog.public(queue)
+            listed = state["projects"][0]
+            self.assertEqual(listed["culling"]["id"], "cull-won")
+            self.assertEqual(listed["assessment"]["id"], "assess-won")
+
     def test_legacy_recent_report_never_overwrites_newer_project_report(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

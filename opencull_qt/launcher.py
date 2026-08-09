@@ -868,7 +868,8 @@ class Launcher(QMainWindow):
             self.services.jobs.add_professional(
                 str(report_path), photos,
                 review=str(review) if review.is_file() else "",
-                profile=stance)
+                profile=stance,
+                provider_profile_id=self.provider_id())
         except Exception as exc:
             self._say(str(exc), "alarm")
             self.refresh()
@@ -940,7 +941,8 @@ class Launcher(QMainWindow):
                 style_profile=(
                     self.style_profiles.selected()
                     or str(manifest.get("active_style_profile") or "")),
-                only_photos=list(wanted))
+                only_photos=list(wanted),
+                provider_profile_id=self.provider_id())
         except Exception as exc:
             self._say(str(exc), "alarm")
             return

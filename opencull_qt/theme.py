@@ -117,6 +117,7 @@ QPushButton#ghost {{
     background: transparent; border: 1px solid {EDGE};
     border-radius: 8px; padding: 8px 16px;
 }}
+QPushButton#ghost[slim="true"] {{ padding: 8px 9px; }}
 QPushButton#ghost:hover {{ background: {RAISED}; border-color: #3B3633; }}
 QPushButton#ghost:pressed {{ background: {EDGE_SOFT}; }}
 QPushButton#ghost:disabled {{ color: {FAINT}; border-color: {EDGE_SOFT}; }}

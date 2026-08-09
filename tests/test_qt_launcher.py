@@ -514,6 +514,26 @@ class LauncherWindowTests(unittest.TestCase):
             services.jobs.add_professional.call_args.kwargs["profile"],
             "professional")
 
+    def test_assessing_uses_the_stored_provider(self):
+        window, services = self.build(projects=[])
+        services.providers = mock.Mock()
+        services.providers.public.return_value = {
+            "profiles": [{"id": "abc123def456", "kind": "openrouter"}]}
+        shoot = Path(tempfile.mkdtemp())
+        report_path, photos_path = build_shoot(shoot)
+        project = {"id": "p1", "name": "A", "photos": str(photos_path),
+                   "report": str(report_path), "available": True,
+                   "report_available": True}
+        window.open_project(project)
+        self.addCleanup(window.show_projects)
+        with mock.patch.object(window.bench, "culled", return_value=True), \
+                mock.patch.object(
+                    window, "ask_criteria", return_value="professional"):
+            window.assess_project(project)
+        self.assertEqual(
+            services.jobs.add_professional.call_args
+            .kwargs["provider_profile_id"], "abc123def456")
+
     def shoot_project(self, window):
         shoot = Path(tempfile.mkdtemp())
         report_path, photos_path = build_shoot(shoot)

@@ -25,6 +25,9 @@ from .report import ReportError, load_report
 
 CATALOG_FORMAT = "darkimiya-project-catalog-v1"
 
+# A job still doing something, as opposed to one that has become history.
+ACTIVE_STATUSES = {"running", "queued", "paused", "detached"}
+
 
 class ProjectCatalogError(ValueError):
     """A project-library request cannot be completed safely."""
@@ -290,9 +293,13 @@ class ProjectCatalog:
                 )
             ]
             culling_jobs = [job for job in project_jobs if job.get("kind", "culling") == "culling"]
+            # The job in flight, if any; otherwise the newest, whatever
+            # became of it. A failed attempt is history, not in flight --
+            # counting it as current let one old failure shadow the
+            # successful run that followed it.
             current_cull = next(
                 (job for job in reversed(culling_jobs)
-                 if job.get("status") not in {"completed", "cancelled"}),
+                 if job.get("status") in ACTIVE_STATUSES),
                 culling_jobs[-1] if culling_jobs else None)
             report_record = manifest.get("artifacts", {}).get("culling_report")
             report = str(report_record.get("path", "")) if isinstance(report_record, dict) else ""
@@ -306,7 +313,7 @@ class ProjectCatalog:
                 if job.get("kind") == "professional_shortlist"]
             current_assessment = next(
                 (job for job in reversed(assessment_jobs)
-                 if job.get("status") not in {"completed", "cancelled"}),
+                 if job.get("status") in ACTIVE_STATUSES),
                 assessment_jobs[-1] if assessment_jobs else None)
             shortlist = _latest_artifact_path(manifest, "shortlist")
             projects.append({
