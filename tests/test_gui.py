@@ -3066,6 +3066,33 @@ class GuiJobTests(unittest.TestCase):
             finally:
                 manager.shutdown()
 
+    def test_a_failed_run_does_not_push_the_default_output_aside(self):
+        """The retry inherits the failed run's output, and its checkpoint."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            photos = root / "photos"
+            photos.mkdir()
+            reports = root / "Reports"
+            reports.mkdir()
+            manager = JobManager(
+                root / "jobs.json", root, command_builder=lambda job: [],
+                autostart=False)
+            try:
+                manager._state["jobs"].append({
+                    "id": "f1", "kind": "culling", "photos": str(photos),
+                    "output": str(reports / "photos-results.json"),
+                    "checkpoint": str(reports / "photos-results.json"
+                                      ".checkpoint.json"),
+                    "log": str(reports / "photos-results.json.log"),
+                    "status": "failed"})
+                chosen = manager._default_output(photos, reports)
+                self.assertEqual(chosen, reports / "photos-results.json")
+                manager._state["jobs"][-1]["status"] = "queued"
+                busy = manager._default_output(photos, reports)
+                self.assertEqual(busy, reports / "photos-results-2.json")
+            finally:
+                manager.shutdown()
+
     def test_queue_guard_tolerates_jobs_that_have_no_folder(self):
         """A verification job carries no photos; it must not break culling."""
         with tempfile.TemporaryDirectory() as temporary:

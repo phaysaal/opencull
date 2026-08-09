@@ -728,10 +728,16 @@ class JobManager:
         root = directory or self.output_root
         candidate = root / f"{base}-results.json"
         number = 2
+        # Only a live job's output is spoken for. A failed or cancelled
+        # run left a checkpoint at its output and no report; giving the
+        # retry the same path is what lets it resume the decisions
+        # instead of paying for them again.
         while candidate.exists() or any(
-            Path(job["output"]) == candidate for job in self._state["jobs"]
+            str(job.get("output") or "") == str(candidate)
+            and job.get("status") not in TERMINAL
+            for job in self._state["jobs"]
         ):
-            candidate = self.output_root / f"{base}-results-{number}.json"
+            candidate = root / f"{base}-results-{number}.json"
             number += 1
         return candidate.resolve()
 
