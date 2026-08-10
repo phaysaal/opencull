@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Any
 
 from opencull_gui.assets import index_asset_families
+from opencull_gui.shortlist import bar_checkpoint_path
 from scan import (  # noqa: F401
     BITMAP_EXTENSIONS,
     RAW_EXTENSIONS,
@@ -406,9 +408,13 @@ def professional_calibration_json(
     }, sort_keys=True)
 
 
-def professional_checkpoint_path(output: str, checkpoint: str = "") -> str:
+def professional_checkpoint_path(
+    output: str, checkpoint: str = "", profile: str = "",
+) -> str:
     chosen = str(checkpoint).strip()
-    return chosen if chosen else f"{output}.checkpoint.json"
+    if chosen:
+        return chosen
+    return bar_checkpoint_path(output, profile)
 
 
 def _valid_saved_assessment(
@@ -462,8 +468,24 @@ def load_professional_checkpoint(
         bundle, candidates, [], profile, False)
     if not enabled:
         return empty
+    candidates_paths = [str(path)]
+    # Runs from before checkpoints were named by their bar kept one file
+    # per output. Adopt it when it exists and its signature matches, so
+    # the rename does not orphan work already paid for.
+    legacy = re.sub(r"\.[0-9a-f]{8}\.checkpoint\.json$",
+                    ".checkpoint.json", str(path))
+    if legacy != str(path):
+        candidates_paths.append(legacy)
+    data = None
+    for option in candidates_paths:
+        try:
+            data = _load_json(option)
+        except (ValueError, TypeError, json.JSONDecodeError):
+            continue
+        break
     try:
-        data = _load_json(path)
+        if data is None:
+            raise ValueError("no readable checkpoint")
         bundle_data = json.loads(str(bundle))
     except (ValueError, TypeError, json.JSONDecodeError):
         return empty

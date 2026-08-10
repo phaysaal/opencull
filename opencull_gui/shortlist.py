@@ -20,6 +20,24 @@ TIER_STARS = {
 }
 
 
+def bar_checkpoint_path(output, profile: str = "") -> str:
+    """Where a run under one bar keeps its ratings.
+
+    The bar is part of a run's identity: ratings gathered under a gentle
+    family bar say nothing about a strict professional one, so a
+    checkpoint cannot be shared between them. Giving each bar its own
+    file means changing your mind costs nothing already paid for -- the
+    old ratings wait, and switching back resumes them.
+    """
+    import hashlib
+
+    bar = " ".join(str(profile or "").split()).casefold()
+    if not bar:
+        return f"{output}.checkpoint.json"
+    digest = hashlib.sha256(bar.encode("utf-8")).hexdigest()[:8]
+    return f"{output}.{digest}.checkpoint.json"
+
+
 def tier_rank(tier) -> int:
     """How high a tier stands, five for the best and one for the worst."""
     return TIER_STARS.get(str(tier or "").strip().lower(), 0)

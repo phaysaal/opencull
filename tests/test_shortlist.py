@@ -54,6 +54,57 @@ def report_payload():
 
 
 class AssetFamilyTests(unittest.TestCase):
+    def test_each_bar_keeps_its_own_checkpoint(self):
+        from opencull_gui.shortlist import bar_checkpoint_path
+
+        out = "/x/Shoot.professional-shortlist.json"
+        gentle = bar_checkpoint_path(out, "gentle bar -- family")
+        strict = bar_checkpoint_path(out, "strict bar -- craft")
+        self.assertNotEqual(gentle, strict)
+        # The same bar, however it was typed, is the same run.
+        self.assertEqual(
+            gentle, bar_checkpoint_path(out, "  GENTLE BAR --  family "))
+        # No bar at all keeps the name runs used before bars existed.
+        self.assertEqual(
+            bar_checkpoint_path(out, ""), f"{out}.checkpoint.json")
+
+    def test_a_bar_adopts_a_legacy_checkpoint_written_under_it(self):
+        """Renaming must not orphan ratings already paid for."""
+        import json as json_module
+
+        from shortlist_kernel import (
+            build_professional_checkpoint,
+            checkpoint_professional_assessments,
+            load_professional_checkpoint,
+        )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            bar = "gentle bar -- family"
+            candidates = [{"photo": "A.JPG", "cluster_id": "group-0001"}]
+            bundle = json_module.dumps(
+                {"signature": "sig", "photos_root": str(root),
+                 "candidates": candidates})
+            assessment = {
+                "photo": "A.JPG", "cluster_id": "group-0001",
+                "tier": "promising", "score": 55, "confidence": 0.8,
+                "rationale": "a reason",
+                **{field: f"{field} reading" for field in ASSESSMENT_FIELDS},
+            }
+            state = build_professional_checkpoint(
+                bundle, candidates, [json_module.dumps(assessment)],
+                bar, False)
+            legacy = root / "out.json.checkpoint.json"
+            legacy.write_text(state)
+
+            fresh = root / "out.json.abcd1234.checkpoint.json"
+            loaded = load_professional_checkpoint(
+                str(fresh), bundle, candidates, bar, True)
+
+            self.assertEqual(
+                len(checkpoint_professional_assessments(loaded, candidates)),
+                1)
+
     def test_a_score_that_contradicts_its_verdict_is_flagged(self):
         from opencull_gui.shortlist import score_disagreements
 

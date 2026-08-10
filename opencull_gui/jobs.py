@@ -32,6 +32,7 @@ from .providers import (
     ProviderStore,
     normalize_judgment_policy,
 )
+from .shortlist import bar_checkpoint_path
 
 QUEUE_FORMAT = "opencull-job-queue-v1"
 ACTIVE = {"running", "stopping", "detached"}
@@ -718,7 +719,9 @@ class JobManager:
             profile_data = (
                 provider_bundle["profile"] if provider_bundle else {})
             log = chosen_output.with_suffix(chosen_output.suffix + ".log")
-            checkpoint = Path(str(chosen_output) + ".checkpoint.json")
+            # Named by the bar, so a change of mind leaves the previous
+            # bar's ratings intact and resumable.
+            checkpoint = Path(bar_checkpoint_path(chosen_output, profile))
             job = {
                 "id": job_id,
                 "kind": "professional_shortlist",
