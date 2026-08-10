@@ -370,19 +370,19 @@ class LauncherWindowTests(unittest.TestCase):
             {"id": "p1", "name": "A", "photos": "/p/a", "available": True}])
         card = self.card_for(window, "bitmap")
         self.assertTrue(card.strip.opens())
-        with mock.patch.object(window, "develop") as develop:
+        with mock.patch.object(window, "open_project") as opened:
             card.strip.mousePressEvent(QMouseEvent(
                 QMouseEvent.Type.MouseButtonPress, QPointF(10, 10),
                 Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton,
                 Qt.KeyboardModifier.NoModifier))
-        develop.assert_called_once()
-        self.assertEqual(develop.call_args[0][0]["id"], "p1")
+        opened.assert_called_once()
+        self.assertEqual(opened.call_args[0][0]["id"], "p1")
 
     def test_the_pictures_say_where_they_lead(self):
         window, _ = self.build(projects=[
             {"id": "p1", "name": "A", "photos": "/p/a", "available": True}])
-        self.assertEqual(self.card_for(window, "raw").strip.toolTip(), "Develop A")
-        self.assertEqual(self.card_for(window, "bitmap").strip.toolTip(), "Edit A")
+        self.assertEqual(self.card_for(window, "raw").strip.toolTip(), "Open A")
+        self.assertEqual(self.card_for(window, "bitmap").strip.toolTip(), "Open A")
 
     def test_pictures_that_lead_nowhere_are_not_a_target(self):
         # A folder with nothing readable in it has no treatment button, so
@@ -437,6 +437,65 @@ class LauncherWindowTests(unittest.TestCase):
         self.assertIn("Cull", buttons)
         self.assertNotIn("Re-cull", buttons)
         self.assertEqual(self.cards(window)[0].badge.text(), "NOT CULLED")
+
+    def opened_shoot(self, window, extra=None):
+        """A real shoot on disk, opened with no phase named."""
+        from opencull_gui.project import load_or_create_folder_project
+
+        shoot = Path(tempfile.mkdtemp())
+        report_path, photos_path = build_shoot(shoot)
+        manifest_path, _ = load_or_create_folder_project(photos_path)
+        project = {"id": "p1", "name": "A", "photos": str(photos_path),
+                   "report": str(report_path), "available": True,
+                   "report_available": True,
+                   "project": str(manifest_path), **(extra or {})}
+        window.open_project(project)
+        self.addCleanup(window.show_projects)
+        return project, manifest_path
+
+    def test_a_first_open_lands_on_the_cull(self):
+        window, _ = self.build(projects=[])
+        self.opened_shoot(window)
+        self.assertEqual(window.review_page.current, phases.CULL)
+
+    def test_the_phase_a_photographer_was_in_is_remembered(self):
+        from opencull_gui.project import load_project
+
+        window, _ = self.build(projects=[])
+        _project, manifest_path = self.opened_shoot(window)
+        window.review_page.open_phase(phases.DEVELOPMENT)
+        self.assertEqual(
+            load_project(manifest_path).get("last_phase"),
+            phases.DEVELOPMENT)
+
+    def test_reopening_lands_on_the_remembered_phase(self):
+        window, _ = self.build(projects=[])
+        project, _manifest_path = self.opened_shoot(window)
+        window.review_page.open_phase(phases.DEVELOPMENT)
+        window.show_projects()
+        window.open_project(project)
+        self.assertEqual(window.review_page.current, phases.DEVELOPMENT)
+
+    def test_a_nonsense_memory_falls_back_to_the_cull(self):
+        from opencull_gui.project import update_project
+
+        window, _ = self.build(projects=[])
+        project, manifest_path = self.opened_shoot(window)
+        update_project(manifest_path, last_phase="")
+        manifest_path.write_text(
+            manifest_path.read_text().replace(
+                '"last_phase": ""', '"last_phase": "banquet"'))
+        window.show_projects()
+        window.open_project(project)
+        self.assertEqual(window.review_page.current, phases.CULL)
+
+    def test_a_named_phase_beats_the_memory(self):
+        window, _ = self.build(projects=[])
+        project, _manifest_path = self.opened_shoot(window)
+        window.review_page.open_phase(phases.DEVELOPMENT)
+        window.show_projects()
+        window.open_project(project, phases.ASSESSMENT)
+        self.assertEqual(window.review_page.current, phases.ASSESSMENT)
 
     def test_an_assessed_folder_offers_to_open_it_rather_than_redo_it(self):
         window, _ = self.build(projects=[

@@ -29,7 +29,11 @@ from PySide6.QtWidgets import (
 
 from opencull_gui import phases
 from opencull_gui.debrief import aggregate as debrief_aggregate
-from opencull_gui.project import load_or_create_folder_project
+from opencull_gui.project import (
+    load_or_create_folder_project,
+    load_project,
+    update_project,
+)
 from opencull_gui.project_catalog import ProjectCatalogError
 from opencull_gui.provenance import frame_story
 from opencull_gui.reviews import (
@@ -53,7 +57,7 @@ from .provenance import ProvenanceDialog
 from .providers import ProvidersDialog
 from .review import ReviewPage
 from .sheet import ContactSheet
-from .shell import Invitation, ProjectShell, first_open
+from .shell import Invitation, ProjectShell
 from .shortlist import ShortlistPage
 from .studio import StudioPage
 from .style import StyleDialog, StylePanel
@@ -495,10 +499,19 @@ class Launcher(QMainWindow):
             subtitle, label, tone, actions,
             progress=job_progress(active_job(project)) if running else None,
             on_remove=lambda p=project: self.remove_project(p),
-            # The strip is a second way to the folder's own treatment, never
-            # a way to something the card is not otherwise offering.
-            on_open=(lambda p=project: self.develop(p)) if opens else None,
-            open_hint=f"{treatment} {name}".strip() if opens else "")
+            # The strip opens the shoot where the photographer left off,
+            # or on the cull the first time. A folder with nothing readable
+            # in it, one that is off its disk, and one mid-run stay inert.
+            on_open=(
+                (lambda p=project: self.open_project(p))
+                if project.get("available") and not running and total
+                and contents.get("kind") != "empty"
+                else None),
+            open_hint=(
+                f"Open {name}".strip()
+                if project.get("available") and not running and total
+                and contents.get("kind") != "empty"
+                else ""))
 
         root = str(project.get("photos", ""))
         for position, name in enumerate(contents.get("samples") or []):
@@ -646,7 +659,15 @@ class Launcher(QMainWindow):
         self.pages.addWidget(shell)
         self.pages.setCurrentWidget(shell)
         shell.show_plan(self.phase_plan(project, bench))
-        if not shell.open_phase(phase or first_open(shell.plan)):
+        # The folder remembers which phase the photographer was working
+        # in, so coming back -- from the library or from a fresh launch --
+        # lands where they left off. A folder never opened lands on the
+        # cull. Connected before the first opening so the landing itself
+        # is remembered too.
+        manifest_path = str(project.get("project", ""))
+        shell.opened.connect(
+            lambda key, path=manifest_path: self._remember_phase(path, key))
+        if not shell.open_phase(phase or self._remembered_phase(manifest_path)):
             # A folder whose photographs are not on disk has every phase of
             # its own shut. Landing on the first one that is open beats
             # landing on nothing at all.
@@ -654,6 +675,24 @@ class Launcher(QMainWindow):
                 if item["state"] != "blocked" and shell.open_phase(item["id"]):
                     break
         self.refresh()
+
+    @staticmethod
+    def _remembered_phase(manifest_path: str) -> str:
+        try:
+            remembered = str(load_project(
+                Path(manifest_path)).get("last_phase") or "")
+        except (OSError, ValueError):
+            remembered = ""
+        return remembered if remembered in phases.ORDER else phases.CULL
+
+    @staticmethod
+    def _remember_phase(manifest_path: str, key: str) -> None:
+        path = Path(manifest_path)
+        if key in phases.ORDER and path.is_file():
+            try:
+                update_project(path, last_phase=key)
+            except (OSError, ValueError):
+                pass
 
     def phase_plan(self, project: dict, bench: Bench) -> list[dict]:
         return phases.plan(

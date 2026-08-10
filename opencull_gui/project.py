@@ -202,7 +202,8 @@ def load_or_create_folder_project(
 
 def update_project(path: Path, **changes: Any) -> dict[str, Any]:
     value = load_project(path)
-    for key in ("name", "source_folder", "active_style_profile", "stage"):
+    for key in ("name", "source_folder", "active_style_profile", "stage",
+                "last_phase"):
         if key in changes and changes[key] is not None:
             value[key] = str(changes[key]) if key != "active_style_profile" else changes[key]
     if "artifacts" in changes:
