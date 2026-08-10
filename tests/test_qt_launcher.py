@@ -993,6 +993,35 @@ class LauncherWindowTests(unittest.TestCase):
         self.assertIsInstance(page, AssessProgress)
         self.assertEqual(page.meter.value(), 25)
 
+    def test_the_assessment_page_shows_rated_and_waiting_photographs(self):
+        import json as json_module
+
+        from opencull_gui.photos import PhotoStore
+        from opencull_qt.launcher import AssessProgress
+        from opencull_qt.previews import PreviewLoader
+
+        shoot = Path(tempfile.mkdtemp())
+        _report, photos_path = build_shoot(shoot)
+        checkpoint = shoot / "c.json"
+        checkpoint.write_text(json_module.dumps({"assessments": [
+            {"photo": "A.JPG", "tier": "strong"},
+            {"photo": "B.JPG", "tier": "ordinary"},
+        ]}))
+        loader = PreviewLoader(PhotoStore(photos_path, shoot / "cache"))
+        self.addCleanup(loader.shutdown)
+        page = AssessProgress(
+            "A", names=["A.JPG", "B.JPG", "C.JPG", "D.JPG"],
+            loader=loader, checkpoint=checkpoint)
+        self.addCleanup(page.deleteLater)
+        page.set_job({"status": "running", "message": "x",
+                      "progress": {"completed_items": 2,
+                                   "total_items": 4}})
+        self.assertEqual(page.rated_sheet.names, ["A.JPG", "B.JPG"])
+        self.assertEqual(page.waiting_sheet.names, ["C.JPG", "D.JPG"])
+        self.assertIn("1 strong", page.rated_title.text())
+        self.assertIn("1 ordinary", page.rated_title.text())
+        self.assertIn("2", page.waiting_title.text())
+
     def test_reculling_is_refused_unless_confirmed(self):
         window, services = self.build(projects=[])
         with mock.patch.object(window, "confirm_recull", return_value=False):

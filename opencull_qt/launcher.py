@@ -300,11 +300,21 @@ class CullProgress(QWidget):
 
 
 class AssessProgress(QWidget):
-    """The assessment phase while its run is actually running."""
+    """The assessment phase while its run is actually running.
+
+    The rated frames gather above with their tiers tallied, the
+    unrated thin below, both straight from the run's own checkpoint.
+    """
 
     def __init__(self, name: str, on_pause=None,
+                 names: list[str] | None = None, loader=None,
+                 checkpoint: Path | None = None,
                  parent: QWidget | None = None):
         super().__init__(parent)
+        self.names = list(names or [])
+        self.loader = loader
+        self.checkpoint = checkpoint
+        self._shown: tuple[int, int] = (-1, -1)
         self.setObjectName("page")
         outer = QVBoxLayout(self)
         outer.setContentsMargins(36, 30, 36, 26)
@@ -342,7 +352,70 @@ class AssessProgress(QWidget):
         self.detail.setObjectName("hint")
         self.detail.setFont(theme.body(9))
         outer.addWidget(self.detail)
-        outer.addStretch(1)
+        self.rated_title = QLabel("")
+        self.rated_title.setObjectName("clusterTitle")
+        self.rated_title.setFont(theme.display(12))
+        outer.addWidget(self.rated_title)
+        self._rated_slot = QVBoxLayout()
+        outer.addLayout(self._rated_slot, 3)
+        self.waiting_title = QLabel("")
+        self.waiting_title.setObjectName("clusterTitle")
+        self.waiting_title.setFont(theme.display(12))
+        outer.addWidget(self.waiting_title)
+        self._waiting_slot = QVBoxLayout()
+        outer.addLayout(self._waiting_slot, 2)
+        self.rated_sheet: QWidget | None = None
+        self.waiting_sheet: QWidget | None = None
+
+    def _assessed(self) -> list[dict]:
+        if self.checkpoint is None:
+            return []
+        try:
+            state = json.loads(self.checkpoint.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return []
+        records = []
+        for item in state.get("assessments", []):
+            if isinstance(item, str):
+                try:
+                    item = json.loads(item)
+                except ValueError:
+                    continue
+            if isinstance(item, dict):
+                records.append(item)
+        return records
+
+    def _refill(self, records: list[dict]) -> None:
+        rated = [str(item.get("photo") or "") for item in records]
+        rated = [name for name in rated if name]
+        waiting = [name for name in self.names if name not in set(rated)]
+        state = (len(rated), len(waiting))
+        if state == self._shown or self.loader is None:
+            return
+        self._shown = state
+        for slot, old in ((self._rated_slot, self.rated_sheet),
+                          (self._waiting_slot, self.waiting_sheet)):
+            if old is not None:
+                slot.removeWidget(old)
+                old.deleteLater()
+        tally: dict[str, int] = {}
+        for item in records:
+            tier = str(item.get("tier") or "").strip().lower()
+            if tier:
+                tally[tier] = tally.get(tier, 0) + 1
+        tiers = ", ".join(
+            f"{count} {tier}" for tier, count in sorted(
+                tally.items(), key=lambda pair: -pair[1]))
+        self.rated_title.setText(
+            f"Assessed so far · {len(rated)}"
+            + (f" — {tiers}" if tiers else "")
+            if rated else "Assessed so far · none yet")
+        self.waiting_title.setText(
+            f"Awaiting assessment · {len(waiting)}")
+        self.rated_sheet = ContactSheet(rated, self.loader)
+        self._rated_slot.addWidget(self.rated_sheet)
+        self.waiting_sheet = ContactSheet(waiting, self.loader)
+        self._waiting_slot.addWidget(self.waiting_sheet)
 
     def set_job(self, job: dict) -> None:
         self.message.setText(str(job.get("message") or ""))
@@ -361,6 +434,7 @@ class AssessProgress(QWidget):
         else:
             self.meter.setValue(job_progress(job) or 0)
             self.detail.setText("Preparing the selection.")
+        self._refill(self._assessed())
 
 
 RECULL_WARNING = (
@@ -1171,7 +1245,10 @@ class Launcher(QMainWindow):
                 page = AssessProgress(
                     str(bench.project.get("name") or ""),
                     on_pause=lambda job=str(running.get("id", "")):
-                        self.pause_job(job))
+                        self.pause_job(job),
+                    names=bench.selection(),
+                    loader=self._loader,
+                    checkpoint=Path(str(running.get("checkpoint") or "")))
                 page.set_job(running)
                 return page
             paused = next(
