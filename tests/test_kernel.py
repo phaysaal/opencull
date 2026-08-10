@@ -200,6 +200,40 @@ class KernelTests(unittest.TestCase):
         self.assertTrue(kernel.all_singletons([group]))
         self.assertFalse(kernel.all_singletons([GROUP]))
 
+    def test_the_evidence_projection_fits_the_judges_window(self):
+        """Flags the claim names must never fall past the 6000-char cut."""
+        groups = [
+            {"id": f"group-{n:04d}", "candidates": [
+                {"name": f"F{n:04d}A.JPG", "sharpness": 80.0,
+                 "technical_score": 75.0, "exposure": 90.0,
+                 "clipping": 0.1},
+                {"name": f"F{n:04d}B.JPG", "sharpness": 60.0,
+                 "technical_score": 65.0, "exposure": 88.0,
+                 "clipping": 0.2},
+            ]}
+            for n in range(1, 89)
+        ]
+        manifest = json.dumps({"groups": groups})
+        decisions = [json.dumps({
+            "group_id": g["id"],
+            "keepers": [g["candidates"][0]["name"]],
+            "rationale": ("Chosen for its markedly better sharpness and "
+                          "steadier framing across the whole burst." * 2),
+            "confidence": 0.9,
+        }) for g in groups]
+        report = kernel.build_report("sha", groups, decisions, "{}", manifest)
+        evidence = kernel.report_evidence(manifest, report)
+        self.assertLessEqual(len(evidence), 6000)
+        visible = evidence[:6000]
+        for flag in ("zero_selection_ids", "every_singleton_keeps_its_photo",
+                     "claims_files_deleted", "maximum_selected_in_any_group"):
+            self.assertIn(flag, visible)
+        # The flags come before the bulky sample, so a truncated read
+        # still sees every named field.
+        self.assertLess(
+            visible.index("zero_selection_ids"),
+            visible.index('"decisions"'))
+
     def test_checkpoint_resumes_only_matching_valid_prefix(self):
         second = {
             "id": "group-0002",

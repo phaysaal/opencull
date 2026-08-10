@@ -1000,7 +1000,7 @@ def report_evidence(manifest: str, report: str) -> str:
     warned_ids = {
         item.get("cluster_id") for item in report_data.get("warnings", [])
     }
-    summary = {
+    flags = {
         "format": report_data.get("format"),
         "manifest_group_count": len(groups),
         "report_cluster_count": len(report_data.get("clusters", [])),
@@ -1025,13 +1025,16 @@ def report_evidence(manifest: str, report: str) -> str:
         "fallback_count": sum(bool(item.get("fallback")) for item in keep),
         "claims_files_deleted": "deleted" in " ".join(
             str(item.get("rationale", "")).lower() for item in keep),
-        "decisions": [
+    }
+
+    def sampled(count: int) -> list[dict[str, Any]]:
+        return [
             {
                 "cluster_id": item.get("cluster_id"),
                 "photos": item.get("photos", []),
                 "warning": item.get("warning", ""),
                 "fallback": bool(item.get("fallback")),
-                "rationale": str(item.get("rationale", ""))[:400],
+                "rationale": str(item.get("rationale", ""))[:240],
                 # The measurements the rationale must not contradict, from
                 # the manifest itself. A judge asked whether rationales
                 # respect the measured evidence can only answer if the
@@ -1047,15 +1050,29 @@ def report_evidence(manifest: str, report: str) -> str:
                     }
                     for group in groups
                     if group.get("id") == item.get("cluster_id")
-                    for candidate in group.get("candidates", [])
+                    for candidate in group.get("candidates", [])[:6]
                 },
             }
-            for item in keep[:8]
-        ],
-        "sampled_decisions": min(len(keep), 8),
-    }
-    return "DETERMINISTIC REPORT PROJECTION:\n" + json.dumps(
-        summary, indent=2, sort_keys=True)
+            for item in keep[:count]
+        ]
+
+    # The judge reads at most 6000 characters, and a strict verifier
+    # rightly refuses a claim whose named fields fell past the cut -- a
+    # panel did exactly that, unanimously, on the first 88-group cull.
+    # So the flags the claim names come first, the sampled decisions
+    # come last, and the sample shrinks until the whole projection is
+    # inside the window.
+    for count in (8, 6, 4, 3, 2, 1):
+        summary = dict(
+            flags,
+            sampled_decisions=min(len(keep), count),
+            decisions=sampled(count),
+        )
+        text = "DETERMINISTIC REPORT PROJECTION:\n" + json.dumps(
+            summary, indent=2)
+        if len(text) <= 5800:
+            break
+    return text
 
 
 def report_policy(keep_per_group: float) -> str:
