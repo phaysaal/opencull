@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -38,7 +39,7 @@ from opencull_gui.reviews import ReviewError, ReviewStore, approve_remaining
 
 from . import theme
 from .previews import PreviewLoader, scaled
-from .widgets import workspace_title
+from .widgets import Filmstrip, workspace_title
 
 THUMB = 200
 # The stored thumb previews are 520px on the long edge, so tiles can grow
@@ -151,6 +152,65 @@ class Frame(QFrame):
         painter.end()
 
 
+class GroupCard(QFrame):
+    """One near-duplicate group, shown by its own photographs.
+
+    The card says what the group is -- its frames, how many there are,
+    how many are kept, whether it has been reviewed -- and opens into
+    the frames themselves for overriding.
+    """
+
+    WIDTH = 252
+    HEIGHT = 178
+    chosen = Signal(str)
+
+    def __init__(self, cluster_id: str, photos: list[str],
+                 kept: int, reviewed: bool):
+        super().__init__()
+        self.cluster_id = cluster_id
+        self.photos = list(photos)
+        self.setObjectName("card")
+        self.setFixedSize(self.WIDTH, self.HEIGHT)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setToolTip("Open this group to review or override.")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        self.strip = Filmstrip(min(3, max(1, len(self.photos))))
+        self.strip.setFixedHeight(126)
+        self.strip.clicked.connect(
+            lambda: self.chosen.emit(self.cluster_id))
+        self.strip.set_opens(True, "Open this group.")
+        layout.addWidget(self.strip)
+        caption = QHBoxLayout()
+        caption.setContentsMargins(10, 6, 10, 6)
+        caption.setSpacing(6)
+        mark = QLabel("✓" if reviewed else "·")
+        mark.setObjectName("frameAi" if reviewed else "frameNumber")
+        mark.setFont(theme.mono(8))
+        mark.setToolTip(
+            "You have reviewed this group." if reviewed
+            else "Not reviewed yet; the AI proposal stands.")
+        caption.addWidget(mark)
+        title = QLabel(cluster_id)
+        title.setObjectName("frameName")
+        title.setFont(theme.mono(8))
+        caption.addWidget(title, 1)
+        count = QLabel(f"{kept}/{len(self.photos)} kept")
+        count.setObjectName("frameNumber")
+        count.setFont(theme.mono(8))
+        caption.addWidget(count)
+        layout.addLayout(caption)
+
+    def sample_names(self) -> list[str]:
+        return self.photos[:self.strip.count]
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.chosen.emit(self.cluster_id)
+        super().mousePressEvent(event)
+
+
 class ReviewPage(QWidget):
     """Clusters on the left, their frames on the right."""
 
@@ -174,10 +234,11 @@ class ReviewPage(QWidget):
         self.loader.ready.connect(self._painted)
         self._trash_operation = None
         self._trash_done.connect(self._trash_finished)
+        self._cards: dict[str, GroupCard] = {}
+        self._card_wants: dict[str, list[tuple[GroupCard, int]]] = {}
         self._build()
         self._fill_clusters()
-        if self.current:
-            self.show_cluster(self.current)
+        self.show_overview()
 
     @staticmethod
     def frame_geometry(available: int, count: int, spacing: int) -> tuple[int, int]:
@@ -229,6 +290,7 @@ class ReviewPage(QWidget):
     def resizeEvent(self, event) -> None:  # noqa: N802 - Qt naming
         super().resizeEvent(event)
         self._relayout()
+        self._relayout_overview()
 
     def showEvent(self, event) -> None:  # noqa: N802 - Qt naming
         super().showEvent(event)
@@ -272,10 +334,22 @@ class ReviewPage(QWidget):
         column.setContentsMargins(22, 18, 22, 18)
         column.setSpacing(12)
 
+        heading_row = QHBoxLayout()
+        heading_row.setSpacing(10)
+        self.back_button = QPushButton("\u2190 All groups")
+        self.back_button.setObjectName("ghost")
+        self.back_button.setFont(theme.body(9))
+        self.back_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.back_button.setToolTip(
+            "Back to every group at once. Your decisions are saved as "
+            "you make them.")
+        self.back_button.clicked.connect(self.show_overview)
+        heading_row.addWidget(self.back_button)
         self.heading = QLabel("")
         self.heading.setObjectName("clusterTitle")
         self.heading.setFont(theme.display(20))
-        column.addWidget(self.heading)
+        heading_row.addWidget(self.heading, 1)
+        column.addLayout(heading_row)
 
         self.rationale = QLabel("")
         self.rationale.setObjectName("hint")
@@ -316,7 +390,36 @@ class ReviewPage(QWidget):
         actions.addWidget(self.status)
         column.addLayout(actions)
 
-        split.addWidget(right, 1)
+        overview = QWidget()
+        overview.setObjectName("page")
+        overview_column = QVBoxLayout(overview)
+        overview_column.setContentsMargins(22, 18, 22, 18)
+        overview_column.setSpacing(12)
+        self.overview_heading = QLabel("")
+        self.overview_heading.setObjectName("clusterTitle")
+        self.overview_heading.setFont(theme.display(20))
+        overview_column.addWidget(self.overview_heading)
+        overview_hint = QLabel(
+            "Each card is one group of near-duplicates: its frames, and "
+            "how many are kept. Open a group to override the choice.")
+        overview_hint.setObjectName("hint")
+        overview_hint.setWordWrap(True)
+        overview_hint.setFont(theme.body(10))
+        overview_column.addWidget(overview_hint)
+        self.overview_scroll = QScrollArea()
+        self.overview_scroll.setWidgetResizable(True)
+        overview_holder = QWidget()
+        overview_holder.setObjectName("page")
+        self.overview_grid = QGridLayout(overview_holder)
+        self.overview_grid.setContentsMargins(0, 6, 0, 6)
+        self.overview_grid.setSpacing(14)
+        self.overview_scroll.setWidget(overview_holder)
+        overview_column.addWidget(self.overview_scroll, 1)
+
+        self.views = QStackedWidget()
+        self.views.addWidget(overview)
+        self.views.addWidget(right)
+        split.addWidget(self.views, 1)
         outer.addLayout(split, 1)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
@@ -479,7 +582,75 @@ class ReviewPage(QWidget):
         if cluster_id:
             self.show_cluster(str(cluster_id))
 
+    def show_overview(self) -> None:
+        """Every group at once, each shown by its own photographs."""
+        state = self.reviews.public_state()
+        status = state["status"]
+        self.overview_heading.setText(
+            f"{status['total_clusters']} groups · "
+            f"{status['reviewed_clusters']} reviewed")
+        while self.overview_grid.count():
+            item = self.overview_grid.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
+        self._cards.clear()
+        self._card_wants.clear()
+        for cluster_id in self.cluster_ids:
+            cluster = self.report.cluster_by_id[cluster_id]
+            decided = state["clusters"].get(cluster_id, {})
+            decision = self.report.decision_by_id.get(cluster_id, {})
+            keepers = decided.get("keepers")
+            if keepers is None:
+                keepers = decision.get("photos") or []
+            card = GroupCard(
+                cluster_id, cluster["photos"], len(keepers),
+                bool(decided.get("reviewed")))
+            card.chosen.connect(self.show_cluster)
+            self._cards[cluster_id] = card
+            for slot, name in enumerate(card.sample_names()):
+                pixmap = self.loader.request(name, "thumb")
+                if pixmap is not None:
+                    card.strip.set_frame(slot, pixmap)
+                else:
+                    self._card_wants.setdefault(name, []).append(
+                        (card, slot))
+        self._overview_state = (0,)
+        self._relayout_overview()
+        self.views.setCurrentIndex(0)
+        self._fill_clusters()
+
+    def _relayout_overview(self) -> None:
+        cards = [self._cards[key] for key in self.cluster_ids
+                 if key in self._cards]
+        if not cards:
+            return
+        available = self.overview_scroll.viewport().width()
+        if available <= 0:
+            return
+        spacing = self.overview_grid.spacing()
+        columns = max(
+            1, (available + spacing) // (GroupCard.WIDTH + spacing))
+        columns = int(min(columns, len(cards)))
+        if (columns,) == getattr(self, "_overview_state", (0,)):
+            return
+        self._overview_state = (columns,)
+        while self.overview_grid.count():
+            self.overview_grid.takeAt(0)
+        for column_index in range(self.overview_grid.columnCount() + 1):
+            self.overview_grid.setColumnStretch(column_index, 0)
+        for row_index in range(self.overview_grid.rowCount() + 1):
+            self.overview_grid.setRowStretch(row_index, 0)
+        rows = (len(cards) + columns - 1) // columns
+        for position, card in enumerate(cards):
+            self.overview_grid.addWidget(
+                card, position // columns, position % columns)
+        self.overview_grid.setColumnStretch(columns, 1)
+        self.overview_grid.setRowStretch(rows, 1)
+
     def show_cluster(self, cluster_id: str) -> None:
+        self.views.setCurrentIndex(1)
         self.current = cluster_id
         self.loader.abandon()
         cluster = self.report.cluster_by_id[cluster_id]
@@ -528,9 +699,13 @@ class ReviewPage(QWidget):
         self._report("" if reviewed else "Not reviewed yet.")
 
     def _painted(self, name: str, size: str, pixmap) -> None:
+        if size != "thumb":
+            return
         frame = self.frames.get(name)
-        if frame is not None and size == "thumb":
+        if frame is not None:
             frame.set_pixmap(pixmap)
+        for card, slot in self._card_wants.pop(name, []):
+            card.strip.set_frame(slot, pixmap)
 
     # --- decisions ------------------------------------------------------
 
@@ -724,6 +899,9 @@ class ReviewPage(QWidget):
     # --- keyboard -------------------------------------------------------
 
     def keyPressEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        if self.views.currentIndex() == 0:
+            super().keyPressEvent(event)
+            return
         key = event.key()
         if Qt.Key.Key_1 <= key <= Qt.Key.Key_9:
             self.toggle_index(key - Qt.Key.Key_1)

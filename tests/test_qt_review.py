@@ -19,7 +19,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 try:
     from PySide6.QtCore import Qt
     from PySide6.QtGui import QKeyEvent
-    from PySide6.QtWidgets import QApplication
+    from PySide6.QtWidgets import QApplication, QLabel
 except ImportError:  # pragma: no cover - exercised only without PySide6
     QApplication = None
 
@@ -78,6 +78,20 @@ class ReviewPageTests(unittest.TestCase):
 
         loader = PreviewLoader(self.photos)
         page = ReviewPage(self.report, self.reviews, loader)
+        # The page lands on the group overview; these tests exercise the
+        # cluster view, so enter the first group the way a click would.
+        if page.cluster_ids:
+            page.show_cluster(page.cluster_ids[0])
+        self.addCleanup(loader.shutdown)
+        self.addCleanup(page.deleteLater)
+        return page
+
+    def overview(self):
+        from opencull_qt.previews import PreviewLoader
+        from opencull_qt.review import ReviewPage
+
+        loader = PreviewLoader(self.photos)
+        page = ReviewPage(self.report, self.reviews, loader)
         self.addCleanup(loader.shutdown)
         self.addCleanup(page.deleteLater)
         return page
@@ -100,6 +114,35 @@ class ReviewPageTests(unittest.TestCase):
         QApplication.processEvents()
         page._relayout()
         self.assertLessEqual(page.frames["A.JPG"].image.width(), THUMB_MAX)
+
+    def test_the_review_lands_on_the_group_overview(self):
+        page = self.overview()
+        self.assertEqual(page.views.currentIndex(), 0)
+        self.assertEqual(
+            sorted(page._cards), ["group-0001", "group-0002"])
+        card = page._cards["group-0001"]
+        self.assertEqual(card.photos, ["A.JPG", "B.JPG"])
+        self.assertIn("1/2 kept", card.findChildren(QLabel)[-1].text())
+
+    def test_choosing_a_card_opens_its_group(self):
+        page = self.overview()
+        page._cards["group-0002"].chosen.emit("group-0002")
+        self.assertEqual(page.views.currentIndex(), 1)
+        self.assertEqual(page.heading.text(), "group-0002")
+
+    def test_the_back_button_returns_with_fresh_counts(self):
+        page = self.page()
+        page.keep_none()
+        page.back_button.click()
+        self.assertEqual(page.views.currentIndex(), 0)
+        card = page._cards["group-0001"]
+        self.assertIn("0/2 kept", card.findChildren(QLabel)[-1].text())
+
+    def test_keyboard_decisions_wait_for_a_group(self):
+        page = self.overview()
+        self.press(page, Qt.Key.Key_N)
+        self.assertNotIn(
+            "group-0001", self.reviews.public_state()["clusters"])
 
     def test_the_geometry_maths_cover_narrow_wide_and_many(self):
         from opencull_qt.review import THUMB, THUMB_MAX, ReviewPage
