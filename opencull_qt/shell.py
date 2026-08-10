@@ -395,6 +395,19 @@ class ProjectShell(QWidget):
         if self.current == key:
             self.current = ""
 
+    def rebuild(self, key: str) -> None:
+        """Drop a built page and, if it was the one showing, open it afresh.
+
+        Dropping the current page clears `current`, so a caller that
+        checks afterwards finds nothing showing and leaves the shell
+        blank. Asking for the rebuild as one act removes the ordering
+        from the caller's hands.
+        """
+        showing = self.current == key
+        self.drop(key)
+        if showing:
+            self.open_phase(key)
+
     def shutdown(self) -> None:
         for page in self._pages.values():
             if hasattr(page, "shutdown"):

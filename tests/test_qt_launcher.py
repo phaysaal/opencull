@@ -993,6 +993,41 @@ class LauncherWindowTests(unittest.TestCase):
         self.assertIsInstance(page, AssessProgress)
         self.assertEqual(page.meter.value(), 25)
 
+    def test_pausing_a_run_leaves_a_resume_offer_not_a_blank_page(self):
+        from PySide6.QtWidgets import QPushButton
+
+        from opencull_qt.launcher import AssessProgress
+        from opencull_qt.shell import Invitation
+
+        shoot = Path(tempfile.mkdtemp())
+        report_path, photos_path = build_shoot(shoot)
+        job = {"id": "a1", "kind": "professional_shortlist",
+               "photos": str(photos_path), "status": "running",
+               "checkpoint": str(shoot / "c.json"), "log": "x",
+               "message": "running",
+               "progress": {"completed_items": 2, "total_items": 4}}
+        project = {"id": "p1", "name": "A", "photos": str(photos_path),
+                   "report": str(report_path), "available": True,
+                   "report_available": True, "assessment": job}
+        window, _services = self.build(projects=[project], jobs=[job])
+        window.open_project(project, phases.ASSESSMENT)
+        self.addCleanup(window.show_projects)
+        shell = window.review_page
+        self.assertIsInstance(
+            shell.page_for(phases.ASSESSMENT), AssessProgress)
+
+        job["status"] = "paused"
+        job["message"] = "Paused; resume will validate the checkpoint."
+        window.refresh()
+
+        page = shell.page_for(phases.ASSESSMENT)
+        self.assertIsInstance(page, Invitation)
+        self.assertIs(shell.pages.currentWidget(), page)
+        self.assertEqual(shell.current, phases.ASSESSMENT)
+        self.assertIn(
+            "Resume assessment",
+            [b.text() for b in page.findChildren(QPushButton)])
+
     def test_a_finished_assessment_hides_the_empty_waiting_panel(self):
         import json as json_module
 

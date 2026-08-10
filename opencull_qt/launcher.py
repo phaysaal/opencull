@@ -743,13 +743,9 @@ class Launcher(QMainWindow):
             if running is not None:
                 page.set_job(running)
             else:
-                shell.drop(phases.CULL)
-                if shell.current == phases.CULL:
-                    shell.open_phase(phases.CULL)
+                shell.rebuild(phases.CULL)
         elif page is not None and running is not None:
-            shell.drop(phases.CULL)
-            if shell.current == phases.CULL:
-                shell.open_phase(phases.CULL)
+            shell.rebuild(phases.CULL)
         assess_page = shell.page_for(phases.ASSESSMENT)
         assessing = next(
             (job for job in self._professional_jobs(
@@ -760,13 +756,9 @@ class Launcher(QMainWindow):
             if assessing is not None:
                 assess_page.set_job(assessing)
             else:
-                shell.drop(phases.ASSESSMENT)
-                if shell.current == phases.ASSESSMENT:
-                    shell.open_phase(phases.ASSESSMENT)
+                shell.rebuild(phases.ASSESSMENT)
         elif assess_page is not None and assessing is not None:
-            shell.drop(phases.ASSESSMENT)
-            if shell.current == phases.ASSESSMENT:
-                shell.open_phase(phases.ASSESSMENT)
+            shell.rebuild(phases.ASSESSMENT)
 
     def folder_contents(self, project: dict) -> dict:
         """Classify a folder's photographs, walking it at most once."""
@@ -1385,9 +1377,7 @@ class Launcher(QMainWindow):
         # progress of the new run.
         shell = self.review_page
         if isinstance(shell, ProjectShell):
-            shell.drop(phases.ASSESSMENT)
-            if shell.current == phases.ASSESSMENT:
-                shell.open_phase(phases.ASSESSMENT)
+            shell.rebuild(phases.ASSESSMENT)
         self._say(f"Reassessing {name}. Your own ratings are kept.", "ok")
         self.refresh()
 
