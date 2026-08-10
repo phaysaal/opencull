@@ -12,7 +12,7 @@ instead of two prompts in a row.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QRadioButton,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -30,6 +31,33 @@ from PySide6.QtWidgets import (
 from opencull_gui import criteria
 
 from . import theme
+
+
+class _WrapLabel(QLabel):
+    """A word-wrapped label whose height follows its wrapped width.
+
+    A plain wrapped QLabel reports a one-line sizeHint, so a frame built
+    around it reserves one line and clips the rest. This makes the height
+    honest, so two-line descriptions are never cropped.
+    """
+
+    def __init__(self, text: str, parent: QWidget | None = None):
+        super().__init__(text, parent)
+        self.setWordWrap(True)
+        policy = QSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+        policy.setHeightForWidth(True)
+        self.setSizePolicy(policy)
+
+    def sizeHint(self):  # noqa: N802 - Qt naming
+        hint = super().sizeHint()
+        width = self.width() or hint.width()
+        return QSize(hint.width(), self.heightForWidth(width))
+
+    def resizeEvent(self, event):  # noqa: N802 - Qt naming
+        super().resizeEvent(event)
+        self.setMinimumHeight(self.heightForWidth(self.width()))
+        self.updateGeometry()
 
 
 class Strictness(QFrame):
@@ -48,9 +76,8 @@ class Strictness(QFrame):
         self.choice.setCursor(Qt.CursorShape.PointingHandCursor)
         layout.addWidget(self.choice)
 
-        detail = QLabel(item["detail"])
+        detail = _WrapLabel(item["detail"])
         detail.setObjectName("hint")
-        detail.setWordWrap(True)
         detail.setFont(theme.body(9))
         detail.setContentsMargins(23, 0, 0, 0)
         layout.addWidget(detail)
@@ -72,9 +99,8 @@ class Lens(QFrame):
         self.choice.setCursor(Qt.CursorShape.PointingHandCursor)
         layout.addWidget(self.choice)
 
-        detail = QLabel(item["detail"])
+        detail = _WrapLabel(item["detail"])
         detail.setObjectName("hint")
-        detail.setWordWrap(True)
         detail.setFont(theme.body(9))
         detail.setContentsMargins(23, 0, 0, 0)
         layout.addWidget(detail)
@@ -88,7 +114,7 @@ class CriteriaDialog(QDialog):
         super().__init__(parent)
         self.frames = frames
         self.setWindowTitle("Judge this shoot by what?")
-        self.setMinimumWidth(560)
+        self.setMinimumWidth(600)
         self.setStyleSheet(theme.STYLESHEET)
         self._accepted = False
         self._build(name, culled, criteria.normalise_choice(stance))
