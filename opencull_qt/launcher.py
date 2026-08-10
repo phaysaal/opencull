@@ -677,16 +677,17 @@ class Launcher(QMainWindow):
             progress=job_progress(active_job(project)) if running else None,
             on_remove=lambda p=project: self.remove_project(p),
             # The strip opens the shoot where the photographer left off,
-            # or on the cull the first time. A folder with nothing readable
-            # in it, one that is off its disk, and one mid-run stay inert.
+            # or on the cull the first time. A folder mid-run opens too:
+            # its cull page is the live progress of the run. Only a folder
+            # with nothing readable, or one off its disk, stays inert.
             on_open=(
                 (lambda p=project: self.open_project(p))
-                if project.get("available") and not running and total
+                if project.get("available") and total
                 and contents.get("kind") != "empty"
                 else None),
             open_hint=(
                 f"Open {name}".strip()
-                if project.get("available") and not running and total
+                if project.get("available") and total
                 and contents.get("kind") != "empty"
                 else ""))
 

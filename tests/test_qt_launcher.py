@@ -404,14 +404,15 @@ class LauncherWindowTests(unittest.TestCase):
             {"id": "p1", "name": "A", "photos": "/p/a", "available": False}])
         self.assertFalse(self.card_for(window, "bitmap").strip.opens())
 
-    def test_a_folder_being_culled_is_not_a_target(self):
+    def test_a_folder_being_culled_still_opens_to_its_progress(self):
         window, _ = self.build(projects=[
             {"id": "p1", "name": "A", "photos": "/p/a", "available": True,
              "culling": {"status": "running", "log_tail": "20 %"}}])
         card = self.card_for(window, "bitmap")
-        # The button is gone while the run is in flight; so is the strip.
+        # The treatment button rests while the run is in flight, but the
+        # pictures still open the shoot -- whose cull page is the run.
         self.assertNotIn("Edit", self.buttons(card))
-        self.assertFalse(card.strip.opens())
+        self.assertTrue(card.strip.opens())
 
     def test_a_culled_folder_offers_review_assess_and_recull(self):
         window, _ = self.build(projects=[
