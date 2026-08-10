@@ -13,6 +13,7 @@ culling report and its review already keep.
 from __future__ import annotations
 
 from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -29,7 +30,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from opencull_gui.shortlist import ASSESSMENT_FIELDS, rated_by_hand
+from opencull_gui.shortlist import (
+    ASSESSMENT_FIELDS,
+    rated_by_hand,
+    tier_stars,
+)
 from opencull_gui.shortlist_reviews import ShortlistReviewError
 
 from . import theme
@@ -96,6 +101,7 @@ class ShortlistPage(QWidget):
         self.entries = list(shortlist.entries)
         self.by_hand = rated_by_hand(shortlist)
         self.current = str(self.entries[0]["photo"]) if self.entries else ""
+        self._icon_wants: dict[str, bool] = {}
 
         self.loader.ready.connect(self._painted)
         self._build()
@@ -117,6 +123,7 @@ class ShortlistPage(QWidget):
         split.setSpacing(0)
 
         self.list = QListWidget()
+        self.list.setIconSize(QSize(96, 58))
         self.list.setObjectName("clusterList")
         self.list.setFixedWidth(330)
         self.list.currentRowChanged.connect(self._chose_row)
@@ -349,9 +356,13 @@ class ShortlistPage(QWidget):
             overruled = " *" if rated != str(entry["tier"]) else ""
             item = QListWidgetItem(
                 f" {mark}  {entry['rank']:>2}.  {photo}"
-                f"   ·   {rated}{evidence}{overruled}")
+                f"{evidence}{overruled}")
             item.setData(Qt.ItemDataRole.UserRole, photo)
-            item.setSizeHint(QSize(0, ROW))
+            # Your rating where you gave one: the stars the icon wears are
+            # the tier the rest of the pipeline reads.
+            item.setData(Qt.ItemDataRole.UserRole + 1, tier_stars(rated))
+            item.setIcon(QIcon(self._entry_pixmap(photo, rated)))
+            item.setSizeHint(QSize(0, max(ROW, 64)))
             self.list.addItem(item)
         self.list.blockSignals(False)
         summary = state.get("summary", {})
@@ -377,6 +388,34 @@ class ShortlistPage(QWidget):
                 "suggestion pass reads exactly these.")
         self.suggest_button.setEnabled(
             bool(chosen) and self.directions is not None)
+
+    def _entry_pixmap(self, photo: str, tier: str) -> QPixmap:
+        """The photograph wearing its effective tier as stars."""
+        width, height = 96, 58
+        canvas = QPixmap(width, height)
+        canvas.fill(QColor(theme.RAISED))
+        painter = QPainter(canvas)
+        pixmap = self.loader.cached(photo, "thumb")
+        if pixmap is None:
+            self.loader.request(photo, "thumb")
+            self._icon_wants.setdefault(photo, True)
+        else:
+            fitted = pixmap.scaled(
+                width, height, Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation)
+            painter.drawPixmap(
+                (width - fitted.width()) // 2,
+                (height - fitted.height()) // 2, fitted)
+        stars = tier_stars(tier)
+        if stars:
+            painter.fillRect(0, height - 16, width, 16,
+                             QColor(12, 11, 10, 190))
+            painter.setPen(QPen(QColor(theme.SAFELIGHT)))
+            painter.drawText(
+                0, height - 16, width, 16,
+                Qt.AlignmentFlag.AlignCenter, stars)
+        painter.end()
+        return canvas
 
     def _chose_row(self, row: int) -> None:
         if 0 <= row < len(self.entries):
@@ -467,6 +506,17 @@ class ShortlistPage(QWidget):
     def _painted(self, photo: str, size: str, pixmap) -> None:
         if photo == self.current and size == "detail":
             self._set_frame(pixmap)
+        if size == "thumb" and self._icon_wants.pop(photo, None):
+            for row in range(self.list.count()):
+                item = self.list.item(row)
+                if item.data(Qt.ItemDataRole.UserRole) == photo:
+                    marks = self._state().get("entries", {})
+                    entry = self.entry_for(photo)
+                    rated = str(
+                        marks.get(photo, {}).get("tier")
+                        or entry.get("tier", ""))
+                    item.setIcon(QIcon(self._entry_pixmap(photo, rated)))
+                    break
 
     # --- decisions ------------------------------------------------------
 

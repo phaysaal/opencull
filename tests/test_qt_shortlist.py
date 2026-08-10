@@ -409,9 +409,12 @@ class RatingTests(ShortlistPageTests):
         page = self.page()
         page.set_rating("reject")
         page.save()
-        row = page.list.item(0).text()
-        self.assertIn("reject", row)
-        self.assertIn("*", row)
+        item = page.list.item(0)
+        # The tier is worn as stars on the thumbnail; the text carries
+        # only the overruled mark.
+        self.assertEqual(
+            item.data(Qt.ItemDataRole.UserRole + 1), "★☆☆☆☆")
+        self.assertIn("*", item.text())
 
     def test_the_list_shows_the_assessments_tier_where_you_agreed(self):
         page = self.page()

@@ -42,7 +42,7 @@ from opencull_gui.reviews import (
     default_review_path,
     narrow_selection,
 )
-from opencull_gui.shortlist import write_manual_shortlist
+from opencull_gui.shortlist import tier_stars, write_manual_shortlist
 from opencull_gui.style import StyleProfileStore
 from scan import classify_folder
 
@@ -297,17 +297,6 @@ class CullProgress(QWidget):
             self.detail.setText(
                 "Reading the folder and preparing previews.")
         self._refill(self._decisions())
-
-
-TIER_STARS = {
-    "exceptional": 5, "strong": 4, "promising": 3, "ordinary": 2,
-    "reject": 1,
-}
-
-
-def tier_stars(tier: str) -> str:
-    filled = TIER_STARS.get(str(tier or "").strip().lower(), 0)
-    return "★" * filled + "☆" * (5 - filled) if filled else ""
 
 
 class AssessProgress(QWidget):

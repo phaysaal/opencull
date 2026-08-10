@@ -14,6 +14,16 @@ from .report import ReportIndex
 
 SHORTLIST_FORMAT = "opencull-professional-shortlist-v1"
 TIERS = {"exceptional", "strong", "promising", "ordinary", "reject"}
+TIER_STARS = {
+    "exceptional": 5, "strong": 4, "promising": 3, "ordinary": 2,
+    "reject": 1,
+}
+
+
+def tier_stars(tier) -> str:
+    """A tier as stars, or nothing for a tier that is not one."""
+    filled = TIER_STARS.get(str(tier or "").strip().lower(), 0)
+    return "★" * filled + "☆" * (5 - filled) if filled else ""
 CANDIDATE_POLICIES = {"human_only", "effective", "ai_only", "all"}
 ASSESSMENT_FIELDS = (
     "composition",
