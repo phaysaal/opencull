@@ -172,4 +172,10 @@ else:
         act file.overwrite(checkpoint_file, final_checkpoint)
         commit(report)
     else:
+        -- An abstention that keeps its evidence secret costs a person an
+        -- afternoon of guessing. Write exactly what the judges saw, and
+        -- the claim they refused, beside the output that never appeared.
+        refusal := abstention_record(evidence, keep_per_group)
+        check len(refusal) > 0
+        act file.overwrite(output + ".abstained.txt", refusal)
         abstain

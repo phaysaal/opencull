@@ -1075,6 +1075,17 @@ def report_evidence(manifest: str, report: str) -> str:
     return text
 
 
+def abstention_record(evidence: str, keep_per_group: float) -> str:
+    """What the judges refused, exactly as they saw it."""
+    return (
+        "THE PANEL DECLINED TO CERTIFY THIS REPORT.\n\n"
+        "CLAIM PUT TO THE PANEL:\n"
+        + report_policy(keep_per_group)
+        + "\n\nEVIDENCE AS THE PANEL SAW IT (first 6000 characters "
+        "are what a judge reads):\n" + str(evidence)
+    )
+
+
 def report_policy(keep_per_group: float) -> str:
     count = max(1, int(keep_per_group))
     # Written for strict verifiers that answer NO when unsure. Two panels
