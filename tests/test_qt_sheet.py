@@ -52,6 +52,23 @@ class ContactSheetTests(unittest.TestCase):
     def text(self, widget) -> str:
         return "\n".join(label.text() for label in widget.findChildren(QLabel))
 
+    def test_the_sheet_deals_extra_width_as_extra_columns(self):
+        from opencull_qt.sheet import TILE, TILE_MAX, ContactSheet
+
+        # A wide window: more columns at the base size, tiles near it.
+        columns, tile = ContactSheet.sheet_geometry(2000, 120, 10)
+        self.assertEqual(columns, 10)
+        self.assertLess(tile, TILE_MAX)
+        self.assertGreaterEqual(tile, TILE)
+        # A narrow one: fewer columns, never a zero.
+        columns, tile = ContactSheet.sheet_geometry(400, 120, 10)
+        self.assertEqual(columns, 2)
+        # Few frames on a huge window: columns stop at the frame count
+        # and the tiles stop at the ceiling.
+        columns, tile = ContactSheet.sheet_geometry(3000, 3, 10)
+        self.assertEqual(columns, 3)
+        self.assertEqual(tile, TILE_MAX)
+
     def test_every_frame_of_the_selection_gets_a_tile(self):
         sheet = self.sheet(list(NAMES))
         self.assertEqual(sorted(sheet.tiles), sorted(NAMES))

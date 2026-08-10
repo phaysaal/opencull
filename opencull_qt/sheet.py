@@ -38,6 +38,10 @@ from . import theme
 from .previews import PreviewLoader, scaled
 
 TILE = 168
+# Contact sheets want density first: extra width becomes extra columns at
+# the base size, and tiles grow only with the slack that remains. The
+# ceiling stays well under the 520px preview source.
+TILE_MAX = 260
 CAPTION = 16
 # Enough to fill any window this application opens in, without laying out a
 # whole shoot on a narrow one.
@@ -90,6 +94,8 @@ class Tile(QFrame):
         self.name = name
         self.selectable = selectable
         self.included = True
+        self._pixmap = None
+        self._tile = TILE
         self.setObjectName("frame")
         self.setFixedSize(TILE + 10, TILE + CAPTION + 18)
         if selectable:
@@ -115,7 +121,34 @@ class Tile(QFrame):
         layout.addWidget(caption)
 
     def set_pixmap(self, pixmap: QPixmap) -> None:
-        self.image.setPixmap(scaled(pixmap, TILE, TILE))
+        self._pixmap = pixmap
+        self._render()
+
+    def set_scale(self, tile: int) -> None:
+        """Give the tile the size its row was dealt."""
+        if tile == self._tile:
+            return
+        self._tile = tile
+        self.setFixedSize(tile + 10, tile + CAPTION + 18)
+        self.image.setFixedSize(tile, tile)
+        if self.glass.isVisible():
+            self.glass.setGeometry(5, 5, tile, tile)
+        self._render()
+
+    def rerender(self) -> None:
+        """Redraw for the screen the window is on now."""
+        self._render(force=True)
+
+    def _render(self, force: bool = False) -> None:
+        if self._pixmap is None:
+            return
+        state = (self._tile, self.devicePixelRatioF())
+        if not force and state == getattr(self, "_rendered", None):
+            return
+        self._rendered = state
+        self.image.setPixmap(scaled(
+            self._pixmap, self._tile, self._tile,
+            self.devicePixelRatioF()))
 
     def set_included(self, included: bool) -> None:
         self.included = included
@@ -127,7 +160,7 @@ class Tile(QFrame):
             if not included else "Click to leave this frame out of the run.")
         # Over the photograph, not the caption: the name stays readable so
         # the left-out frame is still accountable.
-        self.glass.setGeometry(5, 5, TILE, TILE)
+        self.glass.setGeometry(5, 5, self._tile, self._tile)
         self.glass.setVisible(not included)
         self.glass.raise_()
 
@@ -207,25 +240,83 @@ class ContactSheet(QWidget):
             notice.setFont(theme.body(9))
             layout.addWidget(notice)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
         holder = QWidget()
         holder.setObjectName("page")
-        grid = QGridLayout(holder)
-        grid.setContentsMargins(0, 0, 8, 0)
-        grid.setHorizontalSpacing(10)
-        grid.setVerticalSpacing(10)
-        grid.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        self.grid = QGridLayout(holder)
+        self.grid.setContentsMargins(0, 0, 8, 0)
+        self.grid.setHorizontalSpacing(10)
+        self.grid.setVerticalSpacing(10)
+        self._layout_state = (0, 0)
+        self._screen_hooked = False
         for position, name in enumerate(self.names):
             tile = Tile(name, selectable=selectable)
             tile.toggled.connect(self.toggle)
             self.tiles[name] = tile
-            grid.addWidget(tile, position // columns, position % columns)
+            self.grid.addWidget(
+                tile, position // columns, position % columns)
             pixmap = self.loader.request(name, "thumb")
             if pixmap is not None:
                 tile.set_pixmap(pixmap)
-        scroll.setWidget(holder)
-        layout.addWidget(scroll, 1)
+        self.scroll.setWidget(holder)
+        layout.addWidget(self.scroll, 1)
+
+    @staticmethod
+    def sheet_geometry(
+        available: int, count: int, spacing: int,
+    ) -> tuple[int, int]:
+        """How many columns, and how large a tile, for one width."""
+        columns = max(1, (available + spacing) // (TILE + 10 + spacing))
+        columns = int(min(columns, max(1, count)))
+        total = (available - spacing * (columns - 1)) / columns
+        tile = int(max(TILE, min(TILE_MAX, total - 10)))
+        return columns, tile
+
+    def _relayout(self) -> None:
+        """Deal the tiles the width the window actually has."""
+        if not self.names:
+            return
+        available = self.scroll.viewport().width()
+        if available <= 0:
+            return
+        columns, tile = self.sheet_geometry(
+            available, len(self.names), self.grid.horizontalSpacing())
+        if (columns, tile) == self._layout_state:
+            return
+        self._layout_state = (columns, tile)
+        while self.grid.count():
+            self.grid.takeAt(0)
+        for column_index in range(self.grid.columnCount() + 1):
+            self.grid.setColumnStretch(column_index, 0)
+        for row_index in range(self.grid.rowCount() + 1):
+            self.grid.setRowStretch(row_index, 0)
+        rows = (len(self.names) + columns - 1) // columns
+        for position, name in enumerate(self.names):
+            widget = self.tiles[name]
+            widget.set_scale(tile)
+            self.grid.addWidget(
+                widget, position // columns, position % columns)
+        self.grid.setColumnStretch(columns, 1)
+        self.grid.setRowStretch(rows, 1)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        super().resizeEvent(event)
+        self._relayout()
+
+    def showEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        super().showEvent(event)
+        handle = self.window().windowHandle() if self.window() else None
+        if handle is not None and not self._screen_hooked:
+            self._screen_hooked = True
+            handle.screenChanged.connect(self._screen_changed)
+        self._relayout()
+
+    def _screen_changed(self, _screen) -> None:
+        for tile in self.tiles.values():
+            tile.rerender()
+        self._layout_state = (0, 0)
+        self._relayout()
 
     def _painted(self, name: str, size: str, pixmap) -> None:
         tile = self.tiles.get(name)
