@@ -144,6 +144,51 @@ class ReviewPageTests(unittest.TestCase):
         self.assertNotIn(
             "group-0001", self.reviews.public_state()["clusters"])
 
+    def test_the_overview_deals_full_width_without_a_manual_resize(self):
+        """The columns follow the viewport's own layout, not a stale read."""
+        import json as json_module
+
+        from PySide6.QtWidgets import QStackedWidget
+
+        from opencull_qt.previews import PreviewLoader
+        from opencull_qt.review import ReviewPage
+
+        shoot = Path(tempfile.mkdtemp())
+        photos = shoot / "photos"
+        photos.mkdir()
+        names = [f"P{n:02d}.JPG" for n in range(8)]
+        for name in names:
+            Image.new("RGB", (80, 60), (60, 90, 120)).save(photos / name)
+        report_path = shoot / "results.json"
+        report_path.write_text(json_module.dumps({
+            "format": "opencull-report-v2", "manifest_sha256": "x",
+            "clusters": [
+                {"cluster_id": f"group-{n:04d}", "photos": [names[n]]}
+                for n in range(8)],
+            "keep": [
+                {"cluster_id": f"group-{n:04d}", "photos": [names[n]],
+                 "rationale": "solo", "confidence": 1.0, "warning": "",
+                 "photographic_assessment": {}, "fallback": False}
+                for n in range(8)],
+            "warnings": [], "scan_errors": [], "adaptive_clustering": {},
+            "notice": "x"}))
+        report = load_report(report_path)
+        store = PhotoStore(photos, shoot / "cache")
+        reviews = ReviewStore(
+            default_review_path(report_path), report, store.root)
+        loader = PreviewLoader(store)
+        self.addCleanup(loader.shutdown)
+        stack = QStackedWidget()
+        page = ReviewPage(report, reviews, loader)
+        stack.addWidget(page)
+        self.addCleanup(stack.deleteLater)
+        stack.resize(1500, 700)
+        stack.show()
+        QApplication.processEvents()
+        QApplication.processEvents()
+        columns = page._overview_state[0]
+        self.assertGreaterEqual(columns, 5)
+
     def test_the_geometry_maths_cover_narrow_wide_and_many(self):
         from opencull_qt.review import THUMB, THUMB_MAX, ReviewPage
 

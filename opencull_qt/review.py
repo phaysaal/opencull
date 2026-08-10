@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtCore import QEvent, QSize, Qt, Signal
 from PySide6.QtGui import (
     QColor,
     QIcon,
@@ -419,6 +419,14 @@ class ReviewPage(QWidget):
         self._relayout()
         self._relayout_overview()
 
+    def eventFilter(self, watched, event):  # noqa: N802 - Qt naming
+        if event.type() == QEvent.Type.Resize:
+            if watched is self.overview_scroll.viewport():
+                self._relayout_overview()
+            elif watched is self.scroll.viewport():
+                self._relayout()
+        return super().eventFilter(watched, event)
+
     def showEvent(self, event) -> None:  # noqa: N802 - Qt naming
         super().showEvent(event)
         # Moving the window to another monitor does not always change its
@@ -491,6 +499,7 @@ class ReviewPage(QWidget):
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.scroll.viewport().installEventFilter(self)
         holder = QWidget()
         holder.setObjectName("page")
         self.grid = QGridLayout(holder)
@@ -541,6 +550,10 @@ class ReviewPage(QWidget):
         self.overview_scroll = QScrollArea()
         self.overview_scroll.setWidgetResizable(True)
         self.overview_scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        # The page's own resizeEvent fires before its children re-lay,
+        # so column maths read a stale viewport width there. The
+        # viewport's own resize is the honest signal.
+        self.overview_scroll.viewport().installEventFilter(self)
         overview_holder = QWidget()
         overview_holder.setObjectName("page")
         self.overview_grid = QGridLayout(overview_holder)
