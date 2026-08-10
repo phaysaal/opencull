@@ -322,6 +322,35 @@ class ReviewPageTests(unittest.TestCase):
         self.press(page, Qt.Key.Key_Return)
         self.assertEqual(page.current_keepers(), ["A.JPG"])
 
+    def test_the_group_list_hides_on_the_overview_and_shows_pictures(self):
+        page = self.overview()
+        self.assertFalse(page.clusters.isVisibleTo(page))
+        page.show_cluster("group-0001")
+        self.assertTrue(page.clusters.isVisibleTo(page))
+        rows = [page.clusters.item(i) for i in range(page.clusters.count())]
+        entries = [item for item in rows
+                   if item.data(Qt.ItemDataRole.UserRole)]
+        self.assertEqual(len(entries), 2)
+        for item in entries:
+            self.assertEqual(item.text(), "")
+            self.assertFalse(item.icon().isNull())
+
+    def test_the_list_never_steals_the_keyboard(self):
+        page = self.page()
+        self.assertEqual(
+            page.clusters.focusPolicy(), Qt.FocusPolicy.NoFocus)
+
+    def test_a_reviewed_group_is_marked_in_the_index(self):
+        page = self.page()
+        page.accept_ai()
+        rows = [page.clusters.item(i) for i in range(page.clusters.count())]
+        flags = {
+            str(item.data(Qt.ItemDataRole.UserRole)):
+                bool(item.data(Qt.ItemDataRole.UserRole + 1))
+            for item in rows if item.data(Qt.ItemDataRole.UserRole)}
+        self.assertTrue(flags["group-0001"])
+        self.assertFalse(flags["group-0002"])
+
     def test_z_zooms_whatever_the_focus_is_on(self):
         """Digits stop at nine; the focus does not."""
         page = self.page()

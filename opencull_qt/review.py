@@ -10,8 +10,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QPainter, QPen
+from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtGui import (
+    QColor,
+    QIcon,
+    QPainter,
+    QPen,
+    QPixmap,
+)
 from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
@@ -345,6 +351,7 @@ class ReviewPage(QWidget):
         self._trash_done.connect(self._trash_finished)
         self._cards: dict[str, GroupCard] = {}
         self._card_wants: dict[str, list[tuple[GroupCard, int]]] = {}
+        self._index_wants: dict[str, set] = {}
         self._build()
         self._fill_clusters()
         self.show_overview()
@@ -434,6 +441,10 @@ class ReviewPage(QWidget):
         self.clusters = QListWidget()
         self.clusters.setObjectName("clusterList")
         self.clusters.setFixedWidth(238)
+        # The keyboard belongs to the page: clicking the index must not
+        # move the arrows and decision keys onto the list widget.
+        self.clusters.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.clusters.setIconSize(QSize(206, 60))
         self.clusters.currentRowChanged.connect(self._chose_row)
         split.addWidget(self.clusters)
 
@@ -647,13 +658,16 @@ class ReviewPage(QWidget):
         show_headers = len(scenes) > 1
 
         def add_cluster(cluster_id: str) -> None:
-            cluster = self.report.cluster_by_id[cluster_id]
-            decided = state["clusters"].get(cluster_id, {})
-            kept = len(decided.get("keepers", []) or [])
-            mark = "✓" if decided.get("reviewed") else "·"
-            item = QListWidgetItem(
-                f" {mark}  {cluster_id}   {kept}/{len(cluster['photos'])}")
+            reviewed = bool(
+                state["clusters"].get(cluster_id, {}).get("reviewed"))
+            item = QListWidgetItem()
             item.setData(Qt.ItemDataRole.UserRole, cluster_id)
+            item.setData(Qt.ItemDataRole.UserRole + 1, reviewed)
+            item.setIcon(QIcon(self._index_pixmap(cluster_id, reviewed)))
+            item.setSizeHint(QSize(220, 70))
+            item.setToolTip(
+                "Reviewed." if reviewed
+                else "Not reviewed yet; the AI proposal stands.")
             self.clusters.addItem(item)
 
         if show_headers:
@@ -679,6 +693,46 @@ class ReviewPage(QWidget):
         status = state["status"]
         self.progress.setText(
             f"{status['reviewed_clusters']} of {status['total_clusters']} reviewed")
+
+    def _index_pixmap(self, cluster_id: str, reviewed: bool) -> QPixmap:
+        """A small collage that says which group this is by its pictures.
+
+        Reviewed groups carry the safelight border: the same mark the
+        kept frames themselves wear, meaning a person has been here.
+        """
+        width, height = 206, 60
+        canvas = QPixmap(width, height)
+        canvas.fill(QColor(theme.RAISED))
+        photos = self.report.cluster_by_id[cluster_id]["photos"][:3]
+        painter = QPainter(canvas)
+        slot_width = (width - 2 * (len(photos) - 1)) // max(1, len(photos))
+        x = 0
+        for name in photos:
+            pixmap = self.loader.cached(name, "thumb")
+            if pixmap is None:
+                self.loader.request(name, "thumb")
+                self._index_wants.setdefault(name, set()).add(cluster_id)
+            else:
+                fitted = scaled(pixmap, slot_width, height)
+                painter.drawPixmap(
+                    x + (slot_width - fitted.width()) // 2,
+                    (height - fitted.height()) // 2, fitted)
+            x += slot_width + 2
+        if reviewed:
+            pen = QPen(QColor(theme.SAFELIGHT))
+            pen.setWidth(3)
+            painter.setPen(pen)
+            painter.drawRect(1, 1, width - 3, height - 3)
+        painter.end()
+        return canvas
+
+    def _repaint_index(self, cluster_id: str) -> None:
+        row = self._row_of(cluster_id)
+        if row < 0:
+            return
+        item = self.clusters.item(row)
+        reviewed = bool(item.data(Qt.ItemDataRole.UserRole + 1))
+        item.setIcon(QIcon(self._index_pixmap(cluster_id, reviewed)))
 
     def _row_of(self, cluster_id: str) -> int:
         for row in range(self.clusters.count()):
@@ -730,6 +784,9 @@ class ReviewPage(QWidget):
         self._overview_state = (0,)
         self._relayout_overview()
         self.views.setCurrentIndex(0)
+        # The overview already shows every group by its pictures; a
+        # second list of the same groups says nothing more.
+        self.clusters.hide()
         self._fill_clusters()
 
     def _relayout_overview(self) -> None:
@@ -762,6 +819,7 @@ class ReviewPage(QWidget):
 
     def show_cluster(self, cluster_id: str) -> None:
         self.views.setCurrentIndex(1)
+        self.clusters.show()
         self.current = cluster_id
         self.loader.abandon()
         cluster = self.report.cluster_by_id[cluster_id]
@@ -811,6 +869,7 @@ class ReviewPage(QWidget):
             self.clusters.setCurrentRow(row)
             self.clusters.blockSignals(False)
         self._report("" if reviewed else "Not reviewed yet.")
+        self.setFocus()
 
     def _painted(self, name: str, size: str, pixmap) -> None:
         if size == "detail":
@@ -827,6 +886,8 @@ class ReviewPage(QWidget):
             frame.set_pixmap(pixmap)
         for card, slot in self._card_wants.pop(name, []):
             card.strip.set_frame(slot, pixmap)
+        for cluster_id in self._index_wants.pop(name, set()):
+            self._repaint_index(cluster_id)
 
     # --- decisions ------------------------------------------------------
 
