@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -44,6 +45,7 @@ from opencull_gui.shortlist_reviews import ShortlistReviewError
 from . import theme
 from .develop import PhotoLabel
 from .previews import PreviewLoader
+from .sheet import ContactSheet
 from .suggestions import ask_suggestion_scope, launch_suggestions
 
 ROW = 32
@@ -111,8 +113,11 @@ class ShortlistPage(QWidget):
         self.loader.ready.connect(self._painted)
         self._build()
         self._fill_entries()
+        # The detail is filled for the first frame so it is ready the
+        # moment one is opened; the page still lands on the grid.
         if self.current:
             self.show_entry(self.current)
+        self.show_overview()
 
     # --- construction ---------------------------------------------------
 
@@ -166,6 +171,16 @@ class ShortlistPage(QWidget):
             "The recorded story of this frame: culled, reviewed, assessed, "
             "rated. Nothing is computed; nothing is asked.")
         why.clicked.connect(lambda: self.why_wanted.emit(self.current))
+        back_to_grid = QPushButton("← All frames")
+        back_to_grid.setObjectName("ghost")
+        back_to_grid.setFont(theme.body(9))
+        back_to_grid.setCursor(Qt.CursorShape.PointingHandCursor)
+        back_to_grid.setToolTip(
+            "Back to every frame at once. Your ratings are saved as you "
+            "make them.")
+        back_to_grid.clicked.connect(
+            lambda _checked=False: self.show_overview())
+        head.insertWidget(0, back_to_grid)
         head.addWidget(why)
         if not self.by_hand:
             self.detail_button = QPushButton("\U0001F441  Why this rating")
@@ -223,7 +238,34 @@ class ShortlistPage(QWidget):
         decision = self._decision()
         decision.setContentsMargins(22, 0, 22, 0)
         column.addWidget(decision)
-        split.addWidget(right, 1)
+
+        overview = QWidget()
+        overview.setObjectName("page")
+        overview_column = QVBoxLayout(overview)
+        overview_column.setContentsMargins(22, 18, 22, 18)
+        overview_column.setSpacing(10)
+        self.overview_heading = QLabel("")
+        self.overview_heading.setObjectName("clusterTitle")
+        self.overview_heading.setFont(theme.display(18))
+        overview_column.addWidget(self.overview_heading)
+        overview_hint = QLabel(
+            "Every frame with the rating it carries. Open one to read the "
+            "assessment and rate it yourself; the eye shows why the model "
+            "rated it as it did."
+            if not self.by_hand else
+            "Every frame in the selection. Open one to rate it.")
+        overview_hint.setObjectName("hint")
+        overview_hint.setWordWrap(True)
+        overview_hint.setFont(theme.body(10))
+        overview_column.addWidget(overview_hint)
+        self._sheet_slot = QVBoxLayout()
+        overview_column.addLayout(self._sheet_slot, 1)
+        self.sheet = None
+
+        self.views = QStackedWidget()
+        self.views.addWidget(overview)
+        self.views.addWidget(right)
+        split.addWidget(self.views, 1)
         outer.addLayout(split, 1)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
@@ -260,7 +302,7 @@ class ShortlistPage(QWidget):
             self.sort_by.addItem("Rating, then score", "rating")
             self.sort_by.addItem("Time", "time")
             self.sort_by.currentIndexChanged.connect(
-                lambda _i: self._fill_entries())
+                lambda _i: (self._fill_entries(), self.show_overview()))
             layout.addWidget(self.sort_by)
 
             self.reassess_button = QPushButton("Reassess")
@@ -505,12 +547,13 @@ class ShortlistPage(QWidget):
         painter.end()
         return canvas
 
-    def _show_assessment_detail(self) -> None:
-        """The model's full assessment of the current frame, verbatim."""
-        entry = self.entry_for(self.current)
+    def _show_assessment_detail(self, photo: str = "") -> None:
+        """The model's full assessment of one frame, verbatim."""
+        photo = str(photo or self.current)
+        entry = self.entry_for(photo)
         assessment = entry.get("assessment", {}) or {}
         dialog = QDialog(self)
-        dialog.setWindowTitle(f"Why {self.current} was rated")
+        dialog.setWindowTitle(f"Why {photo} was rated")
         dialog.setStyleSheet(theme.STYLESHEET)
         dialog.setMinimumWidth(560)
         outer = QVBoxLayout(dialog)
@@ -532,7 +575,7 @@ class ShortlistPage(QWidget):
         note.setWordWrap(True)
         note.setFont(theme.body(9))
         outer.addWidget(note)
-        odd = getattr(self, "_disagreements", {}).get(self.current)
+        odd = getattr(self, "_disagreements", {}).get(photo)
         if odd:
             warning = QLabel(
                 f"Its own two readings disagree: {odd}. Neither is wrong "
@@ -572,6 +615,57 @@ class ShortlistPage(QWidget):
         dialog.resize(600, 560)
         dialog.exec()
 
+    def show_overview(self) -> None:
+        """Every frame at once, each wearing its rating."""
+        state = self._state()
+        marks = state.get("entries", {})
+        chosen = int(state.get("summary", {}).get("interesting", 0))
+        self.overview_heading.setText(
+            f"{len(self.entries)} frames · {chosen} worth developing")
+        if self.sheet is not None:
+            self._sheet_slot.removeWidget(self.sheet)
+            self.sheet.deleteLater()
+        order = [str(entry["photo"]) for entry in self._ordered_entries()]
+        self.sheet = ContactSheet(
+            order, self.loader, limit=len(order), opens=True)
+        self.sheet.opened.connect(self.show_entry)
+        self.sheet.inspect_wanted.connect(self._show_assessment_detail)
+        for entry in self.entries:
+            photo = str(entry["photo"])
+            tile = self.sheet.tiles.get(photo)
+            if tile is None:
+                continue
+            rated = self._effective_tier(photo, entry)
+            stars = tier_stars(rated)
+            if stars:
+                tile.set_badge(stars, self._badge_tip(photo, entry, rated))
+            tile.set_marked(bool(marks.get(photo, {}).get("interesting")))
+            tile.set_inspectable(not self.by_hand)
+        self._sheet_slot.addWidget(self.sheet)
+        self.views.setCurrentIndex(0)
+        self.list.hide()
+
+    def _refresh_tile(self, photo: str) -> None:
+        """Keep one tile honest after a decision, without rebuilding all."""
+        tile = self.sheet.tiles.get(photo) if self.sheet else None
+        if tile is None:
+            return
+        entry = self.entry_for(photo)
+        rated = self._effective_tier(photo, entry)
+        stars = tier_stars(rated)
+        if stars:
+            tile.set_badge(stars, self._badge_tip(photo, entry, rated))
+        marks = self._state().get("entries", {})
+        tile.set_marked(bool(marks.get(photo, {}).get("interesting")))
+
+    def _badge_tip(self, photo: str, entry: dict, rated: str) -> str:
+        parts = [rated.title()]
+        if rated != str(entry.get("tier", "")):
+            parts.append(f"your rating; the model said {entry['tier']}")
+        if photo in getattr(self, "_disagreements", {}):
+            parts.append(f"the model {self._disagreements[photo]}")
+        return " · ".join(parts)
+
     def _chose_row(self, row: int) -> None:
         if 0 <= row < len(self.entries):
             self.show_entry(str(self.entries[row]["photo"]))
@@ -580,6 +674,8 @@ class ShortlistPage(QWidget):
         return self.shortlist.entry_by_photo.get(photo, {})
 
     def show_entry(self, photo: str) -> None:
+        self.views.setCurrentIndex(1)
+        self.list.show()
         self.current = photo
         entry = self.entry_for(photo)
         self.loader.abandon()
@@ -734,6 +830,10 @@ class ShortlistPage(QWidget):
             return
         self.interesting.setChecked(chosen)
         self._fill_entries()
+        if self.views.currentIndex() == 0:
+            self.show_overview()
+        else:
+            self._refresh_tile(self.current)
         self._report("Saved." if chosen else "Not marked.", "ok")
 
     # --- asking for suggestions -----------------------------------------
@@ -766,6 +866,10 @@ class ShortlistPage(QWidget):
             self.show_entry(names[row])
 
     def keyPressEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        if (event.key() == Qt.Key.Key_Escape
+                and self.views.currentIndex() == 1):
+            self.show_overview()
+            return
         key = event.key()
         if self.note.hasFocus():
             super().keyPressEvent(event)

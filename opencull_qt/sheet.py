@@ -89,11 +89,13 @@ class Tile(QFrame):
 
     toggled = Signal(str)
     inspect_wanted = Signal(str)
+    opened = Signal(str)
 
     def __init__(self, name: str, selectable: bool = False):
         super().__init__()
         self.name = name
         self.selectable = selectable
+        self.opens = False
         self.included = True
         self._pixmap = None
         self._tile = TILE
@@ -211,9 +213,18 @@ class Tile(QFrame):
         self.glass.setVisible(not included)
         self.glass.raise_()
 
+    def set_marked(self, marked: bool) -> None:
+        """Wear the safelight border of a frame chosen for what comes next."""
+        self.setProperty("kept", "true" if marked else "false")
+        self.style().unpolish(self)
+        self.style().polish(self)
+
     def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt naming
-        if self.selectable and event.button() == Qt.MouseButton.LeftButton:
-            self.toggled.emit(self.name)
+        if event.button() == Qt.MouseButton.LeftButton:
+            if self.selectable:
+                self.toggled.emit(self.name)
+            elif self.opens:
+                self.opened.emit(self.name)
         super().mousePressEvent(event)
 
     def keyPressEvent(self, event) -> None:  # noqa: N802 - Qt naming
@@ -238,10 +249,11 @@ class ContactSheet(QWidget):
 
     changed = Signal()
     inspect_wanted = Signal(str)
+    opened = Signal(str)
 
     def __init__(self, names: list[str], loader: PreviewLoader,
                  columns: int = COLUMNS, limit: int = LIMIT,
-                 selectable: bool = False,
+                 selectable: bool = False, opens: bool = False,
                  parent: QWidget | None = None):
         super().__init__(parent)
         self.setObjectName("page")
@@ -300,8 +312,13 @@ class ContactSheet(QWidget):
         self._screen_hooked = False
         for position, name in enumerate(self.names):
             tile = Tile(name, selectable=selectable)
+            tile.opens = opens
+            if opens:
+                tile.setCursor(Qt.CursorShape.PointingHandCursor)
+                tile.setToolTip("Open this frame.")
             tile.toggled.connect(self.toggle)
             tile.inspect_wanted.connect(self.inspect_wanted)
+            tile.opened.connect(self.opened)
             self.tiles[name] = tile
             self.grid.addWidget(
                 tile, position // columns, position % columns)

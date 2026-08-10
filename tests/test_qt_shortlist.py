@@ -111,6 +111,44 @@ class ShortlistPageTests(unittest.TestCase):
         page.keyPressEvent(QKeyEvent(
             QKeyEvent.Type.KeyPress, key, Qt.KeyboardModifier.NoModifier))
 
+    def test_the_page_lands_on_a_grid_of_every_frame(self):
+        page = self.page()
+        self.assertEqual(page.views.currentIndex(), 0)
+        self.assertEqual(sorted(page.sheet.tiles), sorted(NAMES))
+        self.assertFalse(page.list.isVisibleTo(page))
+        # Stars and an eye ride each tile.
+        tile = page.sheet.tiles["A.JPG"]
+        self.assertEqual(tile.badge.text(), "★★★★★")
+        self.assertTrue(tile.eye.isVisibleTo(tile))
+
+    def test_opening_a_tile_shows_that_frame(self):
+        page = self.page()
+        page.sheet.tiles["B.JPG"].opened.emit("B.JPG")
+        self.assertEqual(page.views.currentIndex(), 1)
+        self.assertEqual(page.current, "B.JPG")
+        self.assertTrue(page.list.isVisibleTo(page))
+        self.press(page, Qt.Key.Key_Escape)
+        self.assertEqual(page.views.currentIndex(), 0)
+
+    def test_marking_a_frame_shows_on_its_tile(self):
+        page = self.page()
+        page.show_entry("A.JPG")
+        page.set_interesting(True)
+        page.show_overview()
+        self.assertEqual(
+            page.sheet.tiles["A.JPG"].property("kept"), "true")
+        self.assertIn("1 worth developing", page.overview_heading.text())
+
+    def test_a_tiles_eye_opens_that_frames_reasoning(self):
+        from unittest import mock
+
+        from PySide6.QtWidgets import QDialog
+
+        page = self.page()
+        with mock.patch.object(QDialog, "exec", return_value=0) as shown:
+            page.sheet.tiles["C.JPG"].eye.click()
+        shown.assert_called_once()
+
     def test_rating_sort_puts_score_under_the_verdict(self):
         page = self.page()
         page.sort_by.setCurrentIndex(page.sort_by.findData("rating"))
