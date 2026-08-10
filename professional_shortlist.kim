@@ -99,7 +99,7 @@ if check len(candidates) == 0:
     act file.overwrite(checkpoint_file, final_checkpoint)
     commit(shortlist)
 else:
-    if memo judge<5,4/5> (evidence |= professional_report_policy()) under k_professional panel [C, D]:
+    if memo judge<5,4/5> (evidence |= professional_report_policy(profile)) under k_professional panel [C, D]:
         act file.overwrite(output, shortlist)
         settle until check file_exists(output) within 5
         final_checkpoint := build_professional_checkpoint(bundle, candidates, assessments, profile, true)

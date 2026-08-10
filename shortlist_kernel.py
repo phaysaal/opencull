@@ -665,7 +665,7 @@ def professional_report_evidence(report: str) -> str:
         projection, indent=2, sort_keys=True)
 
 
-def professional_report_policy() -> str:
+def professional_report_policy(profile: str = "") -> str:
     # The judge's claim covers only what the judge is for. Tier legality,
     # entry structure and rank arithmetic are deterministically checked
     # before this judgment runs, and a live panel proved that re-asking a
@@ -673,11 +673,18 @@ def professional_report_policy() -> str:
     # one refused a satisfied membership check with a non-sequitur. What
     # remains is the boolean flags a verifier reads cleanly, and the
     # semantic question models exist to answer.
+    # The bar is the photographer's, composed at the moment of spending,
+    # and the claim has to name that same bar. Demanding a strict
+    # professional bar of a run explicitly given a gentle family one is a
+    # contradiction, and a panel reading the rationales rightly refuses.
+    bar = str(profile or "").strip()
+    measured = (
+        f"measured against the bar this run was given: {bar}"
+        if bar else "applying a consistent stated bar")
     return (
         "a read-only professional-editing shortlist: the projection's "
         "flags ranks_contiguous, all_rationales_present and "
         "all_raw_paths_relative are all true, and the sampled rationales "
         "describe visible photographic qualities -- composition, light, "
-        "subject, moment -- rather than file metadata, applying a strict "
-        "professional bar"
+        "subject, moment -- rather than file metadata, " + measured
     )

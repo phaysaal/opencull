@@ -54,6 +54,20 @@ def report_payload():
 
 
 class AssetFamilyTests(unittest.TestCase):
+    def test_the_claim_names_the_bar_the_run_was_actually_given(self):
+        """A gentle run must not be certified against a strict bar."""
+        from shortlist_kernel import professional_report_policy
+
+        bar = ("gentle bar (Is this worth keeping?) -- judged through "
+               "family: people and being together")
+        claim = professional_report_policy(bar)
+        self.assertIn(bar, claim)
+        self.assertNotIn("strict professional bar", claim)
+        # Without a bar the claim still stands on its flags.
+        plain = professional_report_policy("")
+        self.assertIn("ranks_contiguous", plain)
+        self.assertIn("consistent stated bar", plain)
+
     def test_project_artifacts_are_not_indexed_as_source_assets(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
