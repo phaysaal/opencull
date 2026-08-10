@@ -1767,6 +1767,14 @@ class JobManager:
                 status, message = "cancelled", "Cancelled; checkpoint retained."
             elif job["status"] == "stopping":
                 status, message = "paused", "Paused; resume will validate the checkpoint."
+            elif "PROVIDER REFUSED" in self._log_tail(Path(job["log"])):
+                # Exhausted credit or failed authentication: no retry can
+                # help, and every decision so far is checkpointed. Pausing
+                # keeps the run resumable the moment the account is fixed.
+                status, message = "paused", (
+                    "Paused: the provider refused the account -- exhausted "
+                    "credit or failed authentication. Fix the account, "
+                    "then resume; everything done so far is kept.")
             else:
                 status, message = "failed", f"Kimiya exited with status {exit_code}."
             job.update(

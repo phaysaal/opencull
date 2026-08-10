@@ -935,6 +935,64 @@ class LauncherWindowTests(unittest.TestCase):
         self.assertIn("1", page.kept_title.text())
         self.assertIn("2", page.waiting_title.text())
 
+    def test_a_paused_run_reads_as_paused_and_offers_resume(self):
+        from opencull_qt.launcher import project_state
+
+        self.assertEqual(
+            project_state({"assessment": {"status": "paused"}}),
+            ("Paused mid-run", "failed"))
+        window, services = self.build(projects=[
+            {"id": "p1", "name": "A", "photos": "/p/a", "available": True,
+             "report_available": True, "report": "/p/a/r.json",
+             "assessment": {"status": "paused", "id": "a7"}}])
+        self.folder(window, "raw")
+        window.refresh()
+        self.assertIn("Resume", self.buttons(self.cards(window)[0]))
+        from PySide6.QtWidgets import QPushButton
+
+        button = next(b for b in self.cards(window)[0]
+                      .findChildren(QPushButton) if b.text() == "Resume")
+        button.click()
+        services.jobs.action.assert_called_once_with("a7", "resume")
+
+    def test_assessing_a_running_folder_reports_instead_of_dialogs(self):
+        window, services = self.build(projects=[], jobs=[
+            {"id": "a1", "kind": "professional_shortlist",
+             "photos": "/p/a", "status": "running",
+             "checkpoint": "x", "log": "x"}])
+        window.assess_project({"id": "p1", "name": "A", "photos": "/p/a"})
+        services.jobs.add_professional.assert_not_called()
+
+    def test_assessing_a_paused_folder_resumes_it(self):
+        window, services = self.build(projects=[], jobs=[
+            {"id": "a1", "kind": "professional_shortlist",
+             "photos": "/p/a", "status": "paused",
+             "checkpoint": "x", "log": "x"}])
+        window.assess_project({"id": "p1", "name": "A", "photos": "/p/a"})
+        services.jobs.action.assert_called_once_with("a1", "resume")
+        services.jobs.add_professional.assert_not_called()
+
+    def test_the_assessment_page_shows_progress_while_running(self):
+        from opencull_qt.launcher import AssessProgress
+
+        window, services = self.build(projects=[])
+        shoot = Path(tempfile.mkdtemp())
+        report_path, photos_path = build_shoot(shoot)
+        services._jobs.append(
+            {"id": "a1", "kind": "professional_shortlist",
+             "photos": str(photos_path), "status": "running",
+             "checkpoint": "x", "log": "x",
+             "message": "Assessment is running.",
+             "progress": {"completed_items": 3, "total_items": 12}})
+        project = {"id": "p1", "name": "A", "photos": str(photos_path),
+                   "report": str(report_path), "available": True,
+                   "report_available": True}
+        window.open_project(project, phases.ASSESSMENT)
+        self.addCleanup(window.show_projects)
+        page = window.review_page.page_for(phases.ASSESSMENT)
+        self.assertIsInstance(page, AssessProgress)
+        self.assertEqual(page.meter.value(), 25)
+
     def test_reculling_is_refused_unless_confirmed(self):
         window, services = self.build(projects=[])
         with mock.patch.object(window, "confirm_recull", return_value=False):

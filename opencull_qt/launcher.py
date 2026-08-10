@@ -130,6 +130,8 @@ def project_state(project: dict) -> tuple[str, str]:
         return "Culling", "running"
     if status == "queued":
         return "Queued", "running"
+    if "paused" in (assessing, status):
+        return "Paused mid-run", "failed"
     if assessing == "failed":
         return "Assessment failed", "failed"
     if status == "failed":
@@ -295,6 +297,70 @@ class CullProgress(QWidget):
             self.detail.setText(
                 "Reading the folder and preparing previews.")
         self._refill(self._decisions())
+
+
+class AssessProgress(QWidget):
+    """The assessment phase while its run is actually running."""
+
+    def __init__(self, name: str, on_pause=None,
+                 parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setObjectName("page")
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(36, 30, 36, 26)
+        outer.setSpacing(8)
+        head = QHBoxLayout()
+        head.setSpacing(10)
+        title = QLabel(f"Assessing {name}")
+        title.setObjectName("clusterTitle")
+        title.setFont(theme.display(20))
+        head.addWidget(title, 1)
+        self.pause_button = None
+        if on_pause is not None:
+            self.pause_button = QPushButton("Pause")
+            self.pause_button.setObjectName("ghost")
+            self.pause_button.setFont(theme.body(9))
+            self.pause_button.setToolTip(
+                "Stop after the current frame. Every rating so far is "
+                "checkpointed; resuming buys only the rest.")
+            self.pause_button.clicked.connect(lambda _=False: on_pause())
+            head.addWidget(self.pause_button)
+        outer.addLayout(head)
+        self.message = QLabel("The assessment worker is starting.")
+        self.message.setObjectName("hint")
+        self.message.setWordWrap(True)
+        self.message.setFont(theme.body(10))
+        outer.addWidget(self.message)
+        from PySide6.QtWidgets import QProgressBar
+
+        self.meter = QProgressBar()
+        self.meter.setRange(0, 100)
+        self.meter.setTextVisible(False)
+        self.meter.setFixedHeight(4)
+        outer.addWidget(self.meter)
+        self.detail = QLabel("")
+        self.detail.setObjectName("hint")
+        self.detail.setFont(theme.body(9))
+        outer.addWidget(self.detail)
+        outer.addStretch(1)
+
+    def set_job(self, job: dict) -> None:
+        self.message.setText(str(job.get("message") or ""))
+        if self.pause_button is not None:
+            self.pause_button.setEnabled(
+                job.get("status") in {"running", "detached"})
+        progress = job.get("progress") or {}
+        total = int(progress.get("total_items") or 0)
+        completed = int(progress.get("completed_items") or 0)
+        if total:
+            self.meter.setValue(round(100 * completed / total))
+            self.detail.setText(
+                f"{completed} of {total} frames assessed. Ratings are "
+                "checkpointed as they land; an interrupted run resumes "
+                "without buying them again.")
+        else:
+            self.meter.setValue(job_progress(job) or 0)
+            self.detail.setText("Preparing the selection.")
 
 
 RECULL_WARNING = (
@@ -597,6 +663,23 @@ class Launcher(QMainWindow):
             shell.drop(phases.CULL)
             if shell.current == phases.CULL:
                 shell.open_phase(phases.CULL)
+        assess_page = shell.page_for(phases.ASSESSMENT)
+        assessing = next(
+            (job for job in self._professional_jobs(
+                str(current.get("photos", "")))
+             if job.get("status") in
+             {"running", "queued", "stopping", "detached"}), None)
+        if isinstance(assess_page, AssessProgress):
+            if assessing is not None:
+                assess_page.set_job(assessing)
+            else:
+                shell.drop(phases.ASSESSMENT)
+                if shell.current == phases.ASSESSMENT:
+                    shell.open_phase(phases.ASSESSMENT)
+        elif assess_page is not None and assessing is not None:
+            shell.drop(phases.ASSESSMENT)
+            if shell.current == phases.ASSESSMENT:
+                shell.open_phase(phases.ASSESSMENT)
 
     def folder_contents(self, project: dict) -> dict:
         """Classify a folder's photographs, walking it at most once."""
@@ -643,6 +726,13 @@ class Launcher(QMainWindow):
             actions.append((
                 "Pause",
                 lambda j=str(in_flight.get("id", "")): self.pause_job(j)))
+        paused_run = next(
+            (project.get(key) for key in ("assessment", "culling")
+             if (project.get(key) or {}).get("status") == "paused"), None)
+        if paused_run:
+            actions.append((
+                "Resume",
+                lambda j=str(paused_run.get("id", "")): self.resume_job(j)))
         if culled:
             actions.append(("Review", lambda p=project: self.open_review(p)))
         # Assessment reads the cull and its review, so it is only offered
@@ -719,6 +809,13 @@ class Launcher(QMainWindow):
                 "Pause",
                 lambda j=str(in_flight.get("id", "")): self.pause_job(j)))
 
+        paused_run = next(
+            (project.get(key) for key in ("assessment", "culling")
+             if (project.get(key) or {}).get("status") == "paused"), None)
+        if paused_run:
+            actions.append((
+                "Resume",
+                lambda j=str(paused_run.get("id", "")): self.resume_job(j)))
         if culled:
             actions.append(
                 ("Open review", lambda p=project: self.open_review(p)))
@@ -772,6 +869,18 @@ class Launcher(QMainWindow):
                 f"Cull it, or go straight to {treatment.lower()}.")
         self.refresh()
 
+    def resume_job(self, job_id: str) -> None:
+        """Wake a paused run; the checkpoint pays for what was done."""
+        try:
+            self.services.jobs.action(job_id, "resume")
+        except Exception as exc:
+            self._say(str(exc), "alarm")
+            return
+        self._say(
+            "Resuming from the checkpoint. Everything already done is "
+            "kept.", "ok")
+        self.refresh()
+
     def pause_job(self, job_id: str) -> None:
         """Stop a running job after its current step, keeping the checkpoint."""
         try:
@@ -783,6 +892,17 @@ class Launcher(QMainWindow):
             "Pausing. Every decision made so far is kept; the same button "
             "resumes the run.", "ok")
         self.refresh()
+
+    def _professional_jobs(self, photos: str) -> list[dict]:
+        try:
+            queue = self.services.jobs.public()["jobs"]
+        except Exception:                            # noqa: BLE001 - transient
+            return []
+        return [
+            job for job in queue
+            if job.get("kind") == "professional_shortlist"
+            and str(job.get("photos") or "")
+            and Path(str(job["photos"])) == Path(photos)]
 
     def _culling_jobs(self, photos: str) -> list[dict]:
         try:
@@ -1041,6 +1161,32 @@ class Launcher(QMainWindow):
 
     def _assessment_page(self, bench: Bench):
         if not bench.shortlist_path.is_file():
+            mine = self._professional_jobs(
+                str(bench.project.get("photos", "")))
+            running = next(
+                (job for job in mine
+                 if job.get("status") in
+                 {"running", "queued", "stopping", "detached"}), None)
+            if running is not None:
+                page = AssessProgress(
+                    str(bench.project.get("name") or ""),
+                    on_pause=lambda job=str(running.get("id", "")):
+                        self.pause_job(job))
+                page.set_job(running)
+                return page
+            paused = next(
+                (job for job in reversed(mine)
+                 if job.get("status") == "paused"), None)
+            if paused is not None:
+                return Invitation(
+                    "This assessment is paused mid-run",
+                    str(paused.get("message") or
+                        "The run stopped partway and left its checkpoint. "
+                        "Resuming keeps every rating already bought."),
+                    "Resume assessment",
+                    lambda job=str(paused.get("id", "")):
+                        self.resume_job(job),
+                    "")
             culled = bench.culled()
             frames = bench.selection()
             count = len(frames)
@@ -1129,6 +1275,20 @@ class Launcher(QMainWindow):
         ordinary human review, through the same store the review page uses,
         so the run, the counts, and any open review agree.
         """
+        mine = self._professional_jobs(str(project.get("photos", "")))
+        if any(job.get("status") in
+               {"running", "queued", "stopping", "detached"}
+               for job in mine):
+            self._say(
+                "This folder is already being assessed. Progress shows "
+                "on the assessment page as it runs.", "ok")
+            return
+        paused = next(
+            (job for job in reversed(mine)
+             if job.get("status") == "paused"), None)
+        if paused is not None:
+            self.resume_job(str(paused["id"]))
+            return
         report_path = Path(str(project.get("report", "")))
         if not report_path.is_file():
             self.report("That report is no longer on disk.", "alarm")

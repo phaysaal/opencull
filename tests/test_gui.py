@@ -3093,6 +3093,33 @@ class GuiJobTests(unittest.TestCase):
             finally:
                 manager.shutdown()
 
+    def test_a_provider_refusal_pauses_the_run_and_says_why(self):
+        """Exhausted credit must not read as a mysterious failure."""
+        import sys
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            photos = root / "photos"
+            photos.mkdir()
+            script = ("import sys; "
+                      "sys.stderr.write('PROVIDER REFUSED (402): x'); "
+                      "sys.exit(1)")
+            manager = JobManager(
+                root / "jobs.json", root,
+                command_builder=lambda job: [sys.executable, "-c", script])
+            try:
+                manager.add(str(photos), str(root / "r.json"))
+                deadline = time.time() + 20
+                while time.time() < deadline:
+                    job = manager.public()["jobs"][0]
+                    if job["status"] not in {"queued", "running"}:
+                        break
+                    time.sleep(0.05)
+                self.assertEqual(job["status"], "paused")
+                self.assertIn("refused the account", job["message"])
+            finally:
+                manager.shutdown()
+
     def test_a_refused_certification_is_retried_once_with_a_fresh_panel(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
