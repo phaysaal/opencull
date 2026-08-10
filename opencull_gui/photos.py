@@ -16,7 +16,7 @@ from PIL import Image, ImageOps
 
 from scan import open_preview, raw_decoder_status
 
-from .branding import PROJECT_DIRECTORY_NAME
+from .project import project_directory
 
 
 class PhotoError(ValueError):
@@ -51,7 +51,7 @@ class PhotoStore:
         if candidate != self.root and self.root not in candidate.parents:
             raise PhotoError(f"photo escapes source directory: {name!r}")
         if not candidate.is_file():
-            managed = self.root / PROJECT_DIRECTORY_NAME
+            managed = project_directory(self.root)
             relocated = []
             for category in ("Rejected", "RAW Reserve"):
                 category_root = (managed / category).resolve()

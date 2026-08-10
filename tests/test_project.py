@@ -21,6 +21,103 @@ from opencull_gui.project import (
 )
 
 
+class PortableProjectTests(unittest.TestCase):
+    """The project folder is the whole truth, wherever it goes."""
+
+    def test_a_new_project_hides_its_managed_directory(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "photos"
+            source.mkdir()
+            path, _ = load_or_create_folder_project(source, "Shoot")
+            self.assertEqual(path.parent.name, ".darkimiya")
+
+    def test_a_visible_era_project_keeps_its_directory(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "photos"
+            (source / "Darkimiya").mkdir(parents=True)
+            path, _ = load_or_create_folder_project(source, "Shoot")
+            self.assertEqual(path.parent.name, "Darkimiya")
+            self.assertFalse((source / ".darkimiya").exists())
+
+    def test_a_moved_folder_re_anchors_every_recorded_path(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            old_home = root / "on-the-laptop"
+            old_home.mkdir()
+            path, _ = load_or_create_folder_project(old_home, "Tour")
+            update_project(path, artifacts={"culling_report": {
+                "kind": "culling_report",
+                "path": str(old_home / ".darkimiya" / "Reports" / "r.json"),
+            }})
+            new_home = root / "on-the-archive-drive"
+            old_home.rename(new_home)
+
+            healed = load_project(
+                new_home / ".darkimiya" / "project.json")
+
+            self.assertEqual(healed["source_folder"], str(new_home))
+            self.assertEqual(
+                healed["artifacts"]["culling_report"]["path"],
+                str(new_home / ".darkimiya" / "Reports" / "r.json"))
+            # Persisted, not just returned: the next reader sees the truth.
+            raw = json.loads(
+                (new_home / ".darkimiya" / "project.json").read_text())
+            self.assertEqual(raw["source_folder"], str(new_home))
+
+    def test_healing_leaves_paths_outside_the_folder_alone(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            old_home = root / "before"
+            old_home.mkdir()
+            path, _ = load_or_create_folder_project(old_home, "Tour")
+            elsewhere = "/somewhere/global/style-profile.json"
+            update_project(path, artifacts={"style_profile": {
+                "kind": "style_profile", "path": elsewhere}})
+            old_home.rename(root / "after")
+
+            healed = load_project(root / "after" / ".darkimiya" / "project.json")
+
+            self.assertEqual(
+                healed["artifacts"]["style_profile"]["path"], elsewhere)
+
+    def test_a_sibling_prefix_folder_is_not_rewritten(self):
+        """/home/a must never capture /home/a-archive's paths."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            old_home = root / "tour"
+            old_home.mkdir()
+            path, _ = load_or_create_folder_project(old_home, "Tour")
+            sibling = str(root / "tour-archive" / "x.json")
+            update_project(path, artifacts={"calibration": {
+                "kind": "calibration", "path": sibling}})
+            old_home.rename(root / "moved")
+
+            healed = load_project(root / "moved" / ".darkimiya" / "project.json")
+
+            self.assertEqual(
+                healed["artifacts"]["calibration"]["path"], sibling)
+
+    def test_a_moved_folder_re_links_in_the_catalog_by_identity(self):
+        from opencull_gui.project_catalog import ProjectCatalog
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            old_home = root / "photos"
+            old_home.mkdir()
+            catalog = ProjectCatalog(root / "support" / "projects.json")
+            catalog.add(str(old_home))
+            first = catalog.public()["projects"][0]
+            new_home = root / "elsewhere"
+            old_home.rename(new_home)
+
+            state = catalog.add(str(new_home))
+
+            self.assertEqual(len(state["projects"]), 1)
+            listed = state["projects"][0]
+            self.assertEqual(listed["id"], first["id"])
+            self.assertEqual(listed["photos"], str(new_home))
+
+
 class ProjectTests(unittest.TestCase):
     def test_project_is_versioned_and_updateable(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -53,11 +150,11 @@ class ProjectTests(unittest.TestCase):
             path, value = load_or_create_folder_project(source, "Family")
             self.assertEqual(path, project_manifest_path(source))
             self.assertEqual(
-                path, source.resolve() / "Darkimiya" / "project.json")
+                path, source.resolve() / ".darkimiya" / "project.json")
             self.assertEqual(value["source_folder"], str(source.resolve()))
             for name in ("Reports", "Reviews", "Developments", "Exports",
                          "RAW Reserve", "Rejected"):
-                self.assertTrue((source / "Darkimiya" / name).is_dir())
+                self.assertTrue((source / ".darkimiya" / name).is_dir())
 
     def test_existing_legacy_manifest_is_opened_without_silent_migration(self):
         with tempfile.TemporaryDirectory() as temporary:

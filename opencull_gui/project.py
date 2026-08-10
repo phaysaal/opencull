@@ -15,6 +15,7 @@ from typing import Any
 
 from .branding import (
     CULLING_ENGINE_NAME,
+    LEGACY_PROJECT_DIRECTORY_NAMES,
     PRODUCT_NAME,
     PROJECT_DIRECTORY_NAME,
     PROJECT_MANIFEST_NAME,
@@ -28,7 +29,8 @@ PROJECT_SUBDIRECTORIES = (
     "Exports", "Operations", "Previews", "RAW Reserve", "Rejected",
 )
 MANAGED_PROJECT_DIRECTORY_NAMES = {
-    PROJECT_DIRECTORY_NAME.casefold(), ".darkimiya", ".opencull",
+    PROJECT_DIRECTORY_NAME.casefold(),
+    *(name.casefold() for name in LEGACY_PROJECT_DIRECTORY_NAMES),
 }
 ARTIFACT_KEYS = (
     "culling_report", "culling_review", "shortlist", "shortlist_review", "style_profile",
@@ -58,8 +60,18 @@ def _atomic_write(path: Path, value: dict[str, Any]) -> None:
 
 
 def project_directory(source_folder: Path) -> Path:
-    """Return the managed directory for a one-folder Darkimiya project."""
-    return source_folder.expanduser().resolve() / PROJECT_DIRECTORY_NAME
+    """Return the managed directory for a one-folder Darkimiya project.
+
+    A new project gets the hidden directory. A folder that already
+    carries a directory from an earlier release keeps using it, so
+    nothing existing is orphaned by the rename.
+    """
+    root = source_folder.expanduser().resolve()
+    for name in (PROJECT_DIRECTORY_NAME, *LEGACY_PROJECT_DIRECTORY_NAMES):
+        candidate = root / name
+        if candidate.is_dir():
+            return candidate
+    return root / PROJECT_DIRECTORY_NAME
 
 
 def project_manifest_path(source_folder: Path) -> Path:
@@ -132,6 +144,21 @@ def create_project(path: Path, name: str, source_folder: Path) -> dict[str, Any]
     return value
 
 
+def _relocated(value: Any, old: str, new: str) -> Any:
+    """Rewrite every stored path that lived under the folder's old home."""
+    if isinstance(value, str):
+        if value == old:
+            return new
+        if value.startswith(old.rstrip("/") + "/"):
+            return new + value[len(old):]
+        return value
+    if isinstance(value, list):
+        return [_relocated(item, old, new) for item in value]
+    if isinstance(value, dict):
+        return {key: _relocated(item, old, new) for key, item in value.items()}
+    return value
+
+
 def load_project(path: Path) -> dict[str, Any]:
     path = path.expanduser().resolve()
     try:
@@ -145,6 +172,18 @@ def load_project(path: Path) -> dict[str, Any]:
         raise ValueError("unsupported Darkimiya project manifest")
     if not isinstance(value.get("artifacts"), dict):
         raise ValueError("project artifacts are invalid")
+    # The manifest lives inside the folder it describes, so where it was
+    # found IS the folder's current home. If the folder has moved since
+    # the manifest was written, every recorded path still points at the
+    # old home; re-anchor them all to the new one and persist, and the
+    # project is portable by being opened.
+    if path.parent.name.casefold() in MANAGED_PROJECT_DIRECTORY_NAMES:
+        actual = str(path.parent.parent)
+        recorded = str(value.get("source_folder") or "")
+        if recorded and recorded != actual:
+            value = _relocated(value, recorded, actual)
+            value["source_folder"] = actual
+            _atomic_write(path, value)
     return value
 
 

@@ -691,7 +691,7 @@ class GuiActionTests(unittest.TestCase):
             project_path, _ = load_or_create_folder_project(
                 photos.root, "Project filter")
             raw_sources = RawSourceStore(
-                photos.root / "Darkimiya" / "Reports" / "raw-source.json",
+                photos.root / ".darkimiya" / "Reports" / "raw-source.json",
                 report)
             raw_sources.configure(external)
             controller = ActionController(
@@ -722,12 +722,12 @@ class GuiActionTests(unittest.TestCase):
             self.assertFalse((photos.root / "B.JPG").exists())
             self.assertFalse(internal_raw.exists())
             self.assertTrue(external_raw.is_file())
-            self.assertTrue((photos.root / "Darkimiya" / "Rejected" / "B.JPG").is_file())
+            self.assertTrue((photos.root / ".darkimiya" / "Rejected" / "B.JPG").is_file())
             self.assertEqual(
                 photos.resolve("B.JPG"),
-                (photos.root / "Darkimiya" / "Rejected" / "B.JPG").resolve())
-            self.assertTrue((photos.root / "Darkimiya" / "RAW Reserve" / "A.RAF").is_file())
-            self.assertTrue((photos.root / "Darkimiya" / "RAW Reserve" / "External" / "A.RAF").is_file())
+                (photos.root / ".darkimiya" / "Rejected" / "B.JPG").resolve())
+            self.assertTrue((photos.root / ".darkimiya" / "RAW Reserve" / "A.RAF").is_file())
+            self.assertTrue((photos.root / ".darkimiya" / "RAW Reserve" / "External" / "A.RAF").is_file())
             project = load_project(project_path)
             self.assertEqual(len(project["artifacts"]["rejected"]), 1)
             self.assertEqual(len(project["artifacts"]["raw_reserve"]), 2)
@@ -740,7 +740,7 @@ class GuiActionTests(unittest.TestCase):
             self.assertTrue((photos.root / "B.JPG").is_file())
             self.assertTrue(internal_raw.is_file())
             self.assertTrue(external_raw.is_file())
-            self.assertFalse((photos.root / "Darkimiya" / "RAW Reserve" / "A.RAF").exists())
+            self.assertFalse((photos.root / ".darkimiya" / "RAW Reserve" / "A.RAF").exists())
             self.assertEqual(raw_sources.public()["summary"]["raw_files"], 0)
             project = load_project(project_path)
             self.assertTrue(all(
@@ -756,15 +756,15 @@ class GuiActionTests(unittest.TestCase):
                 "group-0001", ["A.JPG"], "final review", True, 0)
             project_path, _ = load_or_create_folder_project(
                 photos.root, "Final cleanup")
-            rejected = photos.root / "Darkimiya" / "Rejected"
+            rejected = photos.root / ".darkimiya" / "Rejected"
             rejected.mkdir(parents=True, exist_ok=True)
             shutil_source = photos.root / "B.JPG"
             shutil_source.replace(rejected / "B.JPG")
             (rejected / "Unused.RAF").write_bytes(b"unused-raw")
-            reserve = photos.root / "Darkimiya" / "RAW Reserve"
+            reserve = photos.root / ".darkimiya" / "RAW Reserve"
             (reserve / "Useful.RAF").write_bytes(b"useful-raw")
             raw_sources = RawSourceStore(
-                photos.root / "Darkimiya" / "Reports" / "raw-source.json",
+                photos.root / ".darkimiya" / "Reports" / "raw-source.json",
                 report)
             raw_sources.configure(reserve)
             controller = ActionController(
@@ -2615,7 +2615,7 @@ class GuiJobTests(unittest.TestCase):
             photos = root / "photos"; photos.mkdir()
             reference = photos / "A.JPG"
             Image.new("RGB", (32, 24), (80, 100, 120)).save(reference)
-            directions = photos / "Darkimiya" / "directions.json"
+            directions = photos / ".darkimiya" / "directions.json"
             directions.parent.mkdir()
             directions.write_text('{"entries": []}', encoding="utf-8")
             project_path, _ = load_or_create_folder_project(photos)
@@ -3140,7 +3140,7 @@ class GuiHttpTests(unittest.TestCase):
                 "render-hash")
             self.assertEqual(
                 payload["default_export_directory"],
-                str((photos / "Darkimiya" / "Exports").resolve()))
+                str((photos / ".darkimiya" / "Exports").resolve()))
 
     def test_export_payload_shows_latest_semantic_render_only(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -3169,7 +3169,7 @@ class GuiHttpTests(unittest.TestCase):
             self.assertEqual(payload["hidden_render_revisions"], 1)
             self.assertEqual(
                 payload["default_export_directory"],
-                str((photos / "Darkimiya" / "Exports").resolve()))
+                str((photos / ".darkimiya" / "Exports").resolve()))
 
     def test_private_people_api_indexes_locally_and_serves_only_crops(self):
         with tempfile.TemporaryDirectory() as temporary:

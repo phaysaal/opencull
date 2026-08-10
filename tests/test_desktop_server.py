@@ -314,12 +314,12 @@ class JobRelinkTests(unittest.TestCase):
                 job = state["jobs"][0]
                 output = Path(job["output"])
                 self.assertEqual(
-                    output.parent, (photos / "Darkimiya" / "Reports").resolve())
+                    output.parent, (photos / ".darkimiya" / "Reports").resolve())
                 self.assertNotEqual(output.parent, resources.resolve())
-                self.assertTrue((photos / "Darkimiya" / "project.json").is_file())
+                self.assertTrue((photos / ".darkimiya" / "project.json").is_file())
                 self.assertEqual(
                     Path(job["project"]),
-                    (photos / "Darkimiya" / "project.json").resolve())
+                    (photos / ".darkimiya" / "project.json").resolve())
                 self.assertTrue(job["project_id"])
             finally:
                 manager.shutdown()
