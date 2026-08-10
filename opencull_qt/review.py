@@ -1142,15 +1142,6 @@ class ReviewPage(QWidget):
                   or self.loader.cached(name, "thumb"))
         self.zoom.show_photo(name, pixmap, *self._zoom_state(name))
 
-    def select_focus(self) -> None:
-        """Keep the focused frame; a selection, not a toggle."""
-        name = self.focus_name()
-        if not name:
-            return
-        keepers = set(self.current_keepers())
-        if name not in keepers:
-            self.toggle(name)
-
     def approve_and_advance(self) -> None:
         """Confirm the group's current selection as reviewed, and move on."""
         self._save(self.current_keepers())
@@ -1201,22 +1192,23 @@ class ReviewPage(QWidget):
         elif key == Qt.Key.Key_Left:
             self.move_focus(-1)
         elif key == Qt.Key.Key_Down:
-            if zoomed:
-                self.views.setCurrentIndex(1)
             self.step(1)
-        elif key == Qt.Key.Key_Up:
             if zoomed:
-                self.views.setCurrentIndex(1)
+                # The lightbox persists: the next group opens on its
+                # first frame, still zoomed.
+                self.zoom_focus()
+        elif key == Qt.Key.Key_Up:
             self.step(-1)
+            if zoomed:
+                self.zoom_focus()
         elif key == Qt.Key.Key_Space:
             name = self.focus_name()
             if name:
                 self.toggle(name)
         elif key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self.approve_and_advance()
             if zoomed:
-                self.select_focus()
-            else:
-                self.approve_and_advance()
+                self.zoom_focus()
         elif key == Qt.Key.Key_Escape:
             if zoomed:
                 # Out of the zoom, back to the frames, focus preserved.

@@ -316,13 +316,26 @@ class ReviewPageTests(unittest.TestCase):
                    ["clusters"]["group-0001"]["keepers"]),
             ["A.JPG", "B.JPG"])
 
-    def test_enter_in_the_zoom_selects_and_never_unselects(self):
+    def test_enter_in_the_zoom_approves_and_stays_zoomed(self):
         page = self.page()
         self.press(page, Qt.Key.Key_2)
         self.press(page, Qt.Key.Key_Return)
-        self.press(page, Qt.Key.Key_Return)
-        self.assertEqual(
-            sorted(page.current_keepers()), ["A.JPG", "B.JPG"])
+        state = self.reviews.public_state()["clusters"]["group-0001"]
+        self.assertTrue(state["reviewed"])
+        self.assertEqual(page.current, "group-0002")
+        self.assertEqual(page.views.currentIndex(), 2)
+        self.assertEqual(page.zoom.name, "C.JPG")
+
+    def test_group_arrows_keep_the_lightbox_open(self):
+        page = self.page()
+        self.press(page, Qt.Key.Key_2)
+        self.press(page, Qt.Key.Key_Down)
+        self.assertEqual(page.current, "group-0002")
+        self.assertEqual(page.views.currentIndex(), 2)
+        self.assertEqual(page.zoom.name, "C.JPG")
+        self.press(page, Qt.Key.Key_Up)
+        self.assertEqual(page.current, "group-0001")
+        self.assertEqual(page.zoom.name, "A.JPG")
 
     def test_enter_on_the_frames_approves_the_group_and_moves_on(self):
         page = self.page()
