@@ -248,6 +248,7 @@ class ZoomView(QWidget):
         layout.setSpacing(8)
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(False)
+        self.scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.scroll.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.image = QLabel("…")
         self.image.setObjectName("frameImage")
@@ -265,16 +266,26 @@ class ZoomView(QWidget):
         hint.setFont(theme.body(9))
         layout.addWidget(hint)
 
-    def show_photo(self, name: str, pixmap, kept: bool) -> None:
+    def show_photo(self, name: str, pixmap, kept: bool,
+                   reviewed: bool = False,
+                   recommended: bool = False) -> None:
         self.name = name
         self._pixmap = pixmap
         self._one_to_one = False
-        self.set_kept(kept)
+        self.set_state(kept, reviewed, recommended)
         self._render()
 
+    def set_state(self, kept: bool, reviewed: bool,
+                  recommended: bool) -> None:
+        state = "kept ✓" if kept else "not kept"
+        whose = "your decision" if reviewed else "AI proposal"
+        parts = [self.name, f"{state} · {whose}"]
+        if recommended:
+            parts.append("AI recommended this frame")
+        self.caption.setText("   ·   ".join(parts))
+
     def set_kept(self, kept: bool) -> None:
-        self.caption.setText(
-            f"{self.name}   ·   {'kept ✓' if kept else 'not kept'}")
+        self.set_state(kept, False, False)
 
     def _render(self) -> None:
         if self._pixmap is None:
@@ -479,6 +490,7 @@ class ReviewPage(QWidget):
 
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
+        self.scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         holder = QWidget()
         holder.setObjectName("page")
         self.grid = QGridLayout(holder)
@@ -528,6 +540,7 @@ class ReviewPage(QWidget):
         overview_column.addWidget(overview_hint)
         self.overview_scroll = QScrollArea()
         self.overview_scroll.setWidgetResizable(True)
+        self.overview_scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         overview_holder = QWidget()
         overview_holder.setObjectName("page")
         self.overview_grid = QGridLayout(overview_holder)
@@ -875,9 +888,7 @@ class ReviewPage(QWidget):
         if size == "detail":
             if (self.views.currentIndex() == 2
                     and self.zoom.name == name):
-                self.zoom.show_photo(
-                    name, pixmap,
-                    name in set(self.current_keepers()))
+                self.zoom.show_photo(name, pixmap, *self._zoom_state(name))
             return
         if size != "thumb":
             return
@@ -927,7 +938,9 @@ class ReviewPage(QWidget):
         order = self.report.cluster_by_id[self.current]["photos"]
         self._save([item for item in order if item in keepers])
         if self.views.currentIndex() == 2 and self.zoom.name == name:
-            self.zoom.set_kept(name in keepers)
+            self._show_zoom(name)
+        # A click must not carry the keyboard away with it.
+        self.setFocus()
 
     def toggle_index(self, index: int) -> None:
         order = self.report.cluster_by_id[self.current]["photos"]
@@ -1111,14 +1124,23 @@ class ReviewPage(QWidget):
             self._show_zoom(name)
             self.views.setCurrentIndex(2)
 
+    def _zoom_state(self, name: str) -> tuple[bool, bool, bool]:
+        state = self.reviews.public_state()["clusters"].get(
+            self.current, {})
+        decision = self.report.decision_by_id.get(self.current, {})
+        return (
+            name in set(self.current_keepers()),
+            bool(state.get("reviewed")),
+            name in set(decision.get("photos") or []),
+        )
+
     def _show_zoom(self, name: str) -> None:
         # The bounded thumb appears at once; the 2400px detail replaces
         # it the moment the loader has decoded it.
         pixmap = (self.loader.cached(name, "detail")
                   or self.loader.request(name, "detail")
                   or self.loader.cached(name, "thumb"))
-        self.zoom.show_photo(
-            name, pixmap, name in set(self.current_keepers()))
+        self.zoom.show_photo(name, pixmap, *self._zoom_state(name))
 
     def select_focus(self) -> None:
         """Keep the focused frame; a selection, not a toggle."""
@@ -1128,6 +1150,11 @@ class ReviewPage(QWidget):
         keepers = set(self.current_keepers())
         if name not in keepers:
             self.toggle(name)
+
+    def approve_and_advance(self) -> None:
+        """Confirm the group's current selection as reviewed, and move on."""
+        self._save(self.current_keepers())
+        self.step(1)
 
     def step(self, delta: int) -> None:
         if not self.cluster_ids:
@@ -1147,9 +1174,14 @@ class ReviewPage(QWidget):
         if Qt.Key.Key_1 <= key <= Qt.Key.Key_9:
             index = key - Qt.Key.Key_1
             if 0 <= index < len(self._order):
-                self._focus = index
-                self._apply_focus()
-                self.zoom_focus()
+                if zoomed and self._focus == index:
+                    # The key that opened it closes it.
+                    self.views.setCurrentIndex(1)
+                    self._apply_focus()
+                else:
+                    self._focus = index
+                    self._apply_focus()
+                    self.zoom_focus()
         elif key == Qt.Key.Key_A:
             self.accept_ai()
         elif key == Qt.Key.Key_S:
@@ -1181,7 +1213,10 @@ class ReviewPage(QWidget):
             if name:
                 self.toggle(name)
         elif key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
-            self.select_focus()
+            if zoomed:
+                self.select_focus()
+            else:
+                self.approve_and_advance()
         elif key == Qt.Key.Key_Escape:
             if zoomed:
                 # Out of the zoom, back to the frames, focus preserved.

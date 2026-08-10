@@ -316,11 +316,45 @@ class ReviewPageTests(unittest.TestCase):
                    ["clusters"]["group-0001"]["keepers"]),
             ["A.JPG", "B.JPG"])
 
-    def test_enter_selects_and_never_unselects(self):
+    def test_enter_in_the_zoom_selects_and_never_unselects(self):
+        page = self.page()
+        self.press(page, Qt.Key.Key_2)
+        self.press(page, Qt.Key.Key_Return)
+        self.press(page, Qt.Key.Key_Return)
+        self.assertEqual(
+            sorted(page.current_keepers()), ["A.JPG", "B.JPG"])
+
+    def test_enter_on_the_frames_approves_the_group_and_moves_on(self):
         page = self.page()
         self.press(page, Qt.Key.Key_Return)
-        self.press(page, Qt.Key.Key_Return)
-        self.assertEqual(page.current_keepers(), ["A.JPG"])
+        state = self.reviews.public_state()["clusters"]["group-0001"]
+        self.assertTrue(state["reviewed"])
+        self.assertEqual(state["keepers"], ["A.JPG"])
+        self.assertEqual(page.current, "group-0002")
+
+    def test_the_digit_that_opened_the_zoom_closes_it(self):
+        page = self.page()
+        self.press(page, Qt.Key.Key_2)
+        self.assertEqual(page.views.currentIndex(), 2)
+        self.press(page, Qt.Key.Key_2)
+        self.assertEqual(page.views.currentIndex(), 1)
+        self.assertEqual(page.focus_name(), "B.JPG")
+        # A different digit while zoomed just moves the zoom.
+        self.press(page, Qt.Key.Key_1)
+        self.assertEqual(page.views.currentIndex(), 2)
+        self.press(page, Qt.Key.Key_2)
+        self.assertEqual(page.views.currentIndex(), 2)
+        self.assertEqual(page.zoom.name, "B.JPG")
+
+    def test_the_zoom_caption_says_whose_decision_it_is(self):
+        page = self.page()
+        self.press(page, Qt.Key.Key_1)
+        self.assertIn("AI proposal", page.zoom.caption.text())
+        self.assertIn("kept ✓", page.zoom.caption.text())
+        self.assertIn("AI recommended", page.zoom.caption.text())
+        self.press(page, Qt.Key.Key_Space)
+        self.assertIn("not kept", page.zoom.caption.text())
+        self.assertIn("your decision", page.zoom.caption.text())
 
     def test_the_group_list_hides_on_the_overview_and_shows_pictures(self):
         page = self.overview()
