@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import tempfile
@@ -87,6 +88,24 @@ def _pid_alive(pid: Any) -> bool:
         return True
     except (OSError, TypeError, ValueError):
         return False
+
+
+def _pid_runs_job(pid: Any, job_id: str) -> bool:
+    """Whether a pid provably belongs to one job's own worker.
+
+    A recorded pid can be recycled by an innocent process after a
+    restart, so liveness alone never justifies a signal. The worker's
+    command line names the job's generated program -- which carries the
+    job id -- and that is the proof. Where /proc is unavailable the
+    answer is no, and the caller declines to signal.
+    """
+    try:
+        cmdline = (
+            Path(f"/proc/{int(pid)}/cmdline")
+            .read_bytes().decode("utf-8", errors="replace"))
+    except (OSError, TypeError, ValueError):
+        return False
+    return bool(job_id) and job_id in cmdline
 
 
 class JobManager:
@@ -804,12 +823,25 @@ class JobManager:
             job = self._job(job_id)
             status = job["status"]
             if action == "pause":
-                if status != "running" or job_id != self._active_job_id:
-                    raise JobError("only the currently running job can be paused")
-                job.update(status="stopping", message="Pausing after process shutdown.")
-                self._save()
-                assert self._process is not None
-                self._process.terminate()
+                if status == "running" and job_id == self._active_job_id:
+                    job.update(
+                        status="stopping",
+                        message="Pausing after process shutdown.")
+                    self._save()
+                    assert self._process is not None
+                    self._process.terminate()
+                elif status == "detached" and _pid_runs_job(
+                        job.get("pid"), job_id):
+                    # Detached but provably ours: signal it, and let the
+                    # detached monitor mark it paused when it ends.
+                    job.update(message=(
+                        "Pausing after the current step; the checkpoint "
+                        "keeps every decision."))
+                    self._save()
+                    os.kill(int(job["pid"]), signal.SIGTERM)
+                else:
+                    raise JobError(
+                        "only a running job can be paused")
             elif action == "cancel":
                 if status in TERMINAL:
                     raise JobError("job is already finished")

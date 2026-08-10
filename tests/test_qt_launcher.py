@@ -53,6 +53,12 @@ class LauncherLogicTests(unittest.TestCase):
             self.launcher.project_state({"report_available": True}),
             ("Culled", "ready"))
 
+    def test_a_detached_run_still_reads_as_culling(self):
+        self.assertEqual(
+            self.launcher.project_state(
+                {"culling": {"status": "detached"}}),
+            ("Culling", "running"))
+
     def test_a_manual_selection_does_not_read_as_culled(self):
         """The everything-included fallback is plumbing, not a cull."""
         self.assertEqual(

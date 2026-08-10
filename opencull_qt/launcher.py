@@ -64,7 +64,7 @@ from .style import StyleDialog, StylePanel
 from .suggestions import SuggestionsPage
 from .widgets import ProjectCard, Row, band, replace_rows, short_path
 
-ACTIVE = {"running", "queued"}
+ACTIVE = {"running", "queued", "stopping", "detached"}
 
 
 def job_progress(job: dict) -> int | None:
@@ -125,7 +125,7 @@ def project_state(project: dict) -> tuple[str, str]:
     assessing = str((project.get("assessment") or {}).get("status", ""))
     if assessing in {"running", "queued"}:
         return "Assessing", "running"
-    if status == "running":
+    if status in {"running", "stopping", "detached"}:
         return "Culling", "running"
     if status == "queued":
         return "Queued", "running"
@@ -207,7 +207,8 @@ class CullProgress(QWidget):
     def set_job(self, job: dict) -> None:
         self.message.setText(str(job.get("message") or ""))
         if self.pause_button is not None:
-            self.pause_button.setEnabled(job.get("status") == "running")
+            self.pause_button.setEnabled(
+                job.get("status") in {"running", "detached"})
         progress = job.get("progress") or {}
         total = int(progress.get("total_clusters") or 0)
         completed = int(progress.get("completed_clusters") or 0)
@@ -565,7 +566,7 @@ class Launcher(QMainWindow):
         running = tone == "running"
         actions: list[tuple[str, object]] = []
         in_flight = active_job(project)
-        if in_flight.get("status") == "running":
+        if in_flight.get("status") in {"running", "detached"}:
             actions.append((
                 "Pause",
                 lambda j=str(in_flight.get("id", "")): self.pause_job(j)))
@@ -639,7 +640,7 @@ class Launcher(QMainWindow):
         running = tone == "running"
         actions: list[tuple[str, object]] = []
         in_flight = active_job(project)
-        if in_flight.get("status") == "running":
+        if in_flight.get("status") in {"running", "detached"}:
             actions.append((
                 "Pause",
                 lambda j=str(in_flight.get("id", "")): self.pause_job(j)))

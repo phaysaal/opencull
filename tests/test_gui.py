@@ -3093,6 +3093,38 @@ class GuiJobTests(unittest.TestCase):
             finally:
                 manager.shutdown()
 
+    def test_a_detached_run_can_be_paused_when_the_pid_is_provably_ours(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manager = JobManager(
+                root / "jobs.json", root, command_builder=lambda job: [],
+                autostart=False)
+            try:
+                job = {
+                    "id": "d1", "kind": "culling", "photos": str(root),
+                    "output": str(root / "r.json"),
+                    "checkpoint": str(root / "c.json"),
+                    "log": str(root / "l.log"),
+                    "status": "detached", "pid": 12345}
+                manager._state["jobs"].append(job)
+                import opencull_gui.jobs as jobs_module
+
+                with patch.object(
+                    jobs_module, "_pid_runs_job", return_value=True,
+                ), patch.object(jobs_module.os, "kill") as kill:
+                    manager.action("d1", "pause")
+                kill.assert_called_once_with(
+                    12345, jobs_module.signal.SIGTERM)
+                self.assertEqual(job["status"], "detached")
+                self.assertIn("checkpoint keeps", job["message"])
+                with patch.object(
+                    jobs_module, "_pid_runs_job", return_value=False,
+                ):
+                    with self.assertRaisesRegex(JobError, "running job"):
+                        manager.action("d1", "pause")
+            finally:
+                manager.shutdown()
+
     def test_the_queue_guard_says_what_is_actually_happening(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
