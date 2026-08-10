@@ -903,6 +903,37 @@ class LauncherWindowTests(unittest.TestCase):
         self.assertIsInstance(page, CullProgress)
         self.assertEqual(page.meter.value(), 25)
 
+    def test_the_progress_page_shows_kept_and_waiting_photographs(self):
+        import json as json_module
+
+        from opencull_qt.launcher import CullProgress
+        from opencull_qt.previews import PreviewLoader
+
+        window, _ = self.build(projects=[])
+        shoot = Path(tempfile.mkdtemp())
+        _report, photos_path = build_shoot(shoot)
+        checkpoint = shoot / "c.json"
+        checkpoint.write_text(json_module.dumps({"decisions": [
+            {"group_id": "g1", "photos": ["A.JPG", "B.JPG"],
+             "keepers": ["A.JPG"]},
+        ]}))
+        from opencull_gui.photos import PhotoStore
+
+        loader = PreviewLoader(PhotoStore(photos_path, shoot / "cache"))
+        self.addCleanup(loader.shutdown)
+        page = CullProgress(
+            "A", names=["A.JPG", "B.JPG", "C.JPG", "D.JPG"],
+            loader=loader, checkpoint=checkpoint)
+        self.addCleanup(page.deleteLater)
+        page.set_job({"status": "running", "message": "x",
+                      "progress": {"completed_clusters": 1,
+                                   "total_clusters": 3}})
+        self.assertEqual(page.kept_sheet.names, ["A.JPG"])
+        # B was in the decided group, so only C and D still wait.
+        self.assertEqual(page.waiting_sheet.names, ["C.JPG", "D.JPG"])
+        self.assertIn("1", page.kept_title.text())
+        self.assertIn("2", page.waiting_title.text())
+
     def test_reculling_is_refused_unless_confirmed(self):
         window, services = self.build(projects=[])
         with mock.patch.object(window, "confirm_recull", return_value=False):

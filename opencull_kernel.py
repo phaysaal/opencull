@@ -813,6 +813,11 @@ def decision_json(
     return json.dumps(
         {
             "group_id": group["id"],
+            # The whole group, so anything watching the run live can say
+            # which frames each landed decision covered.
+            "photos": [
+                candidate.get("name")
+                for candidate in group.get("candidates", [])],
             "keepers": _selected_names(record),
             "rationale": str(_record_field(record, "rationale")).strip(),
             "confidence": confidence,
@@ -835,6 +840,7 @@ def singleton_decision(group: dict[str, Any]) -> str:
     return json.dumps(
         {
             "group_id": group["id"],
+            "photos": [candidates[0]["name"]],
             "keepers": [candidates[0]["name"]],
             "rationale": "Only photo in cluster; retained automatically.",
             "confidence": 1.0,

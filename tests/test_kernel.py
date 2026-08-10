@@ -193,6 +193,9 @@ class KernelTests(unittest.TestCase):
         group = {"id": "solo", "candidates": [{"name": "only.JPG"}]}
         decision = json.loads(kernel.singleton_decision(group))
         self.assertEqual(decision["keepers"], ["only.JPG"])
+        # The whole group rides in the decision, so a live watcher can say
+        # which frames each landed decision covered.
+        self.assertEqual(decision["photos"], ["only.JPG"])
         self.assertEqual(decision["confidence"], 1.0)
         self.assertTrue(kernel.all_singletons([group]))
         self.assertFalse(kernel.all_singletons([GROUP]))

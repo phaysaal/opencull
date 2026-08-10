@@ -7,6 +7,7 @@ and the folder chooser is Qt's own.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer
@@ -159,13 +160,21 @@ class CullProgress(QWidget):
     """The cull phase while its run is actually running.
 
     The invitation's buy button has done its job; what the page owes the
-    photographer now is what the run is doing and how far along it is.
+    photographer now is what the run is doing and how far along it is --
+    the kept frames gathering above, the undecided ones thinning below,
+    both straight from the run's own checkpoint.
     """
 
     def __init__(self, name: str, on_pause=None,
+                 names: list[str] | None = None, loader=None,
+                 checkpoint: Path | None = None,
                  parent: QWidget | None = None):
         super().__init__(parent)
         self.setObjectName("page")
+        self.names = list(names or [])
+        self.loader = loader
+        self.checkpoint = checkpoint
+        self._shown: tuple[int, int] = (-1, -1)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(36, 30, 36, 26)
         outer.setSpacing(8)
@@ -202,7 +211,70 @@ class CullProgress(QWidget):
         self.detail.setObjectName("hint")
         self.detail.setFont(theme.body(9))
         outer.addWidget(self.detail)
-        outer.addStretch(1)
+        self.kept_title = QLabel("")
+        self.kept_title.setObjectName("clusterTitle")
+        self.kept_title.setFont(theme.display(12))
+        outer.addWidget(self.kept_title)
+        self._kept_slot = QVBoxLayout()
+        outer.addLayout(self._kept_slot, 3)
+        self.waiting_title = QLabel("")
+        self.waiting_title.setObjectName("clusterTitle")
+        self.waiting_title.setFont(theme.display(12))
+        outer.addWidget(self.waiting_title)
+        self._waiting_slot = QVBoxLayout()
+        outer.addLayout(self._waiting_slot, 2)
+        self.kept_sheet: QWidget | None = None
+        self.waiting_sheet: QWidget | None = None
+
+    def _decisions(self) -> list[dict]:
+        if self.checkpoint is None:
+            return []
+        try:
+            state = json.loads(self.checkpoint.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return []
+        decisions = []
+        for item in state.get("decisions", []):
+            if isinstance(item, str):
+                try:
+                    item = json.loads(item)
+                except ValueError:
+                    continue
+            if isinstance(item, dict):
+                decisions.append(item)
+        return decisions
+
+    def _refill(self, decisions: list[dict]) -> None:
+        keepers: list[str] = []
+        decided: set[str] = set()
+        for decision in decisions:
+            keepers.extend(
+                name for name in decision.get("keepers", [])
+                if isinstance(name, str))
+            # Older checkpoints recorded only the keepers; the members
+            # list makes the waiting area exact rather than approximate.
+            members = decision.get("photos") or decision.get("keepers", [])
+            decided.update(
+                name for name in members if isinstance(name, str))
+        waiting = [name for name in self.names if name not in decided]
+        state = (len(keepers), len(waiting))
+        if state == self._shown or self.loader is None:
+            return
+        self._shown = state
+        for slot, old in ((self._kept_slot, self.kept_sheet),
+                          (self._waiting_slot, self.waiting_sheet)):
+            if old is not None:
+                slot.removeWidget(old)
+                old.deleteLater()
+        self.kept_title.setText(
+            f"Kept so far · {len(keepers)}" if keepers
+            else "Kept so far · none yet")
+        self.waiting_title.setText(
+            f"Awaiting a decision · {len(waiting)}")
+        self.kept_sheet = ContactSheet(keepers, self.loader)
+        self._kept_slot.addWidget(self.kept_sheet)
+        self.waiting_sheet = ContactSheet(waiting, self.loader)
+        self._waiting_slot.addWidget(self.waiting_sheet)
 
     def set_job(self, job: dict) -> None:
         self.message.setText(str(job.get("message") or ""))
@@ -222,6 +294,7 @@ class CullProgress(QWidget):
             self.meter.setValue(job_progress(job) or 0)
             self.detail.setText(
                 "Reading the folder and preparing previews.")
+        self._refill(self._decisions())
 
 
 RECULL_WARNING = (
@@ -917,7 +990,10 @@ class Launcher(QMainWindow):
                 page = CullProgress(
                     str(bench.project.get("name") or ""),
                     on_pause=lambda job=str(running.get("id", "")):
-                        self.pause_job(job))
+                        self.pause_job(job),
+                    names=list(bench.report.photo_names),
+                    loader=self._loader,
+                    checkpoint=Path(str(running.get("checkpoint") or "")))
                 page.set_job(running)
                 return page
             paused = next(
