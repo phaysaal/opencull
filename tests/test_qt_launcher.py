@@ -804,13 +804,35 @@ class LauncherWindowTests(unittest.TestCase):
         services.jobs.add_professional.assert_not_called()
         self.assertIn("no longer on disk", window.notice_text.text())
 
-    def test_a_running_folder_offers_no_second_cull(self):
+    def test_a_running_folder_offers_pause_and_no_second_cull(self):
         window, _ = self.build(projects=[
             {"id": "p1", "name": "A", "photos": "/p/a", "available": True,
-             "culling": {"status": "running"}}])
+             "culling": {"status": "running", "id": "j9"}}])
         self.folder(window, "raw")
         window.refresh()
-        self.assertEqual(self.buttons(self.cards(window)[0]), [])
+        self.assertEqual(self.buttons(self.cards(window)[0]), ["Pause"])
+
+    def test_the_pause_button_pauses_the_running_job(self):
+        window, services = self.build(projects=[
+            {"id": "p1", "name": "A", "photos": "/p/a", "available": True,
+             "culling": {"status": "running", "id": "j9"}}])
+        self.folder(window, "raw")
+        window.refresh()
+        card = self.cards(window)[0]
+        from PySide6.QtWidgets import QPushButton
+
+        button = next(b for b in card.findChildren(QPushButton)
+                      if b.text() == "Pause")
+        button.click()
+        services.jobs.action.assert_called_once_with("j9", "pause")
+
+    def test_progress_prefers_the_checkpoints_own_counts(self):
+        from opencull_qt.launcher import job_progress
+
+        self.assertEqual(job_progress(
+            {"status": "running", "log_tail": "12 %",
+             "progress": {"completed_clusters": 6,
+                          "total_clusters": 12}}), 50)
 
     def test_culling_a_fresh_folder_asks_nothing(self):
         window, services = self.build(projects=[])

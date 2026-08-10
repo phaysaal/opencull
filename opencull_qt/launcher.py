@@ -68,9 +68,19 @@ ACTIVE = {"running", "queued"}
 
 
 def job_progress(job: dict) -> int | None:
-    """Read a percentage out of a worker's most recent progress line."""
+    """How far along a run is, from its own checkpoint when it has one.
+
+    The checkpoint's cluster counts advance with every decision for the
+    whole run; the log's percentage lines belong to the scan and stop
+    moving the moment the paid work starts, which read as a stall.
+    """
     import re
 
+    progress = job.get("progress") or {}
+    total = int(progress.get("total_clusters") or 0)
+    if total:
+        completed = int(progress.get("completed_clusters") or 0)
+        return max(0, min(100, round(100 * completed / total)))
     matches = re.findall(r"(\d{1,3})\s*%", str(job.get("log_tail") or ""))
     if matches:
         return max(0, min(100, int(matches[-1])))
@@ -152,16 +162,30 @@ class CullProgress(QWidget):
     photographer now is what the run is doing and how far along it is.
     """
 
-    def __init__(self, name: str, parent: QWidget | None = None):
+    def __init__(self, name: str, on_pause=None,
+                 parent: QWidget | None = None):
         super().__init__(parent)
         self.setObjectName("page")
         outer = QVBoxLayout(self)
         outer.setContentsMargins(36, 30, 36, 26)
         outer.setSpacing(8)
+        head = QHBoxLayout()
+        head.setSpacing(10)
         title = QLabel(f"Culling {name}")
         title.setObjectName("clusterTitle")
         title.setFont(theme.display(20))
-        outer.addWidget(title)
+        head.addWidget(title, 1)
+        self.pause_button = None
+        if on_pause is not None:
+            self.pause_button = QPushButton("Pause")
+            self.pause_button.setObjectName("ghost")
+            self.pause_button.setFont(theme.body(9))
+            self.pause_button.setToolTip(
+                "Stop after the current group. Every decision made so far "
+                "is checkpointed; resuming buys only the rest.")
+            self.pause_button.clicked.connect(lambda _=False: on_pause())
+            head.addWidget(self.pause_button)
+        outer.addLayout(head)
         self.message = QLabel("The culling worker is starting.")
         self.message.setObjectName("hint")
         self.message.setWordWrap(True)
@@ -182,6 +206,8 @@ class CullProgress(QWidget):
 
     def set_job(self, job: dict) -> None:
         self.message.setText(str(job.get("message") or ""))
+        if self.pause_button is not None:
+            self.pause_button.setEnabled(job.get("status") == "running")
         progress = job.get("progress") or {}
         total = int(progress.get("total_clusters") or 0)
         completed = int(progress.get("completed_clusters") or 0)
@@ -538,6 +564,11 @@ class Launcher(QMainWindow):
         culled_by_model = culled and not project.get("report_is_manual")
         running = tone == "running"
         actions: list[tuple[str, object]] = []
+        in_flight = active_job(project)
+        if in_flight.get("status") == "running":
+            actions.append((
+                "Pause",
+                lambda j=str(in_flight.get("id", "")): self.pause_job(j)))
         if culled:
             actions.append(("Review", lambda p=project: self.open_review(p)))
         # Assessment reads the cull and its review, so it is only offered
@@ -607,6 +638,11 @@ class Launcher(QMainWindow):
         culled_by_model = culled and not project.get("report_is_manual")
         running = tone == "running"
         actions: list[tuple[str, object]] = []
+        in_flight = active_job(project)
+        if in_flight.get("status") == "running":
+            actions.append((
+                "Pause",
+                lambda j=str(in_flight.get("id", "")): self.pause_job(j)))
 
         if culled:
             actions.append(
@@ -659,6 +695,18 @@ class Launcher(QMainWindow):
             self.report(
                 f"Added {name}: {contents['total']} photographs. "
                 f"Cull it, or go straight to {treatment.lower()}.")
+        self.refresh()
+
+    def pause_job(self, job_id: str) -> None:
+        """Stop a running job after its current step, keeping the checkpoint."""
+        try:
+            self.services.jobs.action(job_id, "pause")
+        except Exception as exc:
+            self._say(str(exc), "alarm")
+            return
+        self._say(
+            "Pausing. Every decision made so far is kept; the same button "
+            "resumes the run.", "ok")
         self.refresh()
 
     def _culling_jobs(self, photos: str) -> list[dict]:
@@ -859,15 +907,32 @@ class Launcher(QMainWindow):
         # written locally to include everything. There is nothing to review
         # in a selection that kept every frame.
         if not bench.culled():
+            mine = self._culling_jobs(str(bench.project.get("photos", "")))
             running = next(
-                (job for job in self._culling_jobs(
-                    str(bench.project.get("photos", "")))
+                (job for job in mine
                  if job.get("status") in
                  {"running", "queued", "stopping", "detached"}), None)
             if running is not None:
-                page = CullProgress(str(bench.project.get("name") or ""))
+                page = CullProgress(
+                    str(bench.project.get("name") or ""),
+                    on_pause=lambda job=str(running.get("id", "")):
+                        self.pause_job(job))
                 page.set_job(running)
                 return page
+            paused = next(
+                (job for job in reversed(mine)
+                 if job.get("status") == "paused"), None)
+            if paused is not None:
+                frames = list(bench.report.photo_names)
+                return Invitation(
+                    "This cull is paused mid-run",
+                    "The run stopped partway and left its checkpoint. "
+                    "Resuming keeps every group already decided and buys "
+                    "only the rest.",
+                    "Resume culling",
+                    lambda: self.cull_project(bench.project),
+                    f"The run covers {len(frames)} photographs.",
+                    shows=ContactSheet(frames, self._loader))
             frames = list(bench.report.photo_names)
             count = len(frames)
             sheet = ContactSheet(frames, self._loader, selectable=True)
