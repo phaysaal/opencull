@@ -852,8 +852,13 @@ class ReviewPage(QWidget):
         decision = self.report.decision_by_id.get(cluster_id, {})
         state = self.reviews.public_state()["clusters"].get(cluster_id, {})
         reviewed = bool(state.get("reviewed"))
-        keepers = set(
-            state.get("keepers") or (decision.get("photos") or []))
+        # "Reviewed to none" is a decision, and an empty list is its
+        # honest record. Only an absent record falls back to the AI --
+        # `or` would conflate the two and quietly resurrect the proposal.
+        keepers = state.get("keepers")
+        if keepers is None:
+            keepers = decision.get("photos") or []
+        keepers = set(keepers)
         recommended = set(decision.get("photos") or [])
 
         self.heading.setText(cluster_id)

@@ -289,6 +289,20 @@ class ReviewPageTests(unittest.TestCase):
             self.reviews.public_state()["clusters"]["group-0001"]["keepers"],
             ["A.JPG", "B.JPG"])
 
+    def test_a_kept_none_survives_approval_and_returning(self):
+        """Reviewed-to-none must never be resurrected as the AI proposal."""
+        page = self.page()
+        page.keep_none()
+        self.press(page, Qt.Key.Key_Return)
+        self.assertEqual(page.current, "group-0002")
+        page.show_cluster("group-0001")
+        self.assertEqual(page.current_keepers(), [])
+        # Approving the displayed state again must keep the none.
+        self.press(page, Qt.Key.Key_Return)
+        state = self.reviews.public_state()["clusters"]["group-0001"]
+        self.assertEqual(state["keepers"], [])
+        self.assertTrue(state["reviewed"])
+
     def test_keep_none_rejects_the_whole_cluster(self):
         page = self.page()
         page.keep_none()
