@@ -3093,6 +3093,48 @@ class GuiJobTests(unittest.TestCase):
             finally:
                 manager.shutdown()
 
+    def test_a_refused_certification_is_retried_once_with_a_fresh_panel(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            photos = root / "photos"
+            photos.mkdir()
+            manager = JobManager(
+                root / "jobs.json", root, command_builder=lambda job: [],
+                autostart=False)
+            try:
+                checkpoint = root / "r.json.checkpoint.json"
+                checkpoint.write_text("{}")
+                failed = {
+                    "id": "f1", "kind": "culling", "photos": str(photos),
+                    "output": str(root / "r.json"),
+                    "checkpoint": str(checkpoint),
+                    "log": str(root / "r.log"), "status": "failed",
+                    "exit_code": 2, "keep_per_group": 2,
+                    "recursive": True, "profile": "family",
+                    "judgment_policy": {"panel": ["C", "D"], "votes": 5,
+                                        "required": 4},
+                    "only_photos": []}
+                manager._state["jobs"].append(failed)
+                manager._maybe_retry_certification(failed)
+                retried = manager._state["jobs"][-1]
+                self.assertEqual(retried["status"], "queued")
+                self.assertTrue(retried["auto_retry"])
+                self.assertEqual(retried["output"], failed["output"])
+                self.assertTrue(failed["auto_retried"])
+                # The retry itself never retries: one exception, handled once.
+                retried.update(status="failed", exit_code=2)
+                before = len(manager._state["jobs"])
+                manager._maybe_retry_certification(retried)
+                self.assertEqual(len(manager._state["jobs"]), before)
+                # A crash (not an abstention) is not retried either.
+                failed2 = dict(failed, id="f2", auto_retried=None,
+                               exit_code=1)
+                manager._state["jobs"][0] = failed2
+                manager._maybe_retry_certification(failed2)
+                self.assertEqual(len(manager._state["jobs"]), before)
+            finally:
+                manager.shutdown()
+
     def test_a_detached_run_can_be_paused_when_the_pid_is_provably_ours(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

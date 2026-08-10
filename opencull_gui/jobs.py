@@ -1772,7 +1772,48 @@ class JobManager:
             self._process = None
             self._active_job_id = None
             self._save()
+        if status == "failed":
+            self._maybe_retry_certification(job)
         self._wake.set()
+
+    def _maybe_retry_certification(self, job: dict[str, Any]) -> None:
+        """One automatic fresh-panel retry when only the gate refused.
+
+        A cull that finished its decisions and then abstained at
+        certification carries a complete checkpoint; a judge is a
+        stochastic instrument, and a fresh panel routinely approves the
+        identical evidence. One retry, marked so it never loops: a real
+        defect still fails, now with the refused evidence on disk.
+        """
+        if (
+            job.get("kind", "culling") != "culling"
+            or job.get("exit_code") != 2
+            or job.get("auto_retry")
+            or not Path(str(job.get("checkpoint") or "")).is_file()
+            or Path(str(job.get("output") or "")).exists()
+        ):
+            return
+        policy = job.get("judgment_policy") or {}
+        try:
+            self.add(
+                job["photos"], job["output"], job.get("keep_per_group", 2),
+                job.get("recursive", True), job.get("profile", "family"),
+                job.get("provider_profile_id") or "",
+                policy.get("panel"), policy.get("votes", 5),
+                policy.get("required", 4),
+                only_photos=list(job.get("only_photos") or []) or None,
+            )
+        except (JobError, ProviderError):
+            # The refusal stands as recorded; retrying was best-effort.
+            return
+        with self._lock:
+            job["auto_retried"] = True
+            retried = self._state["jobs"][-1]
+            retried["auto_retry"] = True
+            retried["message"] = (
+                "Certification was refused; asking a fresh panel once. "
+                "Every decision is kept in the checkpoint.")
+            self._save()
 
     def shutdown(self) -> None:
         self._stop.set()
