@@ -14,6 +14,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QPainter, QPen
 from PySide6.QtWidgets import (
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QListWidget,
@@ -40,6 +41,10 @@ from .previews import PreviewLoader, scaled
 from .widgets import workspace_title
 
 THUMB = 200
+# The stored thumb previews are 520px on the long edge, so tiles can grow
+# to the width of a large window without ever being enlarged past their
+# source and going soft.
+THUMB_MAX = 500
 
 
 class Frame(QFrame):
@@ -51,6 +56,8 @@ class Frame(QFrame):
         super().__init__()
         self.name = name
         self.kept = kept
+        self._pixmap = None
+        self._thumb = THUMB
         self.setObjectName("frame")
         self.setProperty("kept", "true" if kept else "false")
         self.setFixedSize(THUMB + 16, THUMB + 58)
@@ -90,8 +97,19 @@ class Frame(QFrame):
         layout.addLayout(caption)
 
     def set_pixmap(self, pixmap) -> None:
-        self.image.setPixmap(scaled(pixmap, THUMB, THUMB))
+        self._pixmap = pixmap
+        self.image.setPixmap(scaled(pixmap, self._thumb, self._thumb))
         self.image.setText("")
+
+    def set_scale(self, thumb: int) -> None:
+        """Give the photograph the size its row was dealt."""
+        if thumb == self._thumb:
+            return
+        self._thumb = thumb
+        self.setFixedSize(thumb + 16, thumb + 58)
+        self.image.setFixedSize(thumb, thumb)
+        if self._pixmap is not None:
+            self.image.setPixmap(scaled(self._pixmap, thumb, thumb))
 
     def set_kept(self, kept: bool) -> None:
         self.kept = kept
@@ -133,6 +151,8 @@ class ReviewPage(QWidget):
         self.reviews = reviews
         self.loader = loader
         self.frames: dict[str, Frame] = {}
+        self._order: list[str] = []
+        self._layout_state = (0, 0)
         self.cluster_ids = list(report.cluster_by_id)
         self.current = self.cluster_ids[0] if self.cluster_ids else ""
 
@@ -143,6 +163,57 @@ class ReviewPage(QWidget):
         self._fill_clusters()
         if self.current:
             self.show_cluster(self.current)
+
+    @staticmethod
+    def frame_geometry(available: int, count: int, spacing: int) -> tuple[int, int]:
+        """How many columns, and how large a photograph, for one width."""
+        columns = max(1, count)
+        while columns > 1 and (
+            (available - spacing * (columns - 1)) / columns < THUMB + 16
+        ):
+            columns -= 1
+        tile = (available - spacing * (columns - 1)) / columns
+        thumb = int(max(THUMB, min(THUMB_MAX, tile - 16)))
+        return columns, thumb
+
+    def _relayout(self) -> None:
+        """Deal the cluster's frames the width the window actually has.
+
+        Few frames on a wide window grow toward the preview's own
+        resolution; many frames wrap into as many columns as fit at the
+        base size. Recomputed on every resize, so no screen is left with
+        a strip of photographs and a plain of empty page.
+        """
+        names = getattr(self, "_order", [])
+        if not names:
+            return
+        available = self.scroll.viewport().width()
+        if available <= 0:
+            return
+        columns, thumb = self.frame_geometry(
+            available, len(names), self.grid.spacing())
+        if (columns, thumb) == self._layout_state:
+            return
+        self._layout_state = (columns, thumb)
+        while self.grid.count():
+            self.grid.takeAt(0)
+        for column_index in range(self.grid.columnCount() + 1):
+            self.grid.setColumnStretch(column_index, 0)
+        for row_index in range(self.grid.rowCount() + 1):
+            self.grid.setRowStretch(row_index, 0)
+        rows = (len(names) + columns - 1) // columns
+        for position, name in enumerate(names):
+            frame = self.frames[name]
+            frame.set_scale(thumb)
+            self.grid.addWidget(frame, position // columns, position % columns)
+        # Leftover width and height pool past the photographs instead of
+        # being dealt out between them.
+        self.grid.setColumnStretch(columns, 1)
+        self.grid.setRowStretch(rows, 1)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        super().resizeEvent(event)
+        self._relayout()
 
     # --- construction ---------------------------------------------------
 
@@ -180,16 +251,15 @@ class ReviewPage(QWidget):
         self.rationale.setFont(theme.body(10))
         column.addWidget(self.rationale)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
         holder = QWidget()
         holder.setObjectName("page")
-        self.grid = QHBoxLayout(holder)
+        self.grid = QGridLayout(holder)
         self.grid.setContentsMargins(0, 6, 0, 6)
         self.grid.setSpacing(14)
-        self.grid.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-        scroll.setWidget(holder)
-        column.addWidget(scroll, 1)
+        self.scroll.setWidget(holder)
+        column.addWidget(self.scroll, 1)
 
         actions = QHBoxLayout()
         actions.setSpacing(9)
@@ -405,14 +475,16 @@ class ReviewPage(QWidget):
                 widget.deleteLater()
         self.frames.clear()
 
-        for index, name in enumerate(cluster["photos"]):
+        self._order = list(cluster["photos"])
+        for index, name in enumerate(self._order):
             frame = Frame(name, index, name in keepers, name in recommended)
             frame.toggled.connect(self.toggle)
-            self.grid.addWidget(frame)
             self.frames[name] = frame
             pixmap = self.loader.request(name, "thumb")
             if pixmap is not None:
                 frame.set_pixmap(pixmap)
+        self._layout_state = (0, 0)
+        self._relayout()
 
         # Rows are found by their data, not their index: scene headers sit
         # between clusters, so index arithmetic would land on the wrong row.

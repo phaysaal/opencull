@@ -82,6 +82,42 @@ class ReviewPageTests(unittest.TestCase):
         self.addCleanup(page.deleteLater)
         return page
 
+    def test_few_frames_grow_into_a_wide_window(self):
+        page = self.page()
+        page.resize(1700, 900)
+        page.show()
+        QApplication.processEvents()
+        page._relayout()
+        frame = page.frames["A.JPG"]
+        self.assertGreater(frame.image.width(), 400)
+
+    def test_frames_never_grow_past_their_preview_source(self):
+        from opencull_qt.review import THUMB_MAX
+
+        page = self.page()
+        page.resize(3400, 1200)
+        page.show()
+        QApplication.processEvents()
+        page._relayout()
+        self.assertLessEqual(page.frames["A.JPG"].image.width(), THUMB_MAX)
+
+    def test_the_geometry_maths_cover_narrow_wide_and_many(self):
+        from opencull_qt.review import THUMB, THUMB_MAX, ReviewPage
+
+        # Exactly two base tiles wide: both fit, at the base size.
+        self.assertEqual(
+            ReviewPage.frame_geometry(446, 2, 14), (2, THUMB))
+        # Too narrow for two: one column, and the singleton grows.
+        self.assertEqual(
+            ReviewPage.frame_geometry(430, 2, 14), (1, 414))
+        # Wide: two frames grow, capped at the preview's own resolution.
+        self.assertEqual(
+            ReviewPage.frame_geometry(1700, 2, 14), (2, THUMB_MAX))
+        # Many frames wrap into the columns that honestly fit.
+        columns, thumb = ReviewPage.frame_geometry(1000, 9, 14)
+        self.assertEqual(columns, 4)
+        self.assertGreaterEqual(thumb, THUMB)
+
     def press(self, page, key):
         event = QKeyEvent(
             QKeyEvent.Type.KeyPress, key, Qt.KeyboardModifier.NoModifier)
