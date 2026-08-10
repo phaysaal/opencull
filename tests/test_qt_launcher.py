@@ -1028,6 +1028,41 @@ class LauncherWindowTests(unittest.TestCase):
             "Resume assessment",
             [b.text() for b in page.findChildren(QPushButton)])
 
+    def test_every_rated_photo_carries_its_own_eye(self):
+        import json as json_module
+        from unittest import mock
+
+        from PySide6.QtWidgets import QDialog
+
+        from opencull_gui.photos import PhotoStore
+        from opencull_qt.launcher import AssessProgress
+        from opencull_qt.previews import PreviewLoader
+
+        shoot = Path(tempfile.mkdtemp())
+        _report, photos_path = build_shoot(shoot)
+        checkpoint = shoot / "c.json"
+        checkpoint.write_text(json_module.dumps({"assessments": [
+            {"photo": "A.JPG", "tier": "strong", "score": 70,
+             "rationale": "why A stands"},
+            {"photo": "B.JPG", "tier": "ordinary", "score": 40,
+             "rationale": "why B does not"},
+        ]}))
+        loader = PreviewLoader(PhotoStore(photos_path, shoot / "cache"))
+        self.addCleanup(loader.shutdown)
+        page = AssessProgress(
+            "A", names=["A.JPG", "B.JPG"], loader=loader,
+            checkpoint=checkpoint)
+        self.addCleanup(page.deleteLater)
+        page.set_job({"status": "running",
+                      "progress": {"completed_items": 2, "total_items": 2}})
+
+        for name in ("A.JPG", "B.JPG"):
+            tile = page.rated_sheet.tiles[name]
+            self.assertTrue(tile.eye.isVisibleTo(tile))
+        with mock.patch.object(QDialog, "exec", return_value=0) as shown:
+            page.rated_sheet.tiles["B.JPG"].eye.click()
+        shown.assert_called_once()
+
     def test_a_finished_assessment_hides_the_empty_waiting_panel(self):
         import json as json_module
 

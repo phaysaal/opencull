@@ -118,6 +118,11 @@ QPushButton#ghost {{
     border-radius: 8px; padding: 8px 16px;
 }}
 QPushButton#ghost[slim="true"] {{ padding: 8px 9px; }}
+QPushButton#tileEye {{
+    background: rgba(12, 11, 10, 0.72); color: {PAPER};
+    border: none; border-radius: 5px; padding: 0px;
+}}
+QPushButton#tileEye:hover {{ background: rgba(12, 11, 10, 0.92); }}
 QLabel#tileBadge {{
     background: rgba(12, 11, 10, 0.72); color: {SAFELIGHT};
     padding: 1px 5px; border-radius: 5px;

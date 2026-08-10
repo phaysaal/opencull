@@ -88,6 +88,7 @@ class Tile(QFrame):
     leavable-out."""
 
     toggled = Signal(str)
+    inspect_wanted = Signal(str)
 
     def __init__(self, name: str, selectable: bool = False):
         super().__init__()
@@ -126,6 +127,29 @@ class Tile(QFrame):
         self.badge.setFont(theme.body(8))
         self.badge.hide()
 
+        # And, opposite it, a way into the reasoning behind that verdict.
+        self.eye = QPushButton("\U0001F441", self)
+        self.eye.setObjectName("tileEye")
+        self.eye.setFont(theme.body(8))
+        self.eye.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.eye.setToolTip(
+            "Why this frame was rated as it was: the model's full "
+            "response, every axis it judged.")
+        self.eye.setFixedSize(24, 20)
+        self.eye.clicked.connect(
+            lambda _checked=False: self.inspect_wanted.emit(self.name))
+        self.eye.hide()
+
+    def set_inspectable(self, inspectable: bool) -> None:
+        """Offer a way into this frame's reasoning, or do not."""
+        self.eye.setVisible(bool(inspectable))
+        if inspectable:
+            self._place_eye()
+            self.eye.raise_()
+
+    def _place_eye(self) -> None:
+        self.eye.move(9, 9)
+
     def set_badge(self, text: str, tip: str = "") -> None:
         """A small verdict over the image's corner; empty clears it."""
         self.badge.setText(text)
@@ -154,6 +178,8 @@ class Tile(QFrame):
             self.glass.setGeometry(5, 5, tile, tile)
         if self.badge.isVisible():
             self._place_badge()
+        if self.eye.isVisible():
+            self._place_eye()
         self._render()
 
     def rerender(self) -> None:
@@ -211,6 +237,7 @@ class ContactSheet(QWidget):
     """
 
     changed = Signal()
+    inspect_wanted = Signal(str)
 
     def __init__(self, names: list[str], loader: PreviewLoader,
                  columns: int = COLUMNS, limit: int = LIMIT,
@@ -274,6 +301,7 @@ class ContactSheet(QWidget):
         for position, name in enumerate(self.names):
             tile = Tile(name, selectable=selectable)
             tile.toggled.connect(self.toggle)
+            tile.inspect_wanted.connect(self.inspect_wanted)
             self.tiles[name] = tile
             self.grid.addWidget(
                 tile, position // columns, position % columns)

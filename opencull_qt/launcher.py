@@ -303,6 +303,68 @@ class CullProgress(QWidget):
         self._refill(self._decisions())
 
 
+def show_assessment(record: dict, parent: QWidget | None = None) -> None:
+    """One frame's assessment, exactly as the model gave it."""
+    from opencull_gui.shortlist import ASSESSMENT_FIELDS
+
+    photo = str(record.get("photo") or "")
+    dialog = QDialog(parent)
+    dialog.setWindowTitle(f"Why {photo} was rated")
+    dialog.setStyleSheet(theme.STYLESHEET)
+    dialog.setMinimumWidth(560)
+    outer = QVBoxLayout(dialog)
+    outer.setContentsMargins(22, 20, 22, 18)
+    outer.setSpacing(10)
+    tier = str(record.get("tier") or "")
+    try:
+        score = f"score {float(record.get('score', 0)):.0f}"
+    except (TypeError, ValueError):
+        score = ""
+    head = QLabel(
+        f"{tier_stars(tier)}   {tier.title()}"
+        + (f"   ·   {score}" if score else ""))
+    head.setObjectName("clusterTitle")
+    head.setFont(theme.display(13))
+    outer.addWidget(head)
+    scroll = QScrollArea()
+    scroll.setWidgetResizable(True)
+    holder = QWidget()
+    holder.setObjectName("page")
+    body = QVBoxLayout(holder)
+    body.setContentsMargins(0, 0, 8, 0)
+    body.setSpacing(8)
+    for label, text in (
+        [("OVERALL", str(record.get("rationale") or ""))]
+        + [(field.replace("_", " ").upper(), str(record.get(field) or ""))
+           for field in ASSESSMENT_FIELDS]
+    ):
+        if not text.strip():
+            continue
+        name = QLabel(label)
+        name.setObjectName("bandTitle")
+        name.setFont(theme.display(7))
+        body.addWidget(name)
+        reading = QLabel(text.strip())
+        reading.setObjectName("hint")
+        reading.setWordWrap(True)
+        reading.setFont(theme.body(9))
+        body.addWidget(reading)
+    body.addStretch(1)
+    scroll.setWidget(holder)
+    outer.addWidget(scroll, 1)
+    close = QPushButton("Close")
+    close.setObjectName("ghost")
+    close.setFont(theme.body(10))
+    close.setCursor(Qt.CursorShape.PointingHandCursor)
+    close.clicked.connect(lambda _checked=False: dialog.accept())
+    row = QHBoxLayout()
+    row.addStretch(1)
+    row.addWidget(close)
+    outer.addLayout(row)
+    dialog.resize(600, 560)
+    dialog.exec()
+
+
 class AssessProgress(QWidget):
     """The assessment phase while its run is actually running.
 
@@ -419,16 +481,30 @@ class AssessProgress(QWidget):
         self.waiting_title.setText(
             f"Awaiting assessment · {len(waiting)}")
         self.rated_sheet = ContactSheet(rated, self.loader)
+        self._records = {str(item.get("photo") or ""): item
+                         for item in records}
+        self.rated_sheet.inspect_wanted.connect(self._explain)
         for item in records:
             tile = self.rated_sheet.tiles.get(str(item.get("photo") or ""))
+            if tile is None:
+                continue
             stars = tier_stars(str(item.get("tier") or ""))
-            if tile is not None and stars:
+            if stars:
                 tile.set_badge(stars, str(item.get("tier") or "").title())
+            tile.set_inspectable(True)
         self._rated_slot.addWidget(self.rated_sheet)
+
         self.waiting_sheet = None
         if show_waiting:
             self.waiting_sheet = ContactSheet(waiting, self.loader)
             self._waiting_slot.addWidget(self.waiting_sheet)
+
+    def _explain(self, photo: str) -> None:
+        """The model's own words about one frame, while the run continues."""
+        record = getattr(self, "_records", {}).get(photo)
+        if not record:
+            return
+        show_assessment(record, self)
 
     def set_job(self, job: dict) -> None:
         self.message.setText(str(job.get("message") or ""))
