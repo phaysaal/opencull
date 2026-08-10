@@ -305,6 +305,12 @@ class ProjectCatalog:
             report = str(report_record.get("path", "")) if isinstance(report_record, dict) else ""
             if not report:
                 report = str(record.get("historical_report") or "")
+            # The everything-included selection this catalog writes for a
+            # never-culled folder registers as the culling report so every
+            # phase can resolve one -- but it is not a cull, and the
+            # library must not dress it as one.
+            report_is_manual = (
+                "-manual-selection" in Path(report).name if report else False)
             # The assessment is a second run over the same folder, so the
             # library needs its state as well as the cull's: a card cannot
             # offer to start one that is already in flight.
@@ -325,6 +331,7 @@ class ProjectCatalog:
                 "manifest_sha256": project_sha256(project_path) if project_path.is_file() else "",
                 "report": report,
                 "report_available": bool(report and Path(report).is_file()),
+                "report_is_manual": report_is_manual,
                 "culling": current_cull,
                 "assessment": current_assessment,
                 "shortlist": shortlist,

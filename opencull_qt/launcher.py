@@ -121,7 +121,7 @@ def project_state(project: dict) -> tuple[str, str]:
         return "Failed", "failed"
     if project.get("shortlist_available"):
         return "Assessed", "ready"
-    if project.get("report_available"):
+    if project.get("report_available") and not project.get("report_is_manual"):
         return "Culled", "ready"
     if not project.get("available"):
         return "Folder offline", "failed"
@@ -455,7 +455,11 @@ class Launcher(QMainWindow):
 
     def _folder_card(self, project: dict) -> ProjectCard:
         label, tone = project_state(project)
+        # Review and assessment work over any selection, including the
+        # manual everything-included one; only the cull button's label and
+        # its costs-another-run warning care whether a model actually ran.
         culled = bool(project.get("report_available"))
+        culled_by_model = culled and not project.get("report_is_manual")
         running = tone == "running"
         actions: list[tuple[str, object]] = []
         if culled:
@@ -477,8 +481,9 @@ class Launcher(QMainWindow):
             actions.append((treatment, lambda p=project: self.develop(p)))
         if not running and project.get("available"):
             actions.append((
-                "Re-cull" if culled else "Cull",
-                lambda p=project, again=culled: self.cull_project(p, again)))
+                "Re-cull" if culled_by_model else "Cull",
+                lambda p=project, again=culled_by_model:
+                    self.cull_project(p, again)))
 
         total = int(contents.get("total") or 0)
         subtitle = (
@@ -514,6 +519,7 @@ class Launcher(QMainWindow):
     def _folder_row(self, project: dict, last: bool) -> Row:
         label, tone = project_state(project)
         culled = bool(project.get("report_available"))
+        culled_by_model = culled and not project.get("report_is_manual")
         running = tone == "running"
         actions: list[tuple[str, object]] = []
 
@@ -529,8 +535,9 @@ class Launcher(QMainWindow):
 
         if not running and project.get("available"):
             actions.append((
-                "Re-cull" if culled else "Cull",
-                lambda p=project, again=culled: self.cull_project(p, again)))
+                "Re-cull" if culled_by_model else "Cull",
+                lambda p=project, again=culled_by_model:
+                    self.cull_project(p, again)))
 
         return Row(
             str(project.get("name", "")),

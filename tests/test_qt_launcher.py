@@ -53,6 +53,14 @@ class LauncherLogicTests(unittest.TestCase):
             self.launcher.project_state({"report_available": True}),
             ("Culled", "ready"))
 
+    def test_a_manual_selection_does_not_read_as_culled(self):
+        """The everything-included fallback is plumbing, not a cull."""
+        self.assertEqual(
+            self.launcher.project_state(
+                {"available": True, "report_available": True,
+                 "report_is_manual": True}),
+            ("Not culled", ""))
+
     def test_a_raw_folder_offers_development(self):
         self.assertEqual(self.launcher.treatment_label("raw"), "Develop")
 
@@ -417,6 +425,18 @@ class LauncherWindowTests(unittest.TestCase):
         self.folder(window, "raw")
         window.refresh()
         self.assertNotIn("Assess", self.buttons(self.cards(window)[0]))
+
+    def test_a_manual_selection_folder_still_offers_a_first_cull(self):
+        window, _ = self.build(projects=[
+            {"id": "p1", "name": "A", "photos": "/p/a", "available": True,
+             "report_available": True, "report": "/p/a/m.json",
+             "report_is_manual": True}])
+        self.folder(window, "raw")
+        window.refresh()
+        buttons = self.buttons(self.cards(window)[0])
+        self.assertIn("Cull", buttons)
+        self.assertNotIn("Re-cull", buttons)
+        self.assertEqual(self.cards(window)[0].badge.text(), "NOT CULLED")
 
     def test_an_assessed_folder_offers_to_open_it_rather_than_redo_it(self):
         window, _ = self.build(projects=[

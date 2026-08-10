@@ -76,6 +76,21 @@ class ProjectCatalogTests(unittest.TestCase):
             self.assertEqual(state["projects"][0]["culling"]["id"], "job-1")
             self.assertEqual(queue["jobs"][0]["status"], "running")
 
+    def test_the_manual_selection_report_is_flagged_as_manual(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            photos = root / "Shoot"; photos.mkdir()
+            from PIL import Image
+            Image.new("RGB", (60, 40), (90, 110, 130)).save(
+                photos / "A0001.JPG")
+            catalog = ProjectCatalog(root / "support" / "projects.json")
+            catalog.add(str(photos))
+            record = catalog.public()["projects"][0]
+            catalog.manual_selection_report(record["id"])
+            listed = catalog.public()["projects"][0]
+            self.assertTrue(listed["report_available"])
+            self.assertTrue(listed["report_is_manual"])
+
     def test_an_old_failure_does_not_shadow_the_run_that_succeeded(self):
         """The current job is the one in flight, else the newest by order."""
         with tempfile.TemporaryDirectory() as temporary:
