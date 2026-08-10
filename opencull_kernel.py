@@ -371,7 +371,12 @@ def build_checkpoint(
 
 
 def candidate_path(source_directory: str, candidate: dict[str, Any]) -> str:
-    relative = candidate.get("relative_path", candidate.get("name", ""))
+    # A RAW frame's manifest record names the preview the scanner
+    # materialized for it; that is the photograph a model can be shown.
+    preview = candidate.get("preview")
+    relative = (
+        preview if isinstance(preview, str) and preview
+        else candidate.get("relative_path", candidate.get("name", "")))
     if not isinstance(relative, str) or not relative:
         return ""
     return str(Path(str(source_directory)).expanduser() / relative)

@@ -43,6 +43,44 @@ BITMAP_EXTENSIONS = {".avif", ".heic", ".heif", ".jpeg", ".jpg", ".png", ".tif",
 SUPPORTED_EXTENSIONS = RAW_EXTENSIONS | BITMAP_EXTENSIONS
 DATETIME_TAGS = {"DateTimeOriginal", "DateTimeDigitized", "DateTime"}
 MANAGED_PROJECT_DIRECTORY_NAMES = {"darkimiya", ".darkimiya", ".opencull"}
+# Order matters for writing: a folder that already carries a visible-era
+# directory keeps using it; a fresh folder gets the hidden one.
+MANAGED_DIRECTORY_CANDIDATES = (".darkimiya", "Darkimiya", ".opencull")
+PREVIEW_BOUND = 2048
+
+
+def managed_directory(root: Path) -> Path:
+    for name in MANAGED_DIRECTORY_CANDIDATES:
+        candidate = root / name
+        if candidate.is_dir():
+            return candidate
+    return root / MANAGED_DIRECTORY_CANDIDATES[0]
+
+
+def preview_cache_name(relative: str, sha256_prefix: str) -> str:
+    """One flat, content-keyed name per source frame."""
+    return f"{relative.replace('/', '__')}.{sha256_prefix[:8]}.preview.jpg"
+
+
+def visible_photograph(root: Path, relative: str) -> Path:
+    """The file a model can actually be shown for one frame.
+
+    Raw sensor bytes are not an image to an image reader. The scanner
+    materializes a content-keyed preview for every RAW frame under the
+    project's Previews area; this resolves to that preview when the
+    original is RAW, and to the original itself otherwise.
+    """
+    original = root / relative
+    if original.suffix.lower() not in RAW_EXTENSIONS:
+        return original
+    flat = relative.replace("/", "__")
+    for managed in MANAGED_DIRECTORY_CANDIDATES:
+        previews = root / managed / "Previews"
+        if previews.is_dir():
+            matches = sorted(previews.glob(f"{flat}.*.preview.jpg"))
+            if matches:
+                return matches[-1]
+    return original
 
 
 @dataclass
@@ -61,6 +99,7 @@ class Measured:
     clipping: float
     composition_proxy: float
     sha256_prefix: str
+    preview: str = ""
 
     def manifest_record(self) -> dict[str, Any]:
         return {
@@ -76,6 +115,10 @@ class Measured:
             "clipping": round(self.clipping, 3),
             "composition_proxy": round(self.composition_proxy, 2),
             "sha256_prefix": self.sha256_prefix,
+            # Present only for frames whose original no image reader can
+            # open: a JPEG manifest stays byte-identical to what it was
+            # before previews existed, and its checkpoints stay valid.
+            **({"preview": self.preview} if self.preview else {}),
         }
 
 
@@ -330,9 +373,28 @@ def measure(path: Path, root: Path) -> Measured:
         + 0.10 * composition_proxy
         - min(20.0, clipping * 0.8)
     )
+    relative = path.relative_to(root).as_posix()
+    sha256_prefix = file_sha256_prefix(path)
+    preview_relative = ""
+    if path.suffix.lower() in RAW_EXTENSIONS:
+        # A model asked to look at a photograph must be handed something an
+        # image reader can open; raw sensor bytes are not that. The camera's
+        # embedded rendering is materialized once per frame, content-keyed,
+        # into the project's own Previews area.
+        managed = managed_directory(root)
+        cache = managed / "Previews" / preview_cache_name(
+            relative, sha256_prefix)
+        if not cache.is_file():
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            bounded = ImageOps.contain(
+                image, (PREVIEW_BOUND, PREVIEW_BOUND),
+                Image.Resampling.LANCZOS)
+            bounded.save(cache, "JPEG", quality=88)
+        preview_relative = (
+            f"{managed.name}/Previews/{cache.name}")
     return Measured(
         path=path,
-        name=path.relative_to(root).as_posix(),
+        name=relative,
         captured=captured,
         timestamp=timestamp,
         width=width,
@@ -344,7 +406,8 @@ def measure(path: Path, root: Path) -> Measured:
         contrast=contrast,
         clipping=clipping,
         composition_proxy=composition_proxy,
-        sha256_prefix=file_sha256_prefix(path),
+        sha256_prefix=sha256_prefix,
+        preview=preview_relative,
     )
 
 
@@ -396,7 +459,10 @@ def scan_directory(
     """Read a photo directory and return its complete manifest as JSON.
 
     This is the Kimiya-facing kernel function: deterministic for a fixed
-    directory state, read-only, and free of output-file side effects.
+    directory state. Source photographs are read only and never modified;
+    the one thing written is a content-keyed preview cache for RAW frames,
+    inside the project's own managed directory, so that models asked to
+    look at a photograph can be handed something an image reader opens.
 
     ``only_photos`` is a JSON list of root-relative names: the photographer's
     prefilter, applied before anything is measured so an excluded frame is

@@ -7,6 +7,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from scan import visible_photograph
+
 FORMAT = "opencull-edit-directions-v1"
 CHECKPOINT_FORMAT = "opencull-edit-directions-checkpoint-v1"
 FIELDS = (
@@ -139,7 +141,8 @@ def parse_edit_candidates(request: str) -> list[dict[str, Any]]:
 
 def edit_candidate_path(request: str, candidate: dict[str, Any]) -> str:
     value = json.loads(str(request))
-    return str(Path(value["photos_root"]) / Path(candidate["photo"]))
+    return str(visible_photograph(
+        Path(value["photos_root"]), str(candidate["photo"])))
 
 
 def edit_direction_prompt(candidate: dict[str, Any], profile: str) -> str:

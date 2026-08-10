@@ -8,7 +8,12 @@ from pathlib import Path
 from typing import Any
 
 from opencull_gui.assets import index_asset_families
-from scan import BITMAP_EXTENSIONS, RAW_EXTENSIONS, measure
+from scan import (  # noqa: F401
+    BITMAP_EXTENSIONS,
+    RAW_EXTENSIONS,
+    measure,
+    visible_photograph,
+)
 
 SHORTLIST_CHECKPOINT_FORMAT = "opencull-professional-checkpoint-v1"
 ASSESSMENT_FIELDS = (
@@ -219,7 +224,8 @@ def professional_candidate_path(
     bundle: str, candidate: dict[str, Any]
 ) -> str:
     data = json.loads(str(bundle))
-    return str(Path(data["photos_root"]) / Path(candidate["photo"]))
+    return str(visible_photograph(
+        Path(data["photos_root"]), str(candidate["photo"])))
 
 
 def professional_assessment_prompt(
