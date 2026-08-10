@@ -1201,9 +1201,14 @@ class Launcher(QMainWindow):
         pay for it are the same decision.
         """
         dialog = CriteriaDialog(
-            name, frames, culled, getattr(self, "stance", ""), self)
+            name, frames, culled,
+            getattr(self, "criteria_choice", None)
+            or getattr(self, "stance", ""), self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return ""
+        # The parts are remembered for the next dialog; the composed
+        # prose is what the run itself is judged by.
+        self.criteria_choice = dialog.choice()
         return dialog.stance()
 
     def rate_by_hand(self, bench: Bench,

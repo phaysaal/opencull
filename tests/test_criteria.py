@@ -1,4 +1,4 @@
-"""The bar a shoot is judged against, and choosing it on purpose."""
+"""The composed bar: one strictness, any lenses, one run."""
 
 from __future__ import annotations
 
@@ -19,44 +19,67 @@ except ImportError:  # pragma: no cover - exercised only without PySide6
 from opencull_gui import criteria  # noqa: E402
 
 
-class StanceTests(unittest.TestCase):
-    def test_every_stance_names_its_bar_as_a_question(self):
-        for item in criteria.STANCES:
-            self.assertTrue(item["name"])
+class CriteriaModelTests(unittest.TestCase):
+    def test_every_strictness_names_its_bar_as_a_question(self):
+        for item in criteria.STRICTNESS:
             self.assertTrue(item["bar"].endswith("?"), item["id"])
-            self.assertTrue(item["detail"])
 
-    def test_the_four_bars_are_the_ones_the_prompt_understands(self):
-        self.assertEqual(
-            criteria.STANCE_IDS,
-            ("professional", "artistic", "documentary", "family"))
+    def test_the_composition_reads_as_one_description(self):
+        composed = criteria.compose({
+            "strictness": "gentle",
+            "lenses": ["family", "place"],
+            "words": "quiet light, nothing posed",
+        })
+        self.assertIn("gentle bar", composed)
+        self.assertIn("family", composed)
+        self.assertIn("place", composed)
+        self.assertIn("quiet light, nothing posed", composed)
 
-    def test_an_unset_stance_is_professional_not_the_kernels_family(self):
-        # The kernel falls back to family, the gentlest bar there is. An
-        # application for deciding what to develop must not apply it silently.
-        self.assertEqual(criteria.normalise(""), "professional")
-        self.assertEqual(criteria.normalise(None), "professional")
-        self.assertEqual(criteria.DEFAULT_STANCE, "professional")
+    def test_one_run_means_one_string_whatever_is_chosen(self):
+        self.assertIsInstance(
+            criteria.compose({"strictness": "strict",
+                              "lenses": list(criteria.LENS_IDS)}), str)
 
-    def test_a_stance_that_does_not_exist_falls_back_rather_than_raising(self):
-        self.assertEqual(criteria.normalise("gallery"), "professional")
+    def test_the_single_choice_era_still_reads(self):
+        for legacy, expected_strictness in (
+            ("professional", "strict"), ("artistic", "balanced"),
+            ("documentary", "balanced"), ("family", "gentle"),
+        ):
+            choice = criteria.normalise_choice(legacy)
+            self.assertEqual(choice["strictness"], expected_strictness)
+            self.assertEqual(len(choice["lenses"]), 1)
 
-    def test_case_and_spacing_do_not_invent_a_new_bar(self):
-        self.assertEqual(criteria.normalise("  ARTISTIC "), "artistic")
+    def test_garbage_falls_back_to_the_deliberate_strict_default(self):
+        for value in ("", None, "banquet", 7, {"strictness": "x"},
+                      {"lenses": ["y"]}):
+            choice = criteria.normalise_choice(value)
+            self.assertEqual(choice["strictness"], "strict")
+            self.assertEqual(choice["lenses"], ["craft"])
 
-    def test_asking_for_a_stance_that_does_not_exist_is_refused(self):
-        with self.assertRaises(criteria.CriteriaError):
-            criteria.stance("gallery")
+    def test_lenses_deduplicate_and_words_are_bounded(self):
+        choice = criteria.normalise_choice({
+            "strictness": "balanced",
+            "lenses": ["family", "family", "place"],
+            "words": "x" * 1000,
+        })
+        self.assertEqual(choice["lenses"], ["family", "place"])
+        self.assertEqual(len(choice["words"]), criteria.WORDS_LIMIT)
 
     def test_a_run_records_the_bar_it_was_measured_against(self):
-        record = criteria.record("artistic")
-        self.assertEqual(record["format"], criteria.FORMAT)
-        self.assertEqual(record["stance"], "artistic")
-        self.assertTrue(record["bar"].endswith("?"))
+        value = criteria.record({"strictness": "gentle",
+                                 "lenses": ["family", "place"],
+                                 "words": "w"})
+        self.assertEqual(value["format"], criteria.FORMAT)
+        self.assertEqual(value["strictness"], "gentle")
+        self.assertEqual(value["lenses"], ["family", "place"])
+        self.assertEqual(value["stance"],
+                         criteria.compose(value))
 
     def test_a_bar_is_described_in_one_line(self):
-        self.assertIn("Professional", criteria.describe("professional"))
-        self.assertIn("client", criteria.describe("professional"))
+        self.assertEqual(
+            criteria.describe({"strictness": "gentle",
+                               "lenses": ["family", "place"]}),
+            "Gentle · Family + Place & moment")
 
 
 @unittest.skipUnless(QApplication is not None, "PySide6 is not installed")
@@ -65,7 +88,7 @@ class CriteriaDialogTests(unittest.TestCase):
     def setUpClass(cls):
         cls.application = QApplication.instance() or QApplication([])
 
-    def dialog(self, frames: int = 23, culled: bool = False, stance: str = ""):
+    def dialog(self, frames: int = 23, culled: bool = False, stance=""):
         from opencull_qt.criteria import CriteriaDialog
 
         value = CriteriaDialog("A Journey", frames, culled, stance)
@@ -78,20 +101,49 @@ class CriteriaDialogTests(unittest.TestCase):
         return "\n".join(
             label.text() for label in dialog.findChildren(QLabel))
 
-    def test_all_four_bars_are_offered(self):
-        self.assertEqual(len(self.dialog().stances), 4)
+    def test_three_bar_heights_and_four_lenses_are_offered(self):
+        dialog = self.dialog()
+        self.assertEqual(len(dialog.strictness_options), 3)
+        self.assertEqual(len(dialog.lens_options), 4)
 
     def test_it_opens_on_the_deliberate_default(self):
-        self.assertEqual(self.dialog().stance(), "professional")
+        choice = self.dialog().choice()
+        self.assertEqual(choice["strictness"], "strict")
+        self.assertEqual(choice["lenses"], ["craft"])
 
     def test_it_reopens_on_the_bar_used_last_time(self):
-        self.assertEqual(self.dialog(stance="documentary").stance(),
-                         "documentary")
+        remembered = {"strictness": "gentle",
+                      "lenses": ["family", "place"], "words": "soft"}
+        dialog = self.dialog(stance=remembered)
+        self.assertEqual(dialog.choice(), criteria.normalise_choice(
+            remembered))
 
-    def test_choosing_a_bar_is_what_comes_back(self):
+    def test_a_legacy_stance_preselects_its_translation(self):
+        self.assertEqual(
+            self.dialog(stance="documentary").choice()["lenses"],
+            ["place"])
+
+    def test_several_lenses_compose_into_one_stance(self):
         dialog = self.dialog()
-        dialog.stances[1].choice.setChecked(True)
-        self.assertEqual(dialog.stance(), "artistic")
+        for widget in dialog.lens_options:
+            widget.choice.setChecked(
+                widget.item["id"] in {"family", "place"})
+        stance = dialog.stance()
+        self.assertIn("family", stance)
+        self.assertIn("place", stance)
+
+    def test_no_lens_disables_the_run(self):
+        dialog = self.dialog()
+        for widget in dialog.lens_options:
+            widget.choice.setChecked(False)
+        self.assertFalse(dialog.run.isEnabled())
+        dialog.lens_options[0].choice.setChecked(True)
+        self.assertTrue(dialog.run.isEnabled())
+
+    def test_own_words_ride_along(self):
+        dialog = self.dialog()
+        dialog.words.setText("quiet mornings")
+        self.assertIn("quiet mornings", dialog.stance())
 
     def test_it_says_what_the_run_will_cost(self):
         self.assertIn("23 model calls", self.text(self.dialog(23, culled=False)))

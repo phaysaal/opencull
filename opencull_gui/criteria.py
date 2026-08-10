@@ -1,107 +1,188 @@
 """What a shoot is judged by, and who chose it.
 
-The assessment has always been shaped by a single word threaded into its
-prompt -- "Editing profile: family." -- and nothing in the application ever
-chose that word. Every assessment anyone has run has therefore been judged
-by the default, which is the gentlest of the four and the wrong one for
-most of the work this application is for.
+The assessment is shaped by one description threaded into its prompt.
+For a long time that description was a single canned word, and no shoot
+fits a single word: a family trip is people AND places; a commission is
+craft AND a client's taste. So the bar is composed instead of picked:
 
-A stance does not change what is looked at. The same ten axes come back
-either way. It changes what counts as strong: the same frame is a keeper to
-a family editor and an ordinary one to a gallery. That is worth choosing on
-purpose, and worth recording, because a tier means nothing without the bar
-it was measured against.
+Strictness is one choice -- a frame cannot be judged gently and harshly
+at once. Lenses are many -- the kinds of merit that count can genuinely
+coexist. The photographer's own words, when given, ride along verbatim.
+All of it composes into one description for one run: one model call per
+frame, whatever the bar says.
 
-Two further controls belong here and are not built. Choosing which axes are
-judged, and asking for a plain releasable-or-not verdict, both need the
-kernel's typed schema, its normalizer and its validator changed together --
-and none of that can be shown to work without a live provider. The stance
-alone reaches the prompt today, by the path that was already there.
+A bar does not change what is looked at. The same axes come back either
+way. It changes what counts as strong, and it is recorded beside the
+shortlist, because a tier means nothing without the bar it was measured
+against.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-FORMAT = "opencull-assessment-criteria-v1"
+FORMAT = "opencull-assessment-criteria-v2"
 
-# The word each stance puts into the prompt is its id: the kernel lowercases
-# and interpolates it, so these are the vocabulary, not labels for it.
-STANCES: tuple[dict[str, str], ...] = (
+STRICTNESS: tuple[dict[str, str], ...] = (
     {
-        "id": "professional",
-        "name": "Professional",
+        "id": "gentle",
+        "name": "Gentle",
+        "bar": "Is this worth keeping?",
+        "detail": "Everyone present and recognisable is usually enough. "
+                  "Serious defects still count against a frame.",
+    },
+    {
+        "id": "balanced",
+        "name": "Balanced",
+        "bar": "Would you show it twice?",
+        "detail": "Worth developing if it earns a second look on its own, "
+                  "not merely as a record that something happened.",
+    },
+    {
+        "id": "strict",
+        "name": "Strict",
         "bar": "Would a client pay for this frame?",
         "detail": "An absolute commercial bar. Technically sound is not "
                   "enough; the frame has to earn its place.",
     },
-    {
-        "id": "artistic",
-        "name": "Artistic",
-        "bar": "Is this frame interesting?",
-        "detail": "Rewards the distinctive over the correct. A flawed frame "
-                  "that says something outranks a clean one that does not.",
-    },
-    {
-        "id": "documentary",
-        "name": "Documentary",
-        "bar": "Does this frame carry what happened?",
-        "detail": "Moment and legibility over polish. An imperfect frame of "
-                  "the real thing beats a handsome frame of nothing.",
-    },
+)
+
+LENSES: tuple[dict[str, str], ...] = (
     {
         "id": "family",
         "name": "Family",
-        "bar": "Is this worth keeping?",
-        "detail": "The gentlest bar. Everyone present and recognisable is "
-                  "usually enough.",
+        "detail": "People and being together: expressions, gestures, "
+                  "relationships, the moment between people",
+    },
+    {
+        "id": "place",
+        "name": "Place & moment",
+        "detail": "Travel and documentary: where it was, what happened, "
+                  "the sense of actually standing there",
+    },
+    {
+        "id": "artistic",
+        "name": "Artistic",
+        "detail": "The distinctive over the correct: light, mood, an "
+                  "idea -- a flawed frame that says something",
+    },
+    {
+        "id": "craft",
+        "name": "Craft",
+        "detail": "Composition, handling of light, timing and technical "
+                  "polish as merits in their own right",
     },
 )
 
-DEFAULT_STANCE = "professional"
+STRICTNESS_IDS = tuple(item["id"] for item in STRICTNESS)
+LENS_IDS = tuple(item["id"] for item in LENSES)
 
-STANCE_IDS = tuple(item["id"] for item in STANCES)
+DEFAULT_CHOICE: dict[str, Any] = {
+    "strictness": "strict", "lenses": ["craft"], "words": "",
+}
+
+# The stances of the single-choice era, kept readable forever: a stored
+# preference or an old shortlist's record maps onto the composed model.
+LEGACY_STANCES: dict[str, dict[str, Any]] = {
+    "professional": {"strictness": "strict", "lenses": ["craft"],
+                     "words": ""},
+    "artistic": {"strictness": "balanced", "lenses": ["artistic"],
+                 "words": ""},
+    "documentary": {"strictness": "balanced", "lenses": ["place"],
+                    "words": ""},
+    "family": {"strictness": "gentle", "lenses": ["family"], "words": ""},
+}
+
+WORDS_LIMIT = 300
 
 
 class CriteriaError(ValueError):
     """A shoot cannot be judged by criteria that do not exist."""
 
 
-def stance(identifier: str) -> dict[str, str]:
-    """One stance, by name."""
-    for item in STANCES:
+def strictness(identifier: str) -> dict[str, str]:
+    for item in STRICTNESS:
         if item["id"] == str(identifier).strip().lower():
             return item
-    raise CriteriaError(f"unsupported stance: {identifier!r}")
+    raise CriteriaError(f"unsupported strictness: {identifier!r}")
 
 
-def normalise(identifier: str | None) -> str:
-    """The stance to run under, falling back to the deliberate default.
+def lens(identifier: str) -> dict[str, str]:
+    for item in LENSES:
+        if item["id"] == str(identifier).strip().lower():
+            return item
+    raise CriteriaError(f"unsupported lens: {identifier!r}")
 
-    The fallback is professional rather than the kernel's own default of
-    family: this application is for photographers deciding what to develop,
-    and an unset stance should not quietly apply the gentlest bar there is.
+
+def normalise_choice(value: Any) -> dict[str, Any]:
+    """A valid choice from whatever was remembered, without raising.
+
+    Accepts the composed dict, a legacy single-stance id, or garbage; the
+    fallback is the deliberate strict default rather than the gentlest
+    bar there is.
     """
-    value = str(identifier or "").strip().lower()
-    return value if value in STANCE_IDS else DEFAULT_STANCE
+    if isinstance(value, str):
+        legacy = LEGACY_STANCES.get(value.strip().lower())
+        if legacy is not None:
+            return {**legacy, "lenses": list(legacy["lenses"])}
+        return {**DEFAULT_CHOICE, "lenses": list(DEFAULT_CHOICE["lenses"])}
+    if not isinstance(value, dict):
+        return {**DEFAULT_CHOICE, "lenses": list(DEFAULT_CHOICE["lenses"])}
+    chosen_strictness = str(value.get("strictness") or "").strip().lower()
+    if chosen_strictness not in STRICTNESS_IDS:
+        chosen_strictness = DEFAULT_CHOICE["strictness"]
+    lenses = [
+        str(item).strip().lower()
+        for item in (value.get("lenses") or [])
+        if str(item).strip().lower() in LENS_IDS
+    ]
+    if not lenses:
+        lenses = list(DEFAULT_CHOICE["lenses"])
+    seen: list[str] = []
+    for item in lenses:
+        if item not in seen:
+            seen.append(item)
+    words = str(value.get("words") or "").strip()[:WORDS_LIMIT]
+    return {"strictness": chosen_strictness, "lenses": seen, "words": words}
 
 
-def describe(identifier: str) -> str:
+def compose(choice: Any) -> str:
+    """One description for one run, from the composed parts.
+
+    This is the text the assessment prompt reads, so it is written as
+    prose for a model rather than as a machine tag.
+    """
+    value = normalise_choice(choice)
+    chosen = strictness(value["strictness"])
+    parts = [f"{chosen['name'].lower()} bar ({chosen['bar'].rstrip('?')}?)"]
+    parts.append("judged through " + "; ".join(
+        f"{lens(item)['name'].lower()}: {lens(item)['detail']}"
+        for item in value["lenses"]))
+    if value["words"]:
+        parts.append(
+            f"in the photographer's own words: {value['words']}")
+    return " -- ".join(parts)
+
+
+def describe(choice: Any) -> str:
     """One line naming the bar a run was judged against."""
-    item = stance(normalise(identifier))
-    return f"{item['name']} — {item['bar']}"
+    value = normalise_choice(choice)
+    names = " + ".join(lens(item)["name"] for item in value["lenses"])
+    return f"{strictness(value['strictness'])['name']} · {names}"
 
 
-def record(identifier: str) -> dict[str, Any]:
+def record(choice: Any) -> dict[str, Any]:
     """What to write down beside a shortlist so its tiers can be read.
 
     A tier is meaningless without the bar it was measured against, and a
-    photographer comparing two shoots months apart has no way to recover it
-    from the tiers themselves.
+    photographer comparing two shoots months apart has no way to recover
+    it from the tiers themselves.
     """
-    chosen = stance(normalise(identifier))
+    value = normalise_choice(choice)
     return {
         "format": FORMAT,
-        "stance": chosen["id"],
-        "bar": chosen["bar"],
+        "strictness": value["strictness"],
+        "lenses": list(value["lenses"]),
+        "words": value["words"],
+        "stance": compose(value),
     }

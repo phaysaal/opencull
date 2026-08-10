@@ -653,8 +653,14 @@ class JobManager:
             raise JobError(f"review file is missing: {review_path}")
         if policy not in {"human_only", "effective", "ai_only", "all"}:
             raise JobError(f"unsupported candidate policy: {policy}")
-        if profile not in PROFILES:
-            raise JobError(f"unsupported culling profile: {profile}")
+        # The bar is a composed description, not one of the culling
+        # profiles: strictness plus any lenses plus the photographer's
+        # own words, in prose the prompt reads directly.
+        profile = str(profile or "").strip()
+        if not profile or len(profile) > 700:
+            raise JobError(
+                "the assessment bar must be a short description of what "
+                "to judge by")
         try:
             project_path, project = load_or_create_folder_project(
                 source, report_path.stem,
@@ -899,8 +905,11 @@ class JobManager:
         style_path = Path(style_profile).expanduser().resolve() if str(style_profile).strip() else None
         if style_path is not None and not style_path.is_file():
             raise JobError("personal style profile does not exist")
-        if profile not in PROFILES:
-            raise JobError(f"unsupported culling profile: {profile}")
+        profile = str(profile or "").strip()
+        if not profile or len(profile) > 700:
+            raise JobError(
+                "the editing profile must be a short description of what "
+                "to judge by")
         try:
             project_path, project = load_or_create_folder_project(
                 source, shortlist_path.stem)
