@@ -214,7 +214,11 @@ class Invitation(QWidget):
         self.button.setObjectName("primary")
         self.button.setFont(theme.body(10))
         self.button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.button.clicked.connect(on_action)
+        # Qt's clicked signal carries a checked flag, and PySide hands it
+        # to any slot willing to take an argument -- silently overwriting
+        # the first bound default of a lambda that captured, say, a job id.
+        # A phase's handler takes no arguments, so none are passed on.
+        self.button.clicked.connect(lambda _checked=False: on_action())
         actions.addWidget(self.button)
 
         # A second way through, for the photographer who wants the phase
@@ -227,7 +231,7 @@ class Invitation(QWidget):
             self.other.setObjectName("ghost")
             self.other.setFont(theme.body(10))
             self.other.setCursor(Qt.CursorShape.PointingHandCursor)
-            self.other.clicked.connect(handler)
+            self.other.clicked.connect(lambda _checked=False: handler())
             actions.addWidget(self.other)
 
         actions.addStretch(1)

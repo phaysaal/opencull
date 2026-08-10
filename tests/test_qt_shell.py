@@ -43,6 +43,30 @@ class PhaseBarTests(unittest.TestCase):
     def labels(self, bar) -> list[str]:
         return [button.text() for button in bar._buttons.values()]
 
+    def test_an_invitations_press_carries_no_qt_checked_flag(self):
+        """Qt's checked bool must never land in a handler's bound default."""
+        from opencull_qt.shell import Invitation
+
+        seen = []
+
+        def handler(job="the-real-id"):
+            seen.append(job)
+
+        invitation = Invitation(
+            "Paused", "body", "Resume", handler)
+        self.addCleanup(invitation.deleteLater)
+        invitation.button.click()
+        self.assertEqual(seen, ["the-real-id"])
+
+        other_seen = []
+        second = Invitation(
+            "Paused", "body", "Resume", lambda: None,
+            instead=("Instead", lambda job="second-id":
+                     other_seen.append(job)))
+        self.addCleanup(second.deleteLater)
+        second.other.click()
+        self.assertEqual(other_seen, ["second-id"])
+
     def test_the_phases_are_numbered_in_the_order_they_happen(self):
         numbers = [text.split()[0] for text in self.labels(self.bar())]
         self.assertEqual(
