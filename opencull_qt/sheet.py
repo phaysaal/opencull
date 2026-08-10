@@ -120,6 +120,25 @@ class Tile(QFrame):
         caption.setFixedHeight(CAPTION)
         layout.addWidget(caption)
 
+        # An optional verdict worn on the photograph itself.
+        self.badge = QLabel("", self)
+        self.badge.setObjectName("tileBadge")
+        self.badge.setFont(theme.body(8))
+        self.badge.hide()
+
+    def set_badge(self, text: str, tip: str = "") -> None:
+        """A small verdict over the image's corner; empty clears it."""
+        self.badge.setText(text)
+        self.badge.setToolTip(tip)
+        self.badge.setVisible(bool(text))
+        if text:
+            self._place_badge()
+            self.badge.raise_()
+
+    def _place_badge(self) -> None:
+        self.badge.adjustSize()
+        self.badge.move(5 + self._tile - self.badge.width() - 4, 9)
+
     def set_pixmap(self, pixmap: QPixmap) -> None:
         self._pixmap = pixmap
         self._render()
@@ -133,6 +152,8 @@ class Tile(QFrame):
         self.image.setFixedSize(tile, tile)
         if self.glass.isVisible():
             self.glass.setGeometry(5, 5, tile, tile)
+        if self.badge.isVisible():
+            self._place_badge()
         self._render()
 
     def rerender(self) -> None:

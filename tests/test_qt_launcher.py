@@ -1021,6 +1021,11 @@ class LauncherWindowTests(unittest.TestCase):
         self.assertIn("1 strong", page.rated_title.text())
         self.assertIn("1 ordinary", page.rated_title.text())
         self.assertIn("2", page.waiting_title.text())
+        # The verdict is worn on the photograph itself, as stars.
+        self.assertEqual(
+            page.rated_sheet.tiles["A.JPG"].badge.text(), "★★★★☆")
+        self.assertEqual(
+            page.rated_sheet.tiles["B.JPG"].badge.text(), "★★☆☆☆")
 
     def test_reculling_is_refused_unless_confirmed(self):
         window, services = self.build(projects=[])

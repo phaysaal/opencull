@@ -118,6 +118,10 @@ QPushButton#ghost {{
     border-radius: 8px; padding: 8px 16px;
 }}
 QPushButton#ghost[slim="true"] {{ padding: 8px 9px; }}
+QLabel#tileBadge {{
+    background: rgba(12, 11, 10, 0.72); color: {SAFELIGHT};
+    padding: 1px 5px; border-radius: 5px;
+}}
 QPushButton#ghost:hover {{ background: {RAISED}; border-color: #3B3633; }}
 QPushButton#ghost:pressed {{ background: {EDGE_SOFT}; }}
 QPushButton#ghost:disabled {{ color: {FAINT}; border-color: {EDGE_SOFT}; }}

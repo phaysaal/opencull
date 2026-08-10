@@ -299,6 +299,17 @@ class CullProgress(QWidget):
         self._refill(self._decisions())
 
 
+TIER_STARS = {
+    "exceptional": 5, "strong": 4, "promising": 3, "ordinary": 2,
+    "reject": 1,
+}
+
+
+def tier_stars(tier: str) -> str:
+    filled = TIER_STARS.get(str(tier or "").strip().lower(), 0)
+    return "★" * filled + "☆" * (5 - filled) if filled else ""
+
+
 class AssessProgress(QWidget):
     """The assessment phase while its run is actually running.
 
@@ -413,6 +424,11 @@ class AssessProgress(QWidget):
         self.waiting_title.setText(
             f"Awaiting assessment · {len(waiting)}")
         self.rated_sheet = ContactSheet(rated, self.loader)
+        for item in records:
+            tile = self.rated_sheet.tiles.get(str(item.get("photo") or ""))
+            stars = tier_stars(str(item.get("tier") or ""))
+            if tile is not None and stars:
+                tile.set_badge(stars, str(item.get("tier") or "").title())
         self._rated_slot.addWidget(self.rated_sheet)
         self.waiting_sheet = ContactSheet(waiting, self.loader)
         self._waiting_slot.addWidget(self.waiting_sheet)
