@@ -3055,7 +3055,7 @@ class GuiJobTests(unittest.TestCase):
                 autostart=False)
             try:
                 manager.add(str(photos), str(root / "result.json"))
-                with self.assertRaisesRegex(JobError, "already queued"):
+                with self.assertRaisesRegex(JobError, "already being culled"):
                     manager.add(str(photos), str(root / "other.json"))
                 existing = root / "existing.json"
                 existing.write_text("{}")
@@ -3090,6 +3090,29 @@ class GuiJobTests(unittest.TestCase):
                 manager._state["jobs"][-1]["status"] = "queued"
                 busy = manager._default_output(photos, reports)
                 self.assertEqual(busy, reports / "photos-results-2.json")
+            finally:
+                manager.shutdown()
+
+    def test_the_queue_guard_says_what_is_actually_happening(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            photos = root / "photos"
+            photos.mkdir()
+            manager = JobManager(
+                root / "jobs.json", root, command_builder=lambda job: [],
+                autostart=False)
+            try:
+                blocking = {
+                    "id": "b1", "kind": "culling", "photos": str(photos),
+                    "output": str(root / "r.json"),
+                    "checkpoint": str(root / "r.json.checkpoint.json"),
+                    "log": str(root / "r.log"), "status": "running"}
+                manager._state["jobs"].append(blocking)
+                with self.assertRaisesRegex(JobError, "already being culled"):
+                    manager.add(str(photos), str(root / "other.json"))
+                blocking["status"] = "paused"
+                with self.assertRaisesRegex(JobError, "paused mid-run"):
+                    manager.add(str(photos), str(root / "other.json"))
             finally:
                 manager.shutdown()
 

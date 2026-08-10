@@ -516,13 +516,20 @@ class JobManager:
             else self._default_output(source, layout["Reports"])
         )
         with self._lock:
-            if any(
-                str(job.get("photos") or "").strip()
-                and Path(str(job["photos"])) == source
-                and job.get("status") not in TERMINAL
-                for job in self._state["jobs"]
-            ):
-                raise JobError("this folder is already queued")
+            blocking = next(
+                (job for job in self._state["jobs"]
+                 if str(job.get("photos") or "").strip()
+                 and Path(str(job["photos"])) == source
+                 and job.get("status") not in TERMINAL), None)
+            if blocking is not None:
+                if blocking.get("status") == "paused":
+                    raise JobError(
+                        "This folder's cull is paused mid-run. Resume it "
+                        "instead of starting another; the checkpoint keeps "
+                        "everything already decided.")
+                raise JobError(
+                    "This folder is already being culled. Progress shows "
+                    "on the folder card and in the queue.")
             job_id = uuid.uuid4().hex[:12]
             provider_bundle = None
             if provider_profile_id:

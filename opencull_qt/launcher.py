@@ -145,6 +145,58 @@ def treatment_label(kind: str) -> str:
     }.get(kind, "")
 
 
+class CullProgress(QWidget):
+    """The cull phase while its run is actually running.
+
+    The invitation's buy button has done its job; what the page owes the
+    photographer now is what the run is doing and how far along it is.
+    """
+
+    def __init__(self, name: str, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setObjectName("page")
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(36, 30, 36, 26)
+        outer.setSpacing(8)
+        title = QLabel(f"Culling {name}")
+        title.setObjectName("clusterTitle")
+        title.setFont(theme.display(20))
+        outer.addWidget(title)
+        self.message = QLabel("The culling worker is starting.")
+        self.message.setObjectName("hint")
+        self.message.setWordWrap(True)
+        self.message.setFont(theme.body(10))
+        outer.addWidget(self.message)
+        from PySide6.QtWidgets import QProgressBar
+
+        self.meter = QProgressBar()
+        self.meter.setRange(0, 100)
+        self.meter.setTextVisible(False)
+        self.meter.setFixedHeight(4)
+        outer.addWidget(self.meter)
+        self.detail = QLabel("")
+        self.detail.setObjectName("hint")
+        self.detail.setFont(theme.body(9))
+        outer.addWidget(self.detail)
+        outer.addStretch(1)
+
+    def set_job(self, job: dict) -> None:
+        self.message.setText(str(job.get("message") or ""))
+        progress = job.get("progress") or {}
+        total = int(progress.get("total_clusters") or 0)
+        completed = int(progress.get("completed_clusters") or 0)
+        if total:
+            self.meter.setValue(round(100 * completed / total))
+            self.detail.setText(
+                f"{completed} of {total} groups decided. Decisions are "
+                "checkpointed as they land; an interrupted run resumes "
+                "without buying them again.")
+        else:
+            self.meter.setValue(job_progress(job) or 0)
+            self.detail.setText(
+                "Reading the folder and preparing previews.")
+
+
 RECULL_WARNING = (
     "Culling {name} again discards the current selection and asks the models "
     "to choose from scratch. It costs another full run.\n\n"
@@ -425,6 +477,26 @@ class Launcher(QMainWindow):
             return
         bench.project = current
         shell.show_plan(self.phase_plan(current, bench))
+        # The cull page follows its run: an invitation becomes a progress
+        # page when the run starts, ticks while it runs, and becomes the
+        # review when the report lands -- without anyone reopening it.
+        page = shell.page_for(phases.CULL)
+        running = next(
+            (job for job in self._culling_jobs(
+                str(current.get("photos", "")))
+             if job.get("status") in
+             {"running", "queued", "stopping", "detached"}), None)
+        if isinstance(page, CullProgress):
+            if running is not None:
+                page.set_job(running)
+            else:
+                shell.drop(phases.CULL)
+                if shell.current == phases.CULL:
+                    shell.open_phase(phases.CULL)
+        elif page is not None and running is not None:
+            shell.drop(phases.CULL)
+            if shell.current == phases.CULL:
+                shell.open_phase(phases.CULL)
 
     def folder_contents(self, project: dict) -> dict:
         """Classify a folder's photographs, walking it at most once."""
@@ -589,12 +661,47 @@ class Launcher(QMainWindow):
                 f"Cull it, or go straight to {treatment.lower()}.")
         self.refresh()
 
+    def _culling_jobs(self, photos: str) -> list[dict]:
+        try:
+            queue = self.services.jobs.public()["jobs"]
+        except Exception:                            # noqa: BLE001 - transient
+            return []
+        return [
+            job for job in queue
+            if job.get("kind", "culling") == "culling"
+            and str(job.get("photos") or "")
+            and Path(str(job["photos"])) == Path(photos)]
+
     def cull_project(self, project: dict, again: bool = False,
                      only_photos: list[str] | None = None) -> None:
         name = str(project.get("name") or Path(str(project.get("photos", ""))).name)
+        photos = str(project.get("photos", ""))
+        mine = self._culling_jobs(photos)
+        if any(job.get("status") in
+               {"running", "queued", "stopping", "detached"}
+               for job in mine):
+            self._say(
+                f"{name} is already being culled. Progress shows right "
+                "here as it runs.", "ok")
+            return
+        paused = next(
+            (job for job in reversed(mine)
+             if job.get("status") == "paused"), None)
+        if paused is not None:
+            # The interrupted run already paid for part of its work. The
+            # same button resumes it rather than buying a second run.
+            try:
+                self.services.jobs.action(str(paused["id"]), "resume")
+            except Exception as exc:
+                self._say(str(exc), "alarm")
+                return
+            self._say(
+                f"Resuming the cull of {name} from its checkpoint. "
+                "Everything already decided is kept.", "ok")
+            self.refresh()
+            return
         if again and not self.confirm_recull(name):
             return
-        photos = str(project.get("photos", ""))
         try:
             # The stored provider drives the cull like every other stage.
             # With no profile configured this stays empty and the run falls
@@ -752,6 +859,15 @@ class Launcher(QMainWindow):
         # written locally to include everything. There is nothing to review
         # in a selection that kept every frame.
         if not bench.culled():
+            running = next(
+                (job for job in self._culling_jobs(
+                    str(bench.project.get("photos", "")))
+                 if job.get("status") in
+                 {"running", "queued", "stopping", "detached"}), None)
+            if running is not None:
+                page = CullProgress(str(bench.project.get("name") or ""))
+                page.set_job(running)
+                return page
             frames = list(bench.report.photo_names)
             count = len(frames)
             sheet = ContactSheet(frames, self._loader, selectable=True)

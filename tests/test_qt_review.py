@@ -133,8 +133,6 @@ class ReviewPageTests(unittest.TestCase):
 
     def test_a_screen_change_redraws_every_frame(self):
         page = self.page()
-        page.show()
-        QApplication.processEvents()
         drawn = []
         for frame in page.frames.values():
             frame.rerender = lambda f=frame: drawn.append(f.name)

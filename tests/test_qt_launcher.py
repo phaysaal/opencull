@@ -833,6 +833,48 @@ class LauncherWindowTests(unittest.TestCase):
         window.cull_project({"name": "A", "photos": "/p/a"})
         self.assertEqual(services.jobs.add.call_args.args[5], "")
 
+    def test_culling_a_paused_folder_resumes_it_instead(self):
+        window, services = self.build(projects=[], jobs=[
+            {"id": "j1", "kind": "culling", "photos": "/p/a",
+             "status": "paused", "checkpoint": "/p/a/c.json",
+             "log": "/p/a/l.log"}])
+        window.cull_project({"name": "A", "photos": "/p/a"})
+        services.jobs.action.assert_called_once_with("j1", "resume")
+        services.jobs.add.assert_not_called()
+
+    def test_culling_a_running_folder_reports_instead_of_erroring(self):
+        window, services = self.build(projects=[], jobs=[
+            {"id": "j1", "kind": "culling", "photos": "/p/a",
+             "status": "running", "checkpoint": "/p/a/c.json",
+             "log": "/p/a/l.log"}])
+        window.cull_project({"name": "A", "photos": "/p/a"})
+        services.jobs.add.assert_not_called()
+        services.jobs.action.assert_not_called()
+
+    def test_the_cull_page_shows_progress_while_its_run_is_in_flight(self):
+        from opencull_qt.launcher import CullProgress
+
+        window, services = self.build(projects=[])
+        shoot = Path(tempfile.mkdtemp())
+        report_path, photos_path = build_shoot(shoot)
+        services._jobs.append(
+            {"id": "j1", "kind": "culling", "photos": str(photos_path),
+             "status": "running", "checkpoint": "x", "log": "x",
+             "message": "Kimiya culling is running.",
+             "progress": {"completed_clusters": 3, "total_clusters": 12}})
+        project = {"id": "p1", "name": "A", "photos": str(photos_path),
+                   "report": "", "available": True,
+                   "report_available": False}
+        with mock.patch.object(
+            window.services.projects, "manual_selection_report",
+            return_value=report_path,
+        ):
+            window.open_project(project, phases.CULL)
+        self.addCleanup(window.show_projects)
+        page = window.review_page.page_for(phases.CULL)
+        self.assertIsInstance(page, CullProgress)
+        self.assertEqual(page.meter.value(), 25)
+
     def test_reculling_is_refused_unless_confirmed(self):
         window, services = self.build(projects=[])
         with mock.patch.object(window, "confirm_recull", return_value=False):
