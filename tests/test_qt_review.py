@@ -118,6 +118,29 @@ class ReviewPageTests(unittest.TestCase):
         self.assertEqual(columns, 4)
         self.assertGreaterEqual(thumb, THUMB)
 
+    def test_previews_are_rendered_for_the_screens_real_pixels(self):
+        from PySide6.QtGui import QPixmap
+
+        from opencull_qt.previews import scaled
+
+        source = QPixmap(1200, 900)
+        dense = scaled(source, 400, 400, 2.0)
+        self.assertEqual(dense.devicePixelRatio(), 2.0)
+        self.assertEqual(dense.width(), 800)
+        plain = scaled(source, 400, 400)
+        self.assertEqual(plain.devicePixelRatio(), 1.0)
+        self.assertLessEqual(plain.width(), 400)
+
+    def test_a_screen_change_redraws_every_frame(self):
+        page = self.page()
+        page.show()
+        QApplication.processEvents()
+        drawn = []
+        for frame in page.frames.values():
+            frame.rerender = lambda f=frame: drawn.append(f.name)
+        page._screen_changed(None)
+        self.assertEqual(sorted(drawn), sorted(page.frames.keys()))
+
     def press(self, page, key):
         event = QKeyEvent(
             QKeyEvent.Type.KeyPress, key, Qt.KeyboardModifier.NoModifier)

@@ -98,7 +98,7 @@ class Frame(QFrame):
 
     def set_pixmap(self, pixmap) -> None:
         self._pixmap = pixmap
-        self.image.setPixmap(scaled(pixmap, self._thumb, self._thumb))
+        self._render()
         self.image.setText("")
 
     def set_scale(self, thumb: int) -> None:
@@ -108,8 +108,22 @@ class Frame(QFrame):
         self._thumb = thumb
         self.setFixedSize(thumb + 16, thumb + 58)
         self.image.setFixedSize(thumb, thumb)
-        if self._pixmap is not None:
-            self.image.setPixmap(scaled(self._pixmap, thumb, thumb))
+        self._render()
+
+    def rerender(self) -> None:
+        """Redraw for the screen the window is on now."""
+        self._render(force=True)
+
+    def _render(self, force: bool = False) -> None:
+        if self._pixmap is None:
+            return
+        state = (self._thumb, self.devicePixelRatioF())
+        if not force and state == getattr(self, "_rendered", None):
+            return
+        self._rendered = state
+        self.image.setPixmap(scaled(
+            self._pixmap, self._thumb, self._thumb,
+            self.devicePixelRatioF()))
 
     def set_kept(self, kept: bool) -> None:
         self.kept = kept
@@ -153,6 +167,7 @@ class ReviewPage(QWidget):
         self.frames: dict[str, Frame] = {}
         self._order: list[str] = []
         self._layout_state = (0, 0)
+        self._screen_hooked = False
         self.cluster_ids = list(report.cluster_by_id)
         self.current = self.cluster_ids[0] if self.cluster_ids else ""
 
@@ -213,6 +228,23 @@ class ReviewPage(QWidget):
 
     def resizeEvent(self, event) -> None:  # noqa: N802 - Qt naming
         super().resizeEvent(event)
+        self._relayout()
+
+    def showEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        super().showEvent(event)
+        # Moving the window to another monitor does not always change its
+        # logical size, so a resize hook alone would keep showing the old
+        # screen's rendering on the new screen's pixels.
+        handle = self.window().windowHandle() if self.window() else None
+        if handle is not None and not self._screen_hooked:
+            self._screen_hooked = True
+            handle.screenChanged.connect(self._screen_changed)
+        self._relayout()
+
+    def _screen_changed(self, _screen) -> None:
+        for frame in self.frames.values():
+            frame.rerender()
+        self._layout_state = (0, 0)
         self._relayout()
 
     # --- construction ---------------------------------------------------

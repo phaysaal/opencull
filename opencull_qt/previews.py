@@ -153,9 +153,19 @@ class LibraryPreviewLoader(PreviewLoader):
         return None
 
 
-def scaled(pixmap: QPixmap, width: int, height: int) -> QPixmap:
-    """Fit a preview into a box without distorting the photograph."""
-    return pixmap.scaled(
-        width, height,
+def scaled(
+    pixmap: QPixmap, width: int, height: int, ratio: float = 1.0,
+) -> QPixmap:
+    """Fit a preview into a box without distorting the photograph.
+
+    ``ratio`` is the screen's device pixel ratio: a photograph shown on a
+    HiDPI monitor is scaled to the physical pixels the box really has,
+    then stamped with the ratio, so moving the window to a denser screen
+    does not show a stretched rendering of the sparser one.
+    """
+    fitted = pixmap.scaled(
+        round(width * ratio), round(height * ratio),
         Qt.AspectRatioMode.KeepAspectRatio,
         Qt.TransformationMode.SmoothTransformation)
+    fitted.setDevicePixelRatio(ratio)
+    return fitted
