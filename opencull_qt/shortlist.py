@@ -35,6 +35,8 @@ from PySide6.QtWidgets import (
 from opencull_gui.shortlist import (
     ASSESSMENT_FIELDS,
     rated_by_hand,
+    score_disagreements,
+    tier_rank,
     tier_stars,
 )
 from opencull_gui.shortlist_reviews import ShortlistReviewError
@@ -255,7 +257,7 @@ class ShortlistPage(QWidget):
             layout.addWidget(sort_label)
             self.sort_by = QComboBox()
             self.sort_by.setFont(theme.body(9))
-            self.sort_by.addItem("Rating, then time", "rating")
+            self.sort_by.addItem("Rating, then score", "rating")
             self.sort_by.addItem("Time", "time")
             self.sort_by.currentIndexChanged.connect(
                 lambda _i: self._fill_entries())
@@ -385,8 +387,6 @@ class ShortlistPage(QWidget):
         first, so the strongest frames rise together without losing their
         chronology within a tier.
         """
-        from opencull_gui.shortlist import TIER_STARS
-
         def when(entry: dict) -> tuple:
             return (str(entry.get("cluster_id", "")),
                     str(entry["photo"]).casefold())
@@ -400,15 +400,27 @@ class ShortlistPage(QWidget):
             str(entry["photo"]): index
             for index, entry in enumerate(by_time)}
 
-        def key(entry: dict) -> tuple[int, int]:
-            tier = self._effective_tier(str(entry["photo"]), entry)
-            return (-TIER_STARS.get(tier, 0), order[str(entry["photo"])])
+        def key(entry: dict) -> tuple[int, float, int]:
+            photo = str(entry["photo"])
+            tier = self._effective_tier(photo, entry)
+            try:
+                score = float(entry.get("score", 0))
+            except (TypeError, ValueError):
+                score = 0.0
+            # The verdict decides; the score only breaks ties inside a
+            # tier, where it is the finer of the two readings. Frames
+            # that agree on both stay in shooting order.
+            return (-tier_rank(tier), -score, order[photo])
 
         return sorted(by_time, key=key)
 
     def _fill_entries(self) -> None:
         state = self._state()
         marks = state.get("entries", {})
+        # Where the model's own number and verdict disagree about order,
+        # say so rather than letting one of them pass unquestioned.
+        self._disagreements = (
+            {} if self.by_hand else score_disagreements(self.entries))
         self.title.setText(self.shortlist.path.stem.split(".")[0].upper())
         self.list.blockSignals(True)
         self.list.clear()
@@ -426,13 +438,17 @@ class ShortlistPage(QWidget):
             evidence = (
                 "" if self.by_hand else f"  {float(entry['score']):.0f}")
             overruled = " *" if rated != str(entry["tier"]) else ""
+            odd = "  ⚠" if photo in self._disagreements else ""
             item = QListWidgetItem(
                 f" {mark}  {entry['rank']:>2}.  {photo}"
-                f"{evidence}{overruled}")
+                f"{evidence}{overruled}{odd}")
             item.setData(Qt.ItemDataRole.UserRole, photo)
             # Your rating where you gave one: the stars the icon wears are
             # the tier the rest of the pipeline reads.
             item.setData(Qt.ItemDataRole.UserRole + 1, tier_stars(rated))
+            if odd:
+                item.setToolTip(
+                    f"The model {self._disagreements[photo]}.")
             item.setIcon(QIcon(self._entry_pixmap(photo, rated)))
             item.setSizeHint(QSize(0, max(ROW, 64)))
             self.list.addItem(item)
@@ -516,6 +532,17 @@ class ShortlistPage(QWidget):
         note.setWordWrap(True)
         note.setFont(theme.body(9))
         outer.addWidget(note)
+        odd = getattr(self, "_disagreements", {}).get(self.current)
+        if odd:
+            warning = QLabel(
+                f"Its own two readings disagree: {odd}. Neither is wrong "
+                "on its own, but the verdict and the number are not "
+                "saying the same thing about this frame.")
+            warning.setObjectName("status")
+            warning.setProperty("tone", "alarm")
+            warning.setWordWrap(True)
+            warning.setFont(theme.body(9))
+            outer.addWidget(warning)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         holder = QWidget()

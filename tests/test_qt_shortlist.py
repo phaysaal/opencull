@@ -111,6 +111,15 @@ class ShortlistPageTests(unittest.TestCase):
         page.keyPressEvent(QKeyEvent(
             QKeyEvent.Type.KeyPress, key, Qt.KeyboardModifier.NoModifier))
 
+    def test_rating_sort_puts_score_under_the_verdict(self):
+        page = self.page()
+        page.sort_by.setCurrentIndex(page.sort_by.findData("rating"))
+        order = [page.list.item(row).data(Qt.ItemDataRole.UserRole)
+                 for row in range(page.list.count())]
+        # The fixture's tiers descend with its scores, so the verdict
+        # leads and the score follows within it.
+        self.assertEqual(order, NAMES)
+
     def test_time_sort_orders_by_the_shoot_not_the_rating(self):
         page = self.page()
         page.sort_by.setCurrentIndex(

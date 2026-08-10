@@ -54,6 +54,44 @@ def report_payload():
 
 
 class AssetFamilyTests(unittest.TestCase):
+    def test_a_score_that_contradicts_its_verdict_is_flagged(self):
+        from opencull_gui.shortlist import score_disagreements
+
+        # Nine frames whose numbers follow their verdicts, and one
+        # "strong" frame the model scored like a middling one.
+        entries = [
+            {"photo": f"G{n}.JPG", "tier": "promising", "score": 70 - n}
+            for n in range(5)
+        ] + [
+            {"photo": f"O{n}.JPG", "tier": "ordinary", "score": 40 - n}
+            for n in range(5)
+        ] + [{"photo": "ODD.JPG", "tier": "exceptional", "score": 35}]
+
+        flagged = score_disagreements(entries)
+
+        self.assertIn("ODD.JPG", flagged)
+        self.assertIn("35", flagged["ODD.JPG"])
+        self.assertEqual(len(flagged), 1)
+
+    def test_a_coherent_shoot_is_not_flagged_at_all(self):
+        from opencull_gui.shortlist import score_disagreements
+
+        entries = [
+            {"photo": f"A{n}.JPG", "tier": tier, "score": score}
+            for n, (tier, score) in enumerate([
+                ("strong", 80), ("strong", 78), ("promising", 60),
+                ("promising", 58), ("ordinary", 40), ("ordinary", 38),
+                ("reject", 20), ("reject", 18)])
+        ]
+        self.assertEqual(score_disagreements(entries), {})
+
+    def test_too_few_frames_to_speak_of_an_order_stay_silent(self):
+        from opencull_gui.shortlist import score_disagreements
+
+        self.assertEqual(score_disagreements([
+            {"photo": "A.JPG", "tier": "strong", "score": 10},
+            {"photo": "B.JPG", "tier": "reject", "score": 90}]), {})
+
     def test_the_claim_names_the_bar_the_run_was_actually_given(self):
         """A gentle run must not be certified against a strict bar."""
         from shortlist_kernel import professional_report_policy

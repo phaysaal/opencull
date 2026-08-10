@@ -20,6 +20,64 @@ TIER_STARS = {
 }
 
 
+def tier_rank(tier) -> int:
+    """How high a tier stands, five for the best and one for the worst."""
+    return TIER_STARS.get(str(tier or "").strip().lower(), 0)
+
+
+def score_disagreements(entries) -> dict[str, str]:
+    """Frames whose score contradicts the verdict beside it.
+
+    A model asked for both a named tier and a number rarely keeps them
+    in step: live shoots show a `strong` frame scoring 50 while several
+    `ordinary` ones reach 61. Neither reading is wrong on its own, but
+    where they disagree the photographer deserves to know before
+    trusting either.
+
+    The measure is disagreement of order, not of value, because scores
+    compress differently in every shoot and absolute thresholds would
+    be invented. Each frame gets two positions -- where its tier puts
+    it, and where its score puts it -- and a frame is flagged when
+    those positions are further apart than a third of the shoot. That
+    names the genuine outlier (one highly rated frame with a middling
+    number) instead of the crowd it sits under.
+    """
+    rows = []
+    for entry in entries:
+        photo = str(entry.get("photo", ""))
+        rank = tier_rank(entry.get("tier"))
+        try:
+            score = float(entry.get("score", 0))
+        except (TypeError, ValueError):
+            continue
+        if photo and rank:
+            rows.append((photo, str(entry.get("tier", "")).strip().lower(),
+                         rank, score))
+    if len(rows) < 4:
+        return {}
+    by_verdict = [row[0] for row in
+                  sorted(rows, key=lambda r: (-r[2], -r[3], r[0]))]
+    by_score = [row[0] for row in
+                sorted(rows, key=lambda r: (-r[3], -r[2], r[0]))]
+    verdict_place = {photo: index for index, photo in enumerate(by_verdict)}
+    score_place = {photo: index for index, photo in enumerate(by_score)}
+    limit = max(3, len(rows) // 3)
+    flagged: dict[str, str] = {}
+    for photo, tier, _rank, score in rows:
+        gap = verdict_place[photo] - score_place[photo]
+        if abs(gap) <= limit:
+            continue
+        if gap < 0:
+            flagged[photo] = (
+                f"called {tier}, but its score of {score:.0f} places it "
+                f"{abs(gap)} frames lower than its verdict does")
+        else:
+            flagged[photo] = (
+                f"called {tier}, but its score of {score:.0f} places it "
+                f"{gap} frames higher than its verdict does")
+    return flagged
+
+
 def tier_stars(tier) -> str:
     """A tier as stars, or nothing for a tier that is not one."""
     filled = TIER_STARS.get(str(tier or "").strip().lower(), 0)
