@@ -111,6 +111,44 @@ class ShortlistPageTests(unittest.TestCase):
         page.keyPressEvent(QKeyEvent(
             QKeyEvent.Type.KeyPress, key, Qt.KeyboardModifier.NoModifier))
 
+    def test_time_sort_orders_by_the_shoot_not_the_rating(self):
+        page = self.page()
+        page.sort_by.setCurrentIndex(
+            page.sort_by.findData("time"))
+        order = [page.list.item(row).data(Qt.ItemDataRole.UserRole)
+                 for row in range(page.list.count())]
+        self.assertEqual(order, sorted(NAMES, key=str.casefold))
+
+    def test_rating_sort_lifts_your_overrides_not_just_the_models(self):
+        page = self.page()
+        # C is the model's reject; rate it exceptional and it should rise.
+        page.show_entry("C.JPG")
+        page.set_rating("exceptional")
+        page.save()
+        page.sort_by.setCurrentIndex(page.sort_by.findData("rating"))
+        order = [page.list.item(row).data(Qt.ItemDataRole.UserRole)
+                 for row in range(page.list.count())]
+        # C was the model's reject, last; now exceptional, it rises above
+        # the promising B rather than staying at the bottom.
+        self.assertLess(order.index("C.JPG"), order.index("B.JPG"))
+
+    def test_reassess_is_offered_and_asks_for_it(self):
+        page = self.page()
+        seen = []
+        page.reassess_wanted.connect(lambda: seen.append(True))
+        page.reassess_button.click()
+        self.assertEqual(seen, [True])
+
+    def test_the_eye_opens_the_models_full_response(self):
+        from unittest import mock
+
+        from PySide6.QtWidgets import QDialog
+
+        page = self.page()
+        with mock.patch.object(QDialog, "exec", return_value=0) as shown:
+            page._show_assessment_detail()
+        shown.assert_called_once()
+
     def test_frames_are_listed_in_the_order_the_models_ranked_them(self):
         page = self.page()
         self.assertEqual(
@@ -407,9 +445,12 @@ class RatingTests(ShortlistPageTests):
 
     def test_the_list_shows_your_rating_and_marks_it_as_yours(self):
         page = self.page()
+        first = page.current
         page.set_rating("reject")
         page.save()
-        item = page.list.item(0)
+        item = next(
+            page.list.item(row) for row in range(page.list.count())
+            if page.list.item(row).data(Qt.ItemDataRole.UserRole) == first)
         # The tier is worn as stars on the thumbnail; the text carries
         # only the overruled mark.
         self.assertEqual(

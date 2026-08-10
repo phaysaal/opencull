@@ -271,12 +271,16 @@ class CullProgress(QWidget):
         self.kept_title.setText(
             f"Kept so far · {len(keepers)}" if keepers
             else "Kept so far · none yet")
+        show_waiting = bool(waiting)
+        self.waiting_title.setVisible(show_waiting)
         self.waiting_title.setText(
             f"Awaiting a decision · {len(waiting)}")
         self.kept_sheet = ContactSheet(keepers, self.loader)
         self._kept_slot.addWidget(self.kept_sheet)
-        self.waiting_sheet = ContactSheet(waiting, self.loader)
-        self._waiting_slot.addWidget(self.waiting_sheet)
+        self.waiting_sheet = None
+        if show_waiting:
+            self.waiting_sheet = ContactSheet(waiting, self.loader)
+            self._waiting_slot.addWidget(self.waiting_sheet)
 
     def set_job(self, job: dict) -> None:
         self.message.setText(str(job.get("message") or ""))
@@ -410,6 +414,8 @@ class AssessProgress(QWidget):
             f"Assessed so far · {len(rated)}"
             + (f" — {tiers}" if tiers else "")
             if rated else "Assessed so far · none yet")
+        show_waiting = bool(waiting)
+        self.waiting_title.setVisible(show_waiting)
         self.waiting_title.setText(
             f"Awaiting assessment · {len(waiting)}")
         self.rated_sheet = ContactSheet(rated, self.loader)
@@ -419,8 +425,10 @@ class AssessProgress(QWidget):
             if tile is not None and stars:
                 tile.set_badge(stars, str(item.get("tier") or "").title())
         self._rated_slot.addWidget(self.rated_sheet)
-        self.waiting_sheet = ContactSheet(waiting, self.loader)
-        self._waiting_slot.addWidget(self.waiting_sheet)
+        self.waiting_sheet = None
+        if show_waiting:
+            self.waiting_sheet = ContactSheet(waiting, self.loader)
+            self._waiting_slot.addWidget(self.waiting_sheet)
 
     def set_job(self, job: dict) -> None:
         self.message.setText(str(job.get("message") or ""))
@@ -1303,6 +1311,8 @@ class Launcher(QMainWindow):
             bench.shortlist, bench.shortlist_reviews, self._loader,
             directions=bench.directions)
         page.why_wanted.connect(self.explain_frame)
+        page.reassess_wanted.connect(
+            lambda pr=bench.project: self.reassess_project(pr))
         return page
 
     def _profile_page(self, bench: Bench):
@@ -1347,6 +1357,39 @@ class Launcher(QMainWindow):
 
     def open_shortlist(self, project: dict) -> None:
         self.open_project(project, phases.ASSESSMENT)
+
+    def reassess_project(self, project: dict) -> None:
+        """Ask the models to assess this folder's selection again."""
+        name = str(project.get("name")
+                   or Path(str(project.get("photos", ""))).name)
+        report_path = Path(str(project.get("report", "")))
+        if not report_path.is_file():
+            self._say("That report is no longer on disk.", "alarm")
+            return
+        review = default_review_path(report_path)
+        stance = self.ask_criteria(
+            name, len(self.bench.selection()) if self.bench else 0,
+            self.bench.culled() if self.bench else True)
+        if not stance:
+            return
+        try:
+            self.services.jobs.add_professional(
+                str(report_path), str(project.get("photos", "")),
+                review=str(review) if review.is_file() else "",
+                profile=stance, provider_profile_id=self.provider_id(),
+                reassess=True)
+        except Exception as exc:
+            self._say(str(exc), "alarm")
+            return
+        # Drop the built shortlist page so the phase reopens on the live
+        # progress of the new run.
+        shell = self.review_page
+        if isinstance(shell, ProjectShell):
+            shell.drop(phases.ASSESSMENT)
+            if shell.current == phases.ASSESSMENT:
+                shell.open_phase(phases.ASSESSMENT)
+        self._say(f"Reassessing {name}. Your own ratings are kept.", "ok")
+        self.refresh()
 
     def assess_project(self, project: dict,
                        chosen: list[str] | None = None) -> None:

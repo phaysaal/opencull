@@ -17,6 +17,8 @@ from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
+    QComboBox,
+    QDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -90,6 +92,7 @@ class ShortlistPage(QWidget):
     closed = Signal()
     suggested = Signal(str, list)   # output path, photographs to ask about
     why_wanted = Signal(str)        # the frame whose story is asked for
+    reassess_wanted = Signal()      # re-run the assessment from scratch
 
     def __init__(self, shortlist, reviews, loader: PreviewLoader,
                  directions=None, parent: QWidget | None = None):
@@ -162,6 +165,16 @@ class ShortlistPage(QWidget):
             "rated. Nothing is computed; nothing is asked.")
         why.clicked.connect(lambda: self.why_wanted.emit(self.current))
         head.addWidget(why)
+        if not self.by_hand:
+            self.detail_button = QPushButton("\U0001F441  Why this rating")
+            self.detail_button.setObjectName("ghost")
+            self.detail_button.setFont(theme.body(9))
+            self.detail_button.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.detail_button.setToolTip(
+                "The model's full response for this frame: every axis it "
+                "judged, the score, and its reason.")
+            self.detail_button.clicked.connect(self._show_assessment_detail)
+            head.addWidget(self.detail_button)
         head.addStretch(1)
         stage_column.addLayout(head)
         self.frame = PhotoLabel()
@@ -232,6 +245,31 @@ class ShortlistPage(QWidget):
         self.title.setFont(theme.display(11))
         layout.addWidget(self.title)
         layout.addStretch(1)
+
+        # By hand there is no model rating to reassess and no scores to
+        # sort by, so these belong only to a model-assessed shortlist.
+        if not self.by_hand:
+            sort_label = QLabel("Sort")
+            sort_label.setObjectName("hint")
+            sort_label.setFont(theme.body(9))
+            layout.addWidget(sort_label)
+            self.sort_by = QComboBox()
+            self.sort_by.setFont(theme.body(9))
+            self.sort_by.addItem("Rating, then time", "rating")
+            self.sort_by.addItem("Time", "time")
+            self.sort_by.currentIndexChanged.connect(
+                lambda _i: self._fill_entries())
+            layout.addWidget(self.sort_by)
+
+            self.reassess_button = QPushButton("Reassess")
+            self.reassess_button.setObjectName("ghost")
+            self.reassess_button.setFont(theme.body(9))
+            self.reassess_button.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.reassess_button.setToolTip(
+                "Ask the models to assess this selection again from "
+                "scratch. Your own ratings and marks are kept.")
+            self.reassess_button.clicked.connect(self.reassess_wanted)
+            layout.addWidget(self.reassess_button)
 
         self.progress = QLabel("")
         self.progress.setObjectName("hint")
@@ -334,13 +372,47 @@ class ShortlistPage(QWidget):
     def _state(self) -> dict:
         return self.reviews.public_state()
 
+    def _effective_tier(self, photo: str, entry: dict) -> str:
+        marks = self._state().get("entries", {})
+        return str(marks.get(photo, {}).get("tier") or entry.get("tier", ""))
+
+    def _ordered_entries(self) -> list[dict]:
+        """The entries in the chosen order.
+
+        Time is the frames in the sequence they were shot -- the shortlist
+        carries them with their cluster and filename, both of which follow
+        capture order. Rating stacks that under the effective tier, best
+        first, so the strongest frames rise together without losing their
+        chronology within a tier.
+        """
+        from opencull_gui.shortlist import TIER_STARS
+
+        def when(entry: dict) -> tuple:
+            return (str(entry.get("cluster_id", "")),
+                    str(entry["photo"]).casefold())
+
+        by_time = sorted(self.entries, key=when)
+        mode = (self.sort_by.currentData()
+                if getattr(self, "sort_by", None) is not None else "rating")
+        if mode == "time":
+            return by_time
+        order = {
+            str(entry["photo"]): index
+            for index, entry in enumerate(by_time)}
+
+        def key(entry: dict) -> tuple[int, int]:
+            tier = self._effective_tier(str(entry["photo"]), entry)
+            return (-TIER_STARS.get(tier, 0), order[str(entry["photo"])])
+
+        return sorted(by_time, key=key)
+
     def _fill_entries(self) -> None:
         state = self._state()
         marks = state.get("entries", {})
         self.title.setText(self.shortlist.path.stem.split(".")[0].upper())
         self.list.blockSignals(True)
         self.list.clear()
-        for entry in self.entries:
+        for entry in self._ordered_entries():
             photo = str(entry["photo"])
             mark = "✓" if marks.get(photo, {}).get("interesting") else " "
             # One line: the default item delegate does not wrap, it replaces a
@@ -416,6 +488,62 @@ class ShortlistPage(QWidget):
                 Qt.AlignmentFlag.AlignCenter, stars)
         painter.end()
         return canvas
+
+    def _show_assessment_detail(self) -> None:
+        """The model's full assessment of the current frame, verbatim."""
+        entry = self.entry_for(self.current)
+        assessment = entry.get("assessment", {}) or {}
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"Why {self.current} was rated")
+        dialog.setStyleSheet(theme.STYLESHEET)
+        dialog.setMinimumWidth(560)
+        outer = QVBoxLayout(dialog)
+        outer.setContentsMargins(22, 20, 22, 18)
+        outer.setSpacing(10)
+        from opencull_gui.shortlist import tier_stars
+
+        head = QLabel(
+            f"{tier_stars(entry.get('tier'))}   "
+            f"{str(entry.get('tier', '')).title()}"
+            f"   ·   score {float(entry.get('score', 0)):.0f}")
+        head.setObjectName("clusterTitle")
+        head.setFont(theme.display(13))
+        outer.addWidget(head)
+        note = QLabel(
+            "This is the model's own assessment, kept immutable. Your "
+            "rating, set beside the photograph, overrides it downstream.")
+        note.setObjectName("hint")
+        note.setWordWrap(True)
+        note.setFont(theme.body(9))
+        outer.addWidget(note)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        holder = QWidget()
+        holder.setObjectName("page")
+        body = QVBoxLayout(holder)
+        body.setContentsMargins(0, 0, 8, 0)
+        body.setSpacing(8)
+        rationale = str(entry.get("rationale", "")).strip()
+        if rationale:
+            body.addWidget(Axis("OVERALL", rationale))
+        for field in ASSESSMENT_FIELDS:
+            text = str(assessment.get(field, "")).strip()
+            if text:
+                body.addWidget(Axis(field.replace("_", " ").upper(), text))
+        body.addStretch(1)
+        scroll.setWidget(holder)
+        outer.addWidget(scroll, 1)
+        close = QPushButton("Close")
+        close.setObjectName("ghost")
+        close.setFont(theme.body(10))
+        close.setCursor(Qt.CursorShape.PointingHandCursor)
+        close.clicked.connect(dialog.accept)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        row.addWidget(close)
+        outer.addLayout(row)
+        dialog.resize(600, 560)
+        dialog.exec()
 
     def _chose_row(self, row: int) -> None:
         if 0 <= row < len(self.entries):

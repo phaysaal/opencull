@@ -993,6 +993,31 @@ class LauncherWindowTests(unittest.TestCase):
         self.assertIsInstance(page, AssessProgress)
         self.assertEqual(page.meter.value(), 25)
 
+    def test_a_finished_assessment_hides_the_empty_waiting_panel(self):
+        import json as json_module
+
+        from opencull_gui.photos import PhotoStore
+        from opencull_qt.launcher import AssessProgress
+        from opencull_qt.previews import PreviewLoader
+
+        shoot = Path(tempfile.mkdtemp())
+        _report, photos_path = build_shoot(shoot)
+        checkpoint = shoot / "c.json"
+        checkpoint.write_text(json_module.dumps({"assessments": [
+            {"photo": "A.JPG", "tier": "strong"},
+            {"photo": "B.JPG", "tier": "ordinary"},
+        ]}))
+        loader = PreviewLoader(PhotoStore(photos_path, shoot / "cache"))
+        self.addCleanup(loader.shutdown)
+        page = AssessProgress(
+            "A", names=["A.JPG", "B.JPG"], loader=loader,
+            checkpoint=checkpoint)
+        self.addCleanup(page.deleteLater)
+        page.set_job({"status": "running",
+                      "progress": {"completed_items": 2, "total_items": 2}})
+        self.assertFalse(page.waiting_title.isVisibleTo(page))
+        self.assertIsNone(page.waiting_sheet)
+
     def test_the_assessment_page_shows_rated_and_waiting_photographs(self):
         import json as json_module
 

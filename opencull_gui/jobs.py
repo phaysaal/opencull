@@ -638,8 +638,15 @@ class JobManager:
         policy: str = "effective",
         profile: str = "family",
         provider_profile_id: str = "",
+        reassess: bool = False,
     ) -> dict[str, Any]:
-        """Queue a professional shortlist derived from an existing report."""
+        """Queue a professional shortlist derived from an existing report.
+
+        ``reassess`` retires an existing shortlist so the models can judge
+        the selection again from scratch. The old shortlist and its
+        checkpoint are moved aside with a timestamp rather than deleted, so
+        an assessment is never silently lost.
+        """
         report_path = Path(str(report)).expanduser().resolve()
         source = Path(str(photos)).expanduser().resolve()
         review_path = (
@@ -675,7 +682,18 @@ class JobManager:
                   f"{report_path.stem}.professional-shortlist.json").resolve()
         )
         if chosen_output.exists():
-            raise JobError("professional shortlist output already exists")
+            if not reassess:
+                raise JobError(
+                    "professional shortlist output already exists")
+            # Keep the superseded assessment beside the new one rather than
+            # destroying it: a reassessment is a second opinion, not an
+            # erasure.
+            stamp = _now().replace(":", "").replace("-", "")[:15]
+            for path in (chosen_output,
+                         Path(str(chosen_output) + ".checkpoint.json")):
+                if path.is_file():
+                    path.rename(path.with_name(
+                        f"{path.name}.superseded-{stamp}"))
         with self._lock:
             if any(
                 job.get("kind") == "professional_shortlist"
