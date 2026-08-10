@@ -322,6 +322,24 @@ class ReviewPageTests(unittest.TestCase):
         self.press(page, Qt.Key.Key_Return)
         self.assertEqual(page.current_keepers(), ["A.JPG"])
 
+    def test_z_zooms_whatever_the_focus_is_on(self):
+        """Digits stop at nine; the focus does not."""
+        page = self.page()
+        self.press(page, Qt.Key.Key_Right)
+        self.press(page, Qt.Key.Key_Z)
+        self.assertEqual(page.views.currentIndex(), 2)
+        self.assertEqual(page.zoom.name, "B.JPG")
+        self.press(page, Qt.Key.Key_Z)
+        self.assertEqual(page.views.currentIndex(), 1)
+        self.assertEqual(page.focus_name(), "B.JPG")
+
+    def test_a_double_click_inspects_that_frame(self):
+        page = self.page()
+        page.frames["B.JPG"].inspected.emit("B.JPG")
+        self.assertEqual(page.views.currentIndex(), 2)
+        self.assertEqual(page.zoom.name, "B.JPG")
+        self.assertEqual(page.focus_name(), "B.JPG")
+
     def test_a_number_beyond_the_cluster_does_nothing(self):
         # Nothing is recorded at all: an out-of-range key is not a decision.
         page = self.page()

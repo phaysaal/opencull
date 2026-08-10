@@ -52,6 +52,7 @@ class Frame(QFrame):
     """One photograph in a cluster, kept or not."""
 
     toggled = Signal(str)
+    inspected = Signal(str)
 
     def __init__(self, name: str, index: int, kept: bool, recommended: bool):
         super().__init__()
@@ -141,6 +142,11 @@ class Frame(QFrame):
         if event.button() == Qt.MouseButton.LeftButton:
             self.toggled.emit(self.name)
         super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.inspected.emit(self.name)
+        super().mouseDoubleClickEvent(event)
 
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt naming
         super().paintEvent(event)
@@ -787,6 +793,7 @@ class ReviewPage(QWidget):
         for index, name in enumerate(self._order):
             frame = Frame(name, index, name in keepers, name in recommended)
             frame.toggled.connect(self.toggle)
+            frame.inspected.connect(self._inspect)
             self.frames[name] = frame
             pixmap = self.loader.request(name, "thumb")
             if pixmap is not None:
@@ -1031,6 +1038,12 @@ class ReviewPage(QWidget):
         self._focus = max(0, min(len(self._order) - 1, self._focus + delta))
         self._apply_focus()
 
+    def _inspect(self, name: str) -> None:
+        if name in self._order:
+            self._focus = self._order.index(name)
+            self._apply_focus()
+            self.zoom_focus()
+
     def zoom_focus(self) -> None:
         name = self.focus_name()
         if name:
@@ -1084,6 +1097,12 @@ class ReviewPage(QWidget):
             self.keep_none()
         elif key == Qt.Key.Key_U:
             self.mark_unreviewed()
+        elif key == Qt.Key.Key_Z:
+            if zoomed:
+                self.views.setCurrentIndex(1)
+                self._apply_focus()
+            else:
+                self.zoom_focus()
         elif key == Qt.Key.Key_Right:
             self.move_focus(1)
         elif key == Qt.Key.Key_Left:
