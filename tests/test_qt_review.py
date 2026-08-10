@@ -280,12 +280,47 @@ class ReviewPageTests(unittest.TestCase):
 
     # --- keyboard -------------------------------------------------------
 
-    def test_number_keys_toggle_by_position(self):
+    def test_number_keys_focus_and_zoom_without_deciding(self):
         page = self.page()
         self.press(page, Qt.Key.Key_2)
+        self.assertEqual(page.views.currentIndex(), 2)
+        self.assertEqual(page.zoom.name, "B.JPG")
+        self.assertEqual(page.focus_name(), "B.JPG")
+        # Looking is not deciding.
+        self.assertNotIn("group-0001", self.reviews.public_state()["clusters"])
+
+    def test_escape_leaves_the_zoom_and_keeps_the_focus(self):
+        page = self.page()
+        self.press(page, Qt.Key.Key_2)
+        self.press(page, Qt.Key.Key_Escape)
+        self.assertEqual(page.views.currentIndex(), 1)
+        self.assertEqual(page.focus_name(), "B.JPG")
+
+    def test_left_and_right_move_the_focus_within_the_group(self):
+        page = self.page()
+        self.assertEqual(page.focus_name(), "A.JPG")
+        self.press(page, Qt.Key.Key_Right)
+        self.assertEqual(page.focus_name(), "B.JPG")
+        self.assertEqual(page.current, "group-0001")
+        self.press(page, Qt.Key.Key_Right)
+        self.assertEqual(page.focus_name(), "B.JPG")
+        self.press(page, Qt.Key.Key_Left)
+        self.assertEqual(page.focus_name(), "A.JPG")
+
+    def test_space_toggles_the_focused_frame(self):
+        page = self.page()
+        self.press(page, Qt.Key.Key_Right)
+        self.press(page, Qt.Key.Key_Space)
         self.assertEqual(
-            sorted(self.reviews.public_state()["clusters"]["group-0001"]["keepers"]),
+            sorted(self.reviews.public_state()
+                   ["clusters"]["group-0001"]["keepers"]),
             ["A.JPG", "B.JPG"])
+
+    def test_enter_selects_and_never_unselects(self):
+        page = self.page()
+        self.press(page, Qt.Key.Key_Return)
+        self.press(page, Qt.Key.Key_Return)
+        self.assertEqual(page.current_keepers(), ["A.JPG"])
 
     def test_a_number_beyond_the_cluster_does_nothing(self):
         # Nothing is recorded at all: an out-of-range key is not a decision.
@@ -315,19 +350,19 @@ class ReviewPageTests(unittest.TestCase):
         self.assertFalse(
             self.reviews.public_state()["clusters"]["group-0001"]["reviewed"])
 
-    def test_arrows_move_between_clusters(self):
+    def test_up_and_down_move_between_clusters(self):
         page = self.page()
-        self.press(page, Qt.Key.Key_Right)
+        self.press(page, Qt.Key.Key_Down)
         self.assertEqual(page.current, "group-0002")
-        self.press(page, Qt.Key.Key_Left)
+        self.press(page, Qt.Key.Key_Up)
         self.assertEqual(page.current, "group-0001")
 
-    def test_arrows_stop_at_the_ends(self):
+    def test_cluster_arrows_stop_at_the_ends(self):
         page = self.page()
-        self.press(page, Qt.Key.Key_Left)
+        self.press(page, Qt.Key.Key_Up)
         self.assertEqual(page.current, "group-0001")
-        self.press(page, Qt.Key.Key_Right)
-        self.press(page, Qt.Key.Key_Right)
+        self.press(page, Qt.Key.Key_Down)
+        self.press(page, Qt.Key.Key_Down)
         self.assertEqual(page.current, "group-0002")
 
     def test_escape_asks_to_leave(self):

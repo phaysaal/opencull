@@ -126,6 +126,11 @@ class Frame(QFrame):
             self._pixmap, self._thumb, self._thumb,
             self.devicePixelRatioF()))
 
+    def set_focused(self, focused: bool) -> None:
+        self.setProperty("focused", "true" if focused else "false")
+        self.style().unpolish(self)
+        self.style().polish(self)
+
     def set_kept(self, kept: bool) -> None:
         self.kept = kept
         self.setProperty("kept", "true" if kept else "false")
@@ -209,6 +214,104 @@ class GroupCard(QFrame):
         if event.button() == Qt.MouseButton.LeftButton:
             self.chosen.emit(self.cluster_id)
         super().mousePressEvent(event)
+
+
+class ZoomView(QWidget):
+    """One photograph as large as the tab allows, pannable at 1:1.
+
+    Inspection only: nothing here changes a decision. The caption says
+    which frame this is and whether it is currently kept; the keyboard
+    keeps working exactly as it does on the frames themselves.
+    """
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setObjectName("page")
+        self.name = ""
+        self._pixmap = None
+        self._one_to_one = False
+        self._drag_start = None
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(22, 12, 22, 12)
+        layout.setSpacing(8)
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(False)
+        self.scroll.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.image = QLabel("…")
+        self.image.setObjectName("frameImage")
+        self.image.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.scroll.setWidget(self.image)
+        layout.addWidget(self.scroll, 1)
+        self.caption = QLabel("")
+        self.caption.setObjectName("hint")
+        self.caption.setFont(theme.mono(9))
+        layout.addWidget(self.caption)
+        hint = QLabel(
+            "←/→ next frame · Space toggle keep · Enter keep · "
+            "click for 1:1 and drag to pan · Esc back")
+        hint.setObjectName("hint")
+        hint.setFont(theme.body(9))
+        layout.addWidget(hint)
+
+    def show_photo(self, name: str, pixmap, kept: bool) -> None:
+        self.name = name
+        self._pixmap = pixmap
+        self._one_to_one = False
+        self.set_kept(kept)
+        self._render()
+
+    def set_kept(self, kept: bool) -> None:
+        self.caption.setText(
+            f"{self.name}   ·   {'kept ✓' if kept else 'not kept'}")
+
+    def _render(self) -> None:
+        if self._pixmap is None:
+            self.image.setText("…")
+            return
+        self.image.setText("")
+        if self._one_to_one:
+            shown = self._pixmap
+        else:
+            viewport = self.scroll.viewport().size()
+            shown = scaled(
+                self._pixmap, max(50, viewport.width() - 2),
+                max(50, viewport.height() - 2),
+                self.devicePixelRatioF())
+        self.image.setPixmap(shown)
+        self.image.resize(shown.deviceIndependentSize().toSize())
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        super().resizeEvent(event)
+        if not self._one_to_one:
+            self._render()
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_start = (
+                event.position().toPoint(),
+                self.scroll.horizontalScrollBar().value(),
+                self.scroll.verticalScrollBar().value())
+            self._dragged = False
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        if self._drag_start is not None and self._one_to_one:
+            start, h, v = self._drag_start
+            delta = event.position().toPoint() - start
+            if delta.manhattanLength() > 4:
+                self._dragged = True
+            self.scroll.horizontalScrollBar().setValue(h - delta.x())
+            self.scroll.verticalScrollBar().setValue(v - delta.y())
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        if (event.button() == Qt.MouseButton.LeftButton
+                and self._drag_start is not None):
+            if not getattr(self, "_dragged", False):
+                self._one_to_one = not self._one_to_one
+                self._render()
+            self._drag_start = None
+        super().mouseReleaseEvent(event)
 
 
 class ReviewPage(QWidget):
@@ -419,6 +522,8 @@ class ReviewPage(QWidget):
         self.views = QStackedWidget()
         self.views.addWidget(overview)
         self.views.addWidget(right)
+        self.zoom = ZoomView()
+        self.views.addWidget(self.zoom)
         split.addWidget(self.views, 1)
         outer.addLayout(split, 1)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -688,6 +793,8 @@ class ReviewPage(QWidget):
                 frame.set_pixmap(pixmap)
         self._layout_state = (0, 0)
         self._relayout()
+        self._focus = 0
+        self._apply_focus()
 
         # Rows are found by their data, not their index: scene headers sit
         # between clusters, so index arithmetic would land on the wrong row.
@@ -699,6 +806,13 @@ class ReviewPage(QWidget):
         self._report("" if reviewed else "Not reviewed yet.")
 
     def _painted(self, name: str, size: str, pixmap) -> None:
+        if size == "detail":
+            if (self.views.currentIndex() == 2
+                    and self.zoom.name == name):
+                self.zoom.show_photo(
+                    name, pixmap,
+                    name in set(self.current_keepers()))
+            return
         if size != "thumb":
             return
         frame = self.frames.get(name)
@@ -737,10 +851,15 @@ class ReviewPage(QWidget):
         frame = self.frames.get(name)
         if frame is None:
             return
+        if name in self._order:
+            self._focus = self._order.index(name)
+            self._apply_focus()
         keepers = set(self.current_keepers())
         keepers.symmetric_difference_update({name})
         order = self.report.cluster_by_id[self.current]["photos"]
         self._save([item for item in order if item in keepers])
+        if self.views.currentIndex() == 2 and self.zoom.name == name:
+            self.zoom.set_kept(name in keepers)
 
     def toggle_index(self, index: int) -> None:
         order = self.report.cluster_by_id[self.current]["photos"]
@@ -889,6 +1008,53 @@ class ReviewPage(QWidget):
         decision = self.report.decision_by_id.get(self.current, {})
         self._save(list(decision.get("photos") or []), reviewed=False)
 
+    def focus_name(self) -> str:
+        if 0 <= self._focus < len(self._order):
+            return self._order[self._focus]
+        return ""
+
+    def _apply_focus(self) -> None:
+        for index, name in enumerate(self._order):
+            frame = self.frames.get(name)
+            if frame is not None:
+                frame.set_focused(index == self._focus)
+        name = self.focus_name()
+        frame = self.frames.get(name)
+        if frame is not None:
+            self.scroll.ensureWidgetVisible(frame)
+        if self.views.currentIndex() == 2 and name:
+            self._show_zoom(name)
+
+    def move_focus(self, delta: int) -> None:
+        if not self._order:
+            return
+        self._focus = max(0, min(len(self._order) - 1, self._focus + delta))
+        self._apply_focus()
+
+    def zoom_focus(self) -> None:
+        name = self.focus_name()
+        if name:
+            self._show_zoom(name)
+            self.views.setCurrentIndex(2)
+
+    def _show_zoom(self, name: str) -> None:
+        # The bounded thumb appears at once; the 2400px detail replaces
+        # it the moment the loader has decoded it.
+        pixmap = (self.loader.cached(name, "detail")
+                  or self.loader.request(name, "detail")
+                  or self.loader.cached(name, "thumb"))
+        self.zoom.show_photo(
+            name, pixmap, name in set(self.current_keepers()))
+
+    def select_focus(self) -> None:
+        """Keep the focused frame; a selection, not a toggle."""
+        name = self.focus_name()
+        if not name:
+            return
+        keepers = set(self.current_keepers())
+        if name not in keepers:
+            self.toggle(name)
+
     def step(self, delta: int) -> None:
         if not self.cluster_ids:
             return
@@ -903,8 +1069,13 @@ class ReviewPage(QWidget):
             super().keyPressEvent(event)
             return
         key = event.key()
+        zoomed = self.views.currentIndex() == 2
         if Qt.Key.Key_1 <= key <= Qt.Key.Key_9:
-            self.toggle_index(key - Qt.Key.Key_1)
+            index = key - Qt.Key.Key_1
+            if 0 <= index < len(self._order):
+                self._focus = index
+                self._apply_focus()
+                self.zoom_focus()
         elif key == Qt.Key.Key_A:
             self.accept_ai()
         elif key == Qt.Key.Key_S:
@@ -913,12 +1084,31 @@ class ReviewPage(QWidget):
             self.keep_none()
         elif key == Qt.Key.Key_U:
             self.mark_unreviewed()
-        elif key in (Qt.Key.Key_Right, Qt.Key.Key_Down):
+        elif key == Qt.Key.Key_Right:
+            self.move_focus(1)
+        elif key == Qt.Key.Key_Left:
+            self.move_focus(-1)
+        elif key == Qt.Key.Key_Down:
+            if zoomed:
+                self.views.setCurrentIndex(1)
             self.step(1)
-        elif key in (Qt.Key.Key_Left, Qt.Key.Key_Up):
+        elif key == Qt.Key.Key_Up:
+            if zoomed:
+                self.views.setCurrentIndex(1)
             self.step(-1)
+        elif key == Qt.Key.Key_Space:
+            name = self.focus_name()
+            if name:
+                self.toggle(name)
+        elif key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self.select_focus()
         elif key == Qt.Key.Key_Escape:
-            self.closed.emit()
+            if zoomed:
+                # Out of the zoom, back to the frames, focus preserved.
+                self.views.setCurrentIndex(1)
+                self._apply_focus()
+            else:
+                self.closed.emit()
         else:
             super().keyPressEvent(event)
 

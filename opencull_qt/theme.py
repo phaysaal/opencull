@@ -225,6 +225,7 @@ QFrame#frame {{
 }}
 QFrame#frame:hover {{ background: {RAISED}; border-color: {EDGE}; }}
 QFrame#frame[kept="true"] {{ background: {RAISED}; border-color: {SAFELIGHT}; }}
+QFrame#frame[focused="true"] {{ border-width: 2px; border-style: solid; }}
 /* A frame left out of the run by hand: dimmed but present, because the
    leaving-out is a decision the sheet must keep showing. */
 QFrame#frame[left="true"] {{ background: {INK}; border-color: {EDGE_SOFT}; }}
