@@ -136,10 +136,16 @@ QPushButton#ghost:disabled {{ color: {FAINT}; border-color: {EDGE_SOFT}; }}
    the QWidget rule, which puts near-white on light grey and makes the
    choice on a confirmation unreadable. */
 QMessageBox, QMessageBox QLabel {{ background: {SURFACE}; color: {PAPER}; }}
+/* No min-width here, however tempting a uniform row of buttons looks. A
+   styled button's minimum becomes that width plus its padding, and a
+   message box sizes itself to the minimum its contents will accept -- so
+   any button whose label is wider than the floor is clipped mid-word,
+   which is how "One per scene (1 call)" became "e per scene (1 c".
+   Generous padding gives short labels their weight instead. */
 QMessageBox QPushButton, QDialogButtonBox QPushButton {{
     background: {RAISED}; color: {PAPER};
     border: 1px solid {EDGE}; border-radius: 8px;
-    padding: 7px 18px; min-width: 92px;
+    padding: 7px 22px;
 }}
 QMessageBox QPushButton:hover, QDialogButtonBox QPushButton:hover {{
     background: {EDGE}; border-color: #3B3633;

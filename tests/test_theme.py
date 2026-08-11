@@ -96,5 +96,44 @@ class ContrastTests(unittest.TestCase):
                 "about needing text labels may no longer hold")
 
 
+@unittest.skipUnless(theme is not None, "PySide6 is not installed")
+class DialogButtonTests(unittest.TestCase):
+    """A choice nobody can read is not a choice.
+
+    A message box takes the smallest size its contents will accept, so a
+    button whose stylesheet floor is narrower than its own label is clipped
+    mid-word rather than the box growing to fit it.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        from PySide6.QtWidgets import QApplication
+
+        cls.application = QApplication.instance() or QApplication([])
+
+    def test_no_dialog_button_is_narrower_than_its_own_label(self):
+        from PySide6.QtWidgets import QMessageBox, QWidget
+
+        host = QWidget()
+        host.setStyleSheet(theme.STYLESHEET)
+        self.addCleanup(host.deleteLater)
+        box = QMessageBox(host)
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setText("39 marked frames fall into 1 scene.")
+        box.setInformativeText(
+            "One call per scene writes a treatment for each scene's "
+            "best-ranked frame and shares it with the rest.")
+        for label in ("One per scene (1 call)", "Every frame (39 calls)",
+                      "Cancel"):
+            box.addButton(label, QMessageBox.ButtonRole.AcceptRole)
+        self.addCleanup(box.deleteLater)
+        box.show()
+        self.addCleanup(box.hide)
+        for button in box.buttons():
+            self.assertGreaterEqual(
+                button.width(), button.sizeHint().width(),
+                f"{button.text()!r} is clipped to {button.width()}px")
+
+
 if __name__ == "__main__":
     unittest.main()
