@@ -170,7 +170,24 @@ def normalize_style_profile(value: Any) -> dict[str, Any]:
     return result
 
 
-def style_profile_json(request: str, value: Any, mode: str = "update") -> str:
+def unread_pass_json(batch: str, reason: str) -> str:
+    """Record a pass whose answer could not be read, and which frames it held.
+
+    A profile that quietly skipped eight photographs would look
+    complete and be less than it claims. Naming the frames and the
+    reason lets the photographer decide: ask again about exactly those,
+    or leave them out on purpose.
+    """
+    return json.dumps({
+        "photos": batch_paths(batch),
+        "reason": str(reason).strip() or "The model's answer could not be "
+                                         "read as a style profile.",
+    }, sort_keys=True)
+
+
+def style_profile_json(
+    request: str, value: Any, mode: str = "update", unread: Any = None,
+) -> str:
     request_value = json.loads(request)
     profile = normalize_style_profile(value)
     now = datetime.now(UTC).isoformat()
@@ -180,10 +197,20 @@ def style_profile_json(request: str, value: Any, mode: str = "update") -> str:
                     "request_signature": request_value["signature"],
                     "example_count": len(request_value["examples"]),
                     "profile": profile})
+    unread_passes = []
+    for item in unread or []:
+        try:
+            unread_passes.append(
+                json.loads(item) if isinstance(item, str) else item)
+        except (TypeError, json.JSONDecodeError):
+            continue
     return json.dumps({"format": FORMAT, "revision": int(prior.get("revision", 0)) + 1,
                        "updated_at": now, "mode": mode,
                        "request_signature": request_value["signature"],
                        "examples": request_value["examples"], "history": history,
+                       # Photographs this run could not read, so a
+                       # profile never passes for more than it is.
+                       "unread": unread_passes,
                        "profile": profile}, indent=2, sort_keys=True)
 
 

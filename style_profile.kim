@@ -41,6 +41,7 @@ request := build_style_request(photos, existing, limit)
 -- far in hand, so the last pass has felt every example.
 carried := ""
 profile := ""
+unread := []
 print "STYLE_PROGRESS 24 Preparing selected photographs"
 forall batch in style_example_batches(request, 8):
     images := []
@@ -59,11 +60,11 @@ forall batch in style_example_batches(request, 8):
         profile := candidate
         carried := style_profile_json(pass_request, candidate, mode)
     else:
-        check true
+        unread := unread + [unread_pass_json(batch, "Two answers came back and neither could be read as a style profile.")]
 print "STYLE_PROGRESS 78 Validating the returned style profile"
 check valid_style_profile(profile)
 print "STYLE_PROGRESS 88 Writing the updateable profile and revision history"
-report := style_profile_json(request, profile, mode)
+report := style_profile_json(request, profile, mode, unread)
 check len(report) > 0
 act file.overwrite(output, report)
 print "STYLE_PROGRESS 96 Verifying the saved profile"

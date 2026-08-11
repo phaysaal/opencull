@@ -326,6 +326,55 @@ class StyleDialogTests(unittest.TestCase):
         dialog.clear_examples()
         self.assertTrue(dialog.create_button.isVisibleTo(dialog))
 
+    def test_photographs_a_run_could_not_read_are_named_and_offered(self):
+        import json as json_module
+
+        dialog = self.dialog()
+        path = self.results / "personal-style-1.json"
+        write_profile(path)
+        value = json_module.loads(path.read_text())
+        value["unread"] = [{
+            "photos": [str(self.root / "a.jpg"), str(self.root / "b.jpg")],
+            "reason": "Two answers came back and neither could be read."}]
+        path.write_text(json_module.dumps(value))
+        dialog.refresh()
+
+        dialog.show_profile(0)
+
+        shown = dialog.unread_note.text()
+        self.assertIn("2 photographs could not be read", shown)
+        self.assertIn("a.jpg", shown)
+        self.assertIn("neither could be read", shown)
+        self.assertTrue(dialog.retry_button.isVisibleTo(dialog))
+
+        dialog.retry_unread()
+
+        # Exactly those are staged against that profile, nothing else.
+        self.assertEqual(
+            sorted(str(path) for path in dialog.staged),
+            sorted([str(self.root / "a.jpg"), str(self.root / "b.jpg")]))
+        self.assertIn("Refine with 2", dialog.build_button.text())
+
+    def test_leaving_unread_photographs_out_keeps_the_record(self):
+        import json as json_module
+
+        dialog = self.dialog()
+        path = self.results / "personal-style-1.json"
+        write_profile(path)
+        value = json_module.loads(path.read_text())
+        value["unread"] = [{"photos": [str(self.root / "a.jpg")],
+                            "reason": "unreadable"}]
+        path.write_text(json_module.dumps(value))
+        dialog.refresh()
+        dialog.show_profile(0)
+
+        dialog.ignore_unread()
+
+        self.assertFalse(dialog.unread_note.isVisibleTo(dialog))
+        self.assertIn("stay recorded as unread", dialog.status.text())
+        # The profile still says what it could not read.
+        self.assertEqual(len(dialog.available[0]["unread"]), 1)
+
     def test_each_profile_carries_its_own_rename_and_remove(self):
         from PySide6.QtWidgets import QPushButton
 

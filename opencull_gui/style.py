@@ -205,6 +205,16 @@ class StyleProfileStore:
         ]
 
     @staticmethod
+    def unread_of(value: dict[str, Any]) -> list[dict[str, Any]]:
+        """Photographs a run could not read, and why."""
+        return [
+            {"photos": [str(photo) for photo in item.get("photos") or []],
+             "reason": str(item.get("reason") or "")}
+            for item in value.get("unread") or []
+            if isinstance(item, dict) and item.get("photos")
+        ]
+
+    @staticmethod
     def group_name(examples: list[str]) -> str:
         """What to call a group of photographs before anyone names it.
 
@@ -245,6 +255,7 @@ class StyleProfileStore:
                 # `examples` is the count the summary already reports;
                 # the paths are their own field rather than shadowing it.
                 "example_paths": examples,
+                "unread": self.unread_of(value),
                 "group": group,
                 "path": str(path),
                 "modified": path.stat().st_mtime_ns})

@@ -351,6 +351,40 @@ class StylePanel(QWidget):
         start.addStretch(1)
         layout.addLayout(start)
 
+        # What a run could not read, and what to do about it.
+        unread_row = QHBoxLayout()
+        unread_row.setSpacing(9)
+        self.unread_note = QLabel("")
+        self.unread_note.setObjectName("status")
+        self.unread_note.setProperty("tone", "alarm")
+        self.unread_note.setWordWrap(True)
+        self.unread_note.setFont(theme.body(9))
+        unread_row.addWidget(self.unread_note, 1)
+        self.retry_button = QPushButton("Ask about those again")
+        self.retry_button.setObjectName("ghost")
+        self.retry_button.setFont(theme.body(9))
+        self.retry_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.retry_button.setToolTip(
+            "Read exactly those photographs into this profile. Nothing "
+            "already read is read again.")
+        self.retry_button.clicked.connect(
+            lambda _checked=False: self.retry_unread())
+        unread_row.addWidget(self.retry_button)
+        self.ignore_button = QPushButton("Leave them out")
+        self.ignore_button.setObjectName("ghost")
+        self.ignore_button.setFont(theme.body(9))
+        self.ignore_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.ignore_button.setToolTip(
+            "Keep the profile as it is. The photographs stay recorded as "
+            "unread, so the profile never passes for more than it is.")
+        self.ignore_button.clicked.connect(
+            lambda _checked=False: self.ignore_unread())
+        unread_row.addWidget(self.ignore_button)
+        layout.addLayout(unread_row)
+        self.unread: list[dict] = []
+        self.unread_profile = ""
+        self._hide_unread()
+
         self.examples_scroll = QScrollArea()
         self.examples_scroll.setWidgetResizable(True)
         self.examples_scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -463,6 +497,8 @@ class StylePanel(QWidget):
                 self._report(
                     "Your style profile is ready. It is on the shelf "
                     "above.", "ok")
+                if self.available:
+                    self.show_unread(self.available[0])
             elif job.get("status") == "failed":
                 self._report(
                     "That profile run stopped before it finished. "
@@ -585,6 +621,64 @@ class StylePanel(QWidget):
             self.body.addWidget(body)
         self.body.addStretch(1)
 
+    def _hide_unread(self) -> None:
+        for widget in (self.unread_note, self.retry_button,
+                       self.ignore_button):
+            widget.hide()
+
+    def show_unread(self, item: dict) -> None:
+        """Say which photographs a run could not read, and offer a choice."""
+        unread = item.get("unread") or []
+        photos = [photo for entry in unread for photo in entry["photos"]]
+        if not photos:
+            self.unread = []
+            self.unread_profile = ""
+            self._hide_unread()
+            return
+        self.unread = unread
+        self.unread_profile = str(item["path"])
+        reasons = {entry["reason"] for entry in unread if entry["reason"]}
+        names = ", ".join(Path(photo).name for photo in photos[:4])
+        more = f" and {len(photos) - 4} more" if len(photos) > 4 else ""
+        self.unread_note.setText(
+            f"{len(photos)} photograph{'' if len(photos) == 1 else 's'} "
+            f"could not be read into this profile — {names}{more}. "
+            + " ".join(sorted(reasons)))
+        for widget in (self.unread_note, self.retry_button,
+                       self.ignore_button):
+            widget.show()
+
+    def retry_unread(self) -> None:
+        """Ask again about exactly the photographs that were not read."""
+        photos = [
+            Path(photo) for entry in self.unread
+            for photo in entry["photos"] if Path(photo).is_file()]
+        if not photos or not self.unread_profile:
+            self._report("Those photographs are no longer on disk.", "alarm")
+            self._hide_unread()
+            return
+        row = next(
+            (index for index, item in enumerate(self.available)
+             if item["path"] == self.unread_profile), -1)
+        if row < 0:
+            return
+        self.show_profile(row) if self.showing != row else None
+        self.staged = list(photos)
+        self.examples = self.examples + [
+            path for path in photos if path not in self.examples]
+        self._hide_unread()
+        self.show_examples()
+        self._report(
+            "Those photographs are staged. Refine the profile to read "
+            "them into it.", "ok")
+
+    def ignore_unread(self) -> None:
+        """Keep the profile as it is; the record of what was missed stays."""
+        self._hide_unread()
+        self._report(
+            "Left out. They stay recorded as unread in the profile, so it "
+            "never passes for more than it is.", "ok")
+
     def _paint_next_card(self) -> None:
         for card in self.cards:
             if not getattr(card, "_painted", False):
@@ -617,9 +711,11 @@ class StylePanel(QWidget):
         summary["name"] = item["name"]
         self._show(summary, item["path"])
         self.detail_scroll.show()
+        self.show_unread(item)
 
     def hide_profile(self) -> None:
         """Put a profile's reading away, and the staged set back."""
+        self._hide_unread()
         self.showing = -1
         self.detail_scroll.hide()
         self.viewing = ""
