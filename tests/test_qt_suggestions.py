@@ -207,8 +207,52 @@ class AskingTests(SuggestionsPageTests):
         with mock.patch.object(
                 page, "_ask_scope", return_value="all") as scope:
             page.suggest()
-        scope.assert_called_once_with(2, 0, 1)
+        # The plan itself is handed over, not a count: what the dialog has
+        # to show is which frames share an answer with which.
+        (waiting, done, plan), _ = scope.call_args
+        self.assertEqual((waiting, done), (2, 0))
+        self.assertEqual(len(plan), 1)
+        self.assertEqual(
+            sorted(plan[0]["photos"]), sorted([NAMES[0], NAMES[1]]))
         self.assertEqual(asked, [sorted([NAMES[0], NAMES[1]])])
+
+    def test_the_scene_grouping_is_shown_before_it_is_agreed_to(self):
+        """A saving nobody can inspect is a treatment applied on trust."""
+        from opencull_gui import scenes
+        from opencull_qt.suggestions import ScenePlanDialog, SceneStrip
+
+        page = self.page(marked=(NAMES[0], NAMES[1]), suggested=False)
+        plan = scenes.plan_for(page.shortlist, [NAMES[0], NAMES[1]])
+        dialog = ScenePlanDialog(
+            page, plan, 2, 0, page.loader,
+            scenes.photos_root_of(page.shortlist))
+        self.addCleanup(dialog.deleteLater)
+
+        strips = dialog.findChildren(SceneStrip)
+        self.assertEqual(len(strips), len(plan))
+        self.assertEqual(
+            sorted(strips[0].photos), sorted([NAMES[0], NAMES[1]]))
+        # Every frame of the scene is on screen, and the one whose answer
+        # the others inherit is named.
+        self.assertEqual(len(strips[0].frames), 2)
+        self.assertEqual(strips[0].representative, plan[0]["representative"])
+        shown = "\n".join(
+            label.text() for label in dialog.findChildren(QLabel))
+        self.assertIn(plan[0]["representative"], shown)
+        self.assertIn("2 frames, 1 scene", shown)
+
+    def test_the_dialog_reports_which_scope_was_pressed(self):
+        from opencull_gui import scenes
+        from opencull_qt.suggestions import ScenePlanDialog
+
+        page = self.page(marked=(NAMES[0], NAMES[1]), suggested=False)
+        plan = scenes.plan_for(page.shortlist, [NAMES[0], NAMES[1]])
+        for label, expected in (("scene", "scene"), ("all", "all")):
+            dialog = ScenePlanDialog(page, plan, 2, 0, page.loader, None)
+            self.addCleanup(dialog.deleteLater)
+            self.assertEqual(dialog.choice, "cancel")
+            dialog._choose(label)
+            self.assertEqual(dialog.choice, expected)
 
     def test_choosing_scenes_asks_only_the_representatives(self):
         from opencull_gui import scenes

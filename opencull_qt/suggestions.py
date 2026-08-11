@@ -21,11 +21,15 @@ them, and the tick written is the same mark the assessment shows.
 
 from __future__ import annotations
 
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtWidgets import (
+    QDialog,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QListWidget,
@@ -39,9 +43,11 @@ from PySide6.QtWidgets import (
 )
 
 from opencull_gui.development import BUILTIN_STYLES
+from opencull_gui.scenes import capture_time, photos_root_of
 from opencull_gui.shortlist import settled_order, tier_rank
 
 from . import theme
+from .previews import scaled
 from .sheet import ContactSheet
 
 PHOTO_ROW = 30
@@ -596,8 +602,10 @@ class SuggestionsPage(QWidget):
     def suggest(self) -> None:
         launch_suggestions(self, self.payload())
 
-    def _ask_scope(self, waiting: int, done: int, scene_count: int = 0) -> str:
-        return ask_suggestion_scope(self, waiting, done, scene_count)
+    def _ask_scope(self, waiting: int, done: int, plan=()) -> str:
+        return ask_suggestion_scope(
+            self, waiting, done, plan, loader=self.loader,
+            photos_root=photos_root_of(self.shortlist))
 
     def step(self, delta: int) -> None:
         if not self.photos:
@@ -617,14 +625,215 @@ class SuggestionsPage(QWidget):
             super().keyPressEvent(event)
 
 
-def ask_suggestion_scope(parent, waiting: int, done: int,
-                         scene_count: int = 0) -> str:
+class SceneStrip(QFrame):
+    """One scene, as its photographs, with the one that speaks for it."""
+
+    THUMB = 104
+    GAP = 6
+
+    def __init__(self, scene: dict, loader, when: str,
+                 parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setObjectName("decision")
+        self.loader = loader
+        self.photos = [str(photo) for photo in scene.get("photos", [])]
+        self.representative = str(scene.get("representative") or "")
+        self.frames: dict[str, QLabel] = {}
+        self._columns = 0
+        loader.ready.connect(self._painted)
+
+        column = QVBoxLayout(self)
+        column.setContentsMargins(12, 10, 12, 10)
+        column.setSpacing(8)
+
+        title = QLabel(
+            f"{len(self.photos)} frame{'' if len(self.photos) == 1 else 's'}"
+            + (f"   ·   {when}" if when else "")
+            + f"   ·   one call, answered by {self.representative}")
+        title.setObjectName("axisName")
+        title.setFont(theme.display(7))
+        column.addWidget(title)
+
+        # A long scene wraps into rows. Sideways scrolling would hide the
+        # very frames the photographer is being asked to judge the grouping
+        # by, which is the whole point of showing them.
+        self.strip = QGridLayout()
+        self.strip.setSpacing(self.GAP)
+        for photo in self.photos:
+            frame = QLabel("")
+            frame.setObjectName("frameImage")
+            frame.setFixedSize(self.THUMB, self.THUMB)
+            frame.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            speaks = photo == self.representative
+            frame.setToolTip(
+                f"{photo} — its treatment is written, and shared with the "
+                f"rest of this scene." if speaks else
+                f"{photo} — developed with the treatment written for "
+                f"{self.representative}.")
+            if speaks:
+                frame.setStyleSheet(
+                    f"border: 2px solid {theme.SAFELIGHT}; border-radius: 4px;")
+            self.frames[photo] = frame
+            pixmap = loader.request(photo, "thumb")
+            if pixmap is not None:
+                self._paint(photo, pixmap)
+        column.addLayout(self.strip)
+        self._deal(1)
+
+    def _deal(self, columns: int) -> None:
+        columns = max(1, min(columns, len(self.photos) or 1))
+        if columns == self._columns:
+            return
+        self._columns = columns
+        while self.strip.count():
+            self.strip.takeAt(0)
+        for column in range(self.strip.columnCount() + 1):
+            self.strip.setColumnStretch(column, 0)
+        for index, photo in enumerate(self.photos):
+            self.strip.addWidget(
+                self.frames[photo], index // columns, index % columns)
+        self.strip.setColumnStretch(columns, 1)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        super().resizeEvent(event)
+        margins = self.layout().contentsMargins()
+        available = self.width() - margins.left() - margins.right()
+        self._deal((available + self.GAP) // (self.THUMB + self.GAP))
+
+    def _painted(self, name: str, size: str, pixmap) -> None:
+        if size == "thumb" and name in self.frames:
+            self._paint(name, pixmap)
+
+    def _paint(self, name: str, pixmap) -> None:
+        self.frames[name].setPixmap(scaled(
+            pixmap, self.THUMB, self.THUMB, self.devicePixelRatioF()))
+
+
+def scene_when(photos, photos_root) -> str:
+    """The clock times a scene spans, as a photographer would say them."""
+    if photos_root is None:
+        return ""
+    stamps = sorted(
+        stamp for stamp in
+        (capture_time(Path(photos_root) / photo) for photo in photos)
+        if stamp)
+    if not stamps:
+        return ""
+    first = datetime.fromtimestamp(stamps[0])
+    last = datetime.fromtimestamp(stamps[-1])
+    if first.strftime("%H:%M") == last.strftime("%H:%M"):
+        return first.strftime("%d %b, %H:%M")
+    return f"{first:%d %b, %H:%M}–{last:%H:%M}"
+
+
+class ScenePlanDialog(QDialog):
+    """What sharing a treatment across a scene would actually mean.
+
+    The saving used to be offered as a number -- "1 call instead of 39" --
+    and accepting it meant trusting a grouping nobody could see. A scene
+    that is wrong is not a saving, it is one photograph's treatment applied
+    to another photograph, so the grouping is shown before it is agreed to.
+    """
+
+    def __init__(self, parent, plan, waiting: int, done: int, loader,
+                 photos_root):
+        super().__init__(parent)
+        self.setWindowTitle("Ask for editing directions?")
+        self.setStyleSheet(theme.STYLESHEET)
+        self.choice = "cancel"
+        covered = sum(len(scene.get("photos", [])) for scene in plan)
+
+        column = QVBoxLayout(self)
+        column.setContentsMargins(22, 18, 22, 16)
+        column.setSpacing(12)
+
+        heading = QLabel(
+            f"{covered} frames, {len(plan)} "
+            f"scene{'' if len(plan) == 1 else 's'}")
+        heading.setObjectName("clusterTitle")
+        heading.setFont(theme.display(17))
+        column.addWidget(heading)
+
+        lead = QLabel(
+            "A scene is frames from the same place and light, grouped by "
+            "when they were taken. One call per scene writes a treatment "
+            "for the frame the assessment ranked highest and shares it with "
+            "the rest, so a scene develops as one edit. One call per frame "
+            "asks about each separately."
+            + (f" {done} of these frames already have directions."
+               if done else ""))
+        lead.setObjectName("hint")
+        lead.setWordWrap(True)
+        lead.setFont(theme.body(10))
+        column.addWidget(lead)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        holder = QWidget()
+        holder.setObjectName("page")
+        inner = QVBoxLayout(holder)
+        inner.setContentsMargins(0, 0, 8, 0)
+        inner.setSpacing(8)
+        for scene in plan:
+            inner.addWidget(SceneStrip(
+                scene, loader,
+                scene_when(scene.get("photos", []), photos_root)))
+        inner.addStretch(1)
+        scroll.setWidget(holder)
+        column.addWidget(scroll, 1)
+
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        share = QPushButton(
+            f"One per scene ({len(plan)} "
+            f"call{'' if len(plan) == 1 else 's'})")
+        share.setObjectName("primary")
+        share.setFont(theme.body(10))
+        share.setCursor(Qt.CursorShape.PointingHandCursor)
+        share.clicked.connect(lambda: self._choose("scene"))
+        row.addWidget(share)
+        every = QPushButton(
+            f"Only the {waiting} without ({waiting} calls)" if done
+            else f"Every frame ({waiting} calls)")
+        every.setObjectName("ghost")
+        every.setFont(theme.body(10))
+        every.setCursor(Qt.CursorShape.PointingHandCursor)
+        every.clicked.connect(
+            lambda: self._choose("missing" if done else "all"))
+        row.addWidget(every)
+        row.addStretch(1)
+        cancel = QPushButton("Cancel")
+        cancel.setObjectName("ghost")
+        cancel.setFont(theme.body(10))
+        cancel.setCursor(Qt.CursorShape.PointingHandCursor)
+        cancel.clicked.connect(self.reject)
+        row.addWidget(cancel)
+        column.addLayout(row)
+        self.resize(980, 720)
+
+    def _choose(self, choice: str) -> None:
+        self.choice = choice
+        self.accept()
+
+
+def ask_suggestion_scope(parent, waiting: int, done: int, plan=(),
+                         loader=None, photos_root=None) -> str:
     """What to spend, put as the choice it is.
 
     "scene" asks once per scene and shares the answer; "missing" asks for
     every frame without directions; "all" pays again for answers already
     given, and is styled as the destructive act it is.
+
+    Where there is a scene plan and the frames can be shown, the grouping
+    is put on screen rather than summarised as a number.
     """
+    plan = list(plan)
+    if plan and loader is not None:
+        dialog = ScenePlanDialog(parent, plan, waiting, done, loader,
+                                 photos_root)
+        dialog.exec()
+        return dialog.choice
+    scene_count = len(plan)
     box = QMessageBox(parent)
     box.setWindowTitle("Ask for editing directions?")
     box.setIcon(QMessageBox.Icon.Question)
@@ -698,14 +907,14 @@ def launch_suggestions(page, payload: dict) -> None:
     targets = waiting if waiting else sorted(marked)
     plan = scenes.plan_for(page.shortlist, targets)
     # A scene plan is only worth offering when it actually saves calls.
-    scene_count = len(plan) if 0 < len(plan) < len(targets) else 0
+    offer = plan if 0 < len(plan) < len(targets) else []
 
     if done and waiting:
-        choice = page._ask_scope(len(waiting), len(done), scene_count)
+        choice = page._ask_scope(len(waiting), len(done), offer)
     elif done:
-        choice = page._ask_scope(0, len(done), 0)
-    elif scene_count:
-        choice = page._ask_scope(len(targets), 0, scene_count)
+        choice = page._ask_scope(0, len(done), [])
+    elif offer:
+        choice = page._ask_scope(len(targets), 0, offer)
     else:
         choice = "all"
     if choice == "cancel":

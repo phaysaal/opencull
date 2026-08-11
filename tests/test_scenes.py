@@ -6,11 +6,12 @@ import json
 import sys
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from PIL import Image  # noqa: E402
+from PIL import Image, UnidentifiedImageError  # noqa: E402
 
 from opencull_gui import scenes  # noqa: E402
 from opencull_gui.directions import DirectionsIndex  # noqa: E402
@@ -86,6 +87,48 @@ class GroupingTests(unittest.TestCase):
                          [["DSCF0001.JPG"], ["DSCF0100.JPG"]])
 
 
+class RawClockTests(unittest.TestCase):
+    """A raw file is not an image PIL can open, but it carries a clock."""
+
+    def raw(self, root: Path, name: str, when: str) -> Path:
+        """A file shaped like a raw: a header, then an embedded JPEG."""
+        jpeg = root / "preview.jpg"
+        timed_photo(jpeg, when)
+        path = root / name
+        path.write_bytes(b"FUJIFILMCCD-RAW 0201FF12345678"
+                         + b"\x00" * 512 + jpeg.read_bytes())
+        jpeg.unlink()
+        return path
+
+    def test_the_clock_inside_a_raw_file_is_read(self):
+        root = Path(tempfile.mkdtemp())
+        path = self.raw(root, "DSCF0001.RAF", "2026:01:01 10:00:00")
+        # PIL cannot open this at all, which is exactly why the time was
+        # invisible before.
+        with self.assertRaises(UnidentifiedImageError):
+            Image.open(path)
+        self.assertEqual(
+            datetime.fromtimestamp(scenes.capture_time(path)).strftime(
+                "%Y-%m-%d %H:%M"),
+            "2026-01-01 10:00")
+
+    def test_raw_frames_hours_apart_are_different_scenes(self):
+        # The defect this fixes: with no readable clock these fell back to
+        # the frame counter, and a whole day became one scene.
+        root = Path(tempfile.mkdtemp())
+        self.raw(root, "DSCF0001.RAF", "2026:01:01 10:00:00")
+        self.raw(root, "DSCF0002.RAF", "2026:01:01 16:00:00")
+        groups = scenes.scene_groups(
+            [entry("DSCF0001.RAF", "c1"), entry("DSCF0002.RAF", "c2")], root)
+        self.assertEqual(len(groups), 2)
+
+    def test_a_file_with_no_clock_anywhere_is_simply_unknown(self):
+        root = Path(tempfile.mkdtemp())
+        path = root / "DSCF0003.RAF"
+        path.write_bytes(b"not a photograph at all")
+        self.assertIsNone(scenes.capture_time(path))
+
+
 class PlanTests(unittest.TestCase):
     class Shortlist:
         def __init__(self, entries):
@@ -100,6 +143,28 @@ class PlanTests(unittest.TestCase):
             shortlist, ["DSCF0001.JPG", "DSCF0002.JPG", "DSCF0003.JPG"])
         self.assertEqual(len(plan), 1)
         self.assertEqual(plan[0]["representative"], "DSCF0002.JPG")
+
+    def test_the_plan_finds_the_photographs_without_being_told(self):
+        """The index knows where its photographs are; the caller forgot.
+
+        Every scene on the suggestion path was computed from filenames
+        because one call site omitted the folder. The default closes that
+        hole rather than trusting the next caller to remember.
+        """
+        root = Path(tempfile.mkdtemp())
+        timed_photo(root / "A0001.JPG", "2026:01:01 10:00:00")
+        timed_photo(root / "A0002.JPG", "2026:01:01 16:00:00")
+
+        class Assets:
+            def __init__(self, root):
+                self.root = root
+
+        shortlist = self.Shortlist([
+            entry("A0001.JPG", "c1", rank=1),
+            entry("A0002.JPG", "c2", rank=2)])
+        shortlist.assets = Assets(root)
+        plan = scenes.plan_for(shortlist, ["A0001.JPG", "A0002.JPG"])
+        self.assertEqual(len(plan), 2)
 
     def test_frames_nobody_asked_about_stay_out_of_the_plan(self):
         shortlist = self.Shortlist([

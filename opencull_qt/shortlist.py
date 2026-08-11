@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from opencull_gui.scenes import photos_root_of
 from opencull_gui.shortlist import (
     ASSESSMENT_FIELDS,
     rated_by_hand,
@@ -1018,8 +1019,10 @@ class ShortlistPage(QWidget):
             return
         launch_suggestions(self, self.directions.payload())
 
-    def _ask_scope(self, waiting: int, done: int, scene_count: int = 0) -> str:
-        return ask_suggestion_scope(self, waiting, done, scene_count)
+    def _ask_scope(self, waiting: int, done: int, plan=()) -> str:
+        return ask_suggestion_scope(
+            self, waiting, done, plan, loader=self.loader,
+            photos_root=photos_root_of(self.shortlist))
 
     def step(self, delta: int) -> None:
         if not self.entries:
