@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QListWidget,
@@ -151,7 +152,7 @@ class ShortlistPage(QWidget):
         # The photograph is what is being judged, so it gets the room. The
         # judgement sits beside it in a column narrow enough to read, rather
         # than under a thumbnail with half the window left empty.
-        body = QHBoxLayout()
+        body = QVBoxLayout()
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(0)
 
@@ -210,14 +211,17 @@ class ShortlistPage(QWidget):
         self.frame = PhotoLabel()
         self.frame.setObjectName("paneImage")
         stage_column.addWidget(self.frame, 1)
-        body.addWidget(stage, 1)
 
         panel = QFrame()
         panel.setObjectName("panel")
-        panel.setFixedWidth(430)
+        # A band beneath the photograph rather than a column beside it:
+        # the frame is what is being judged, so it gets the room, and
+        # the reading is read across rather than down a narrow gutter.
+        panel.setMinimumHeight(170)
+        panel.setMaximumHeight(260)
         judgement = QVBoxLayout(panel)
-        judgement.setContentsMargins(18, 14, 12, 14)
-        judgement.setSpacing(8)
+        judgement.setContentsMargins(18, 12, 12, 12)
+        judgement.setSpacing(6)
 
         self.verdict = QLabel("")
         self.verdict.setObjectName("rowState")
@@ -248,11 +252,16 @@ class ShortlistPage(QWidget):
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         holder = QWidget()
         holder.setObjectName("controls")
-        self.axes = QVBoxLayout(holder)
+        # Ten readings across a full-width band read as columns, not as
+        # one long scroll down a gutter.
+        self.axes = QGridLayout(holder)
         self.axes.setContentsMargins(0, 4, 8, 4)
-        self.axes.setSpacing(10)
+        self.axes.setHorizontalSpacing(22)
+        self.axes.setVerticalSpacing(8)
         scroll.setWidget(holder)
         judgement.addWidget(scroll, 1)
+
+        body.addWidget(stage, 1)
         body.addWidget(panel)
 
         column.addLayout(body, 1)
@@ -773,21 +782,34 @@ class ShortlistPage(QWidget):
             if widget is not None:
                 widget.setParent(None)
                 widget.deleteLater()
+        for column in range(self.axes.columnCount() + 1):
+            self.axes.setColumnStretch(column, 0)
         if self.by_hand:
             # Ten rows of "Not assessed." is not information. Say once that
             # nobody was asked, and leave the page to the photograph.
             self.axes.addWidget(Axis(
                 "NOT ASSESSED",
                 "No model has looked at this shoot. The rating below is "
-                "yours, and the frames are in the order the cull left them."))
+                "yours, and the frames are in the order the cull left them."),
+                0, 0)
+            self.axes.setColumnStretch(0, 1)
         else:
             assessment = entry.get("assessment", {}) or {}
-            for field in ASSESSMENT_FIELDS:
-                text = str(assessment.get(field, "")).strip()
-                if text:
-                    self.axes.addWidget(
-                        Axis(AXIS_LABELS.get(field, field), text))
-        self.axes.addStretch(1)
+            readings = [
+                (AXIS_LABELS.get(field, field),
+                 str(assessment.get(field, "")).strip())
+                for field in ASSESSMENT_FIELDS
+                if str(assessment.get(field, "")).strip()
+            ]
+            # Dealt down the columns, so the axes keep their order as the
+            # eye travels: first column top to bottom, then the next.
+            columns = 3 if len(readings) > 4 else max(1, len(readings))
+            rows = -(-len(readings) // columns)
+            for index, (label, text) in enumerate(readings):
+                self.axes.addWidget(
+                    Axis(label, text), index % rows, index // rows)
+            for column in range(columns):
+                self.axes.setColumnStretch(column, 1)
 
         mark = self._state().get("entries", {}).get(photo, {})
         self.interesting.setChecked(bool(mark.get("interesting")))
