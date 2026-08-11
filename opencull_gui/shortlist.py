@@ -96,6 +96,25 @@ def score_disagreements(entries) -> dict[str, str]:
     return flagged
 
 
+def readable_checkpoint(path) -> Path:
+    """The checkpoint a run is actually reading from.
+
+    A run under a bar writes to the file named for that bar, but adopts
+    a checkpoint from before that naming when one matches -- and it
+    writes its own only when it has something new to save. Anything
+    watching from outside has to look in the same two places, or it
+    reports a run that has read a hundred ratings as having none.
+    """
+    import re as _re
+
+    path = Path(str(path))
+    if path.is_file():
+        return path
+    legacy = Path(_re.sub(r"\.[0-9a-f]{8}\.checkpoint\.json$",
+                          ".checkpoint.json", str(path)))
+    return legacy if legacy.is_file() else path
+
+
 def unfinished_assessments(output) -> list[dict]:
     """Ratings already bought for a shortlist that was never written.
 

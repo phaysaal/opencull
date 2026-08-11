@@ -43,6 +43,7 @@ from opencull_gui.reviews import (
     narrow_selection,
 )
 from opencull_gui.shortlist import (
+    readable_checkpoint,
     tier_stars,
     unfinished_assessments,
     write_manual_shortlist,
@@ -441,7 +442,9 @@ class AssessProgress(QWidget):
         if self.checkpoint is None:
             return []
         try:
-            state = json.loads(self.checkpoint.read_text(encoding="utf-8"))
+            state = json.loads(
+                readable_checkpoint(self.checkpoint).read_text(
+                    encoding="utf-8"))
         except (OSError, ValueError):
             return []
         records = []
@@ -518,7 +521,16 @@ class AssessProgress(QWidget):
         progress = job.get("progress") or {}
         total = int(progress.get("total_items") or 0)
         completed = int(progress.get("completed_items") or 0)
-        if total:
+        if total and completed >= total:
+            # Every frame is rated and the run is still going: it is
+            # comparing frames against each other and putting the
+            # finished shortlist to its panel.
+            self.meter.setValue(100)
+            self.detail.setText(
+                f"All {total} frames are assessed. The run is now "
+                "comparing them against each other and certifying the "
+                "shortlist; nothing more is bought per frame.")
+        elif total:
             self.meter.setValue(round(100 * completed / total))
             self.detail.setText(
                 f"{completed} of {total} frames assessed. Ratings are "

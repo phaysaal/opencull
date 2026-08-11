@@ -32,7 +32,7 @@ from .providers import (
     ProviderStore,
     normalize_judgment_policy,
 )
-from .shortlist import bar_checkpoint_path
+from .shortlist import bar_checkpoint_path, readable_checkpoint
 
 QUEUE_FORMAT = "opencull-job-queue-v1"
 ACTIVE = {"running", "stopping", "detached"}
@@ -1584,7 +1584,7 @@ class JobManager:
 
     @staticmethod
     def _progress(job: dict[str, Any]) -> dict[str, Any]:
-        checkpoint = Path(job["checkpoint"])
+        checkpoint = readable_checkpoint(job["checkpoint"])
         completed = total = 0
         checkpoint_complete = False
         kind = job.get("kind")

@@ -54,6 +54,19 @@ def report_payload():
 
 
 class AssetFamilyTests(unittest.TestCase):
+    def test_a_watcher_finds_the_checkpoint_a_run_adopted(self):
+        from opencull_gui.shortlist import readable_checkpoint
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            per_bar = root / "out.json.1788e819.checkpoint.json"
+            legacy = root / "out.json.checkpoint.json"
+            legacy.write_text("{}")
+            # Its own file is not written yet: look where it is reading.
+            self.assertEqual(readable_checkpoint(per_bar), legacy)
+            per_bar.write_text("{}")
+            self.assertEqual(readable_checkpoint(per_bar), per_bar)
+
     def test_ratings_waiting_in_a_checkpoint_are_findable(self):
         import json as json_module
 
