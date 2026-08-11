@@ -277,6 +277,29 @@ class StyleDialogTests(unittest.TestCase):
         ):
             dialog.add_examples()
 
+    def test_an_empty_page_offers_to_start_rather_than_saying_it_is_empty(
+            self):
+        dialog = self.dialog()
+        self.assertTrue(dialog.create_button.isVisibleTo(dialog))
+        # Nothing else in that band competes with the offer.
+        self.assertFalse(dialog.examples_scroll.isVisibleTo(dialog))
+        self.assertFalse(dialog.build_button.isVisibleTo(dialog))
+        self.assertFalse(dialog.add_button.isVisibleTo(dialog))
+
+        self.stage(dialog, [self.root / "a.jpg"])
+
+        # Once something is chosen, the working controls take over.
+        self.assertFalse(dialog.create_button.isVisibleTo(dialog))
+        self.assertTrue(dialog.examples_scroll.isVisibleTo(dialog))
+        self.assertTrue(dialog.build_button.isVisibleTo(dialog))
+        self.assertIn("PHOTOGRAPHS TO READ", dialog.examples_title.text())
+
+    def test_clearing_a_set_offers_to_start_again(self):
+        dialog = self.dialog()
+        self.stage(dialog, [self.root / "a.jpg"])
+        dialog.clear_examples()
+        self.assertTrue(dialog.create_button.isVisibleTo(dialog))
+
     def test_profiles_are_shown_as_their_photographs(self):
         from PySide6.QtWidgets import QLabel
 

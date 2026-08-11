@@ -324,6 +324,23 @@ class StylePanel(QWidget):
         self.examples_hint.setFont(theme.body(9))
         layout.addWidget(self.examples_hint)
 
+        # With nothing chosen, the page offers the act rather than
+        # describing its absence.
+        start = QHBoxLayout()
+        start.setContentsMargins(0, 6, 0, 6)
+        self.create_button = QPushButton("Create new profile")
+        self.create_button.setObjectName("primary")
+        self.create_button.setFont(theme.body(10))
+        self.create_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.create_button.setToolTip(
+            "Choose finished photographs of your own -- edited the way "
+            "you like them -- and read a style from them.")
+        self.create_button.clicked.connect(
+            lambda _checked=False: self.add_examples())
+        start.addWidget(self.create_button)
+        start.addStretch(1)
+        layout.addLayout(start)
+
         self.examples_scroll = QScrollArea()
         self.examples_scroll.setWidgetResizable(True)
         self.examples_scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -741,18 +758,24 @@ class StylePanel(QWidget):
                 widget.deleteLater()
         self.tiles = {}
         count = len(self.examples)
-        self.examples_title.setText(
-            "PHOTOGRAPHS TO READ" if count else "NO PHOTOGRAPHS CHOSEN YET")
+        # Nothing chosen and nothing being read: the page offers to
+        # start, and says nothing else.
+        starting = not count and not self.viewing
+        self.create_button.setVisible(starting)
+        for widget in (self.examples_title, self.examples_hint,
+                       self.examples_scroll, self.add_button,
+                       self.clear_button, self.build_button):
+            widget.setVisible(not starting)
+        if starting:
+            self._paint_thumbnails = []
+            return
+        self.examples_title.setText("PHOTOGRAPHS TO READ")
         passes = -(-count // 8)
         self.examples_hint.setText(
             f"{count} chosen · read in {passes} "
             f"pass{'' if passes == 1 else 'es'} of up to eight, "
             "each pass refining what the last one learned. "
-            "Double-click a photograph to take it out."
-            if count else
-            "Add finished photographs of your own -- edited the way you "
-            "like them. Fifteen to forty that genuinely look alike teach "
-            "a sharper profile than a hundred mixed ones.")
+            "Double-click a photograph to take it out.")
         self.build_button.setEnabled(bool(count))
         columns = max(1, self.examples_scroll.viewport().width()
                       // (ExampleTile.SIZE + 20))
