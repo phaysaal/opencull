@@ -665,6 +665,11 @@ def professional_report_evidence(report: str) -> str:
     projection = {
         "format": value.get("format"),
         "candidate_policy": value.get("candidate_policy"),
+        # The claim says these frames were measured against a stated
+        # bar, so the bar has to be in front of whoever checks it. A
+        # panel refused this shortlist for exactly that: asked about a
+        # bar the evidence never showed them, they rightly said no.
+        "bar": value.get("profile"),
         "entry_count": len(entries),
         "ranks_contiguous": [entry.get("rank") for entry in entries]
         == list(range(1, len(entries) + 1)),

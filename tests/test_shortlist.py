@@ -251,6 +251,27 @@ class AssetFamilyTests(unittest.TestCase):
             {"photo": "A.JPG", "tier": "strong", "score": 10},
             {"photo": "B.JPG", "tier": "reject", "score": 90}]), {})
 
+    def test_the_evidence_shows_the_bar_the_claim_names(self):
+        """A verifier cannot confirm a bar it was never shown."""
+        import json as json_module
+
+        from shortlist_kernel import (
+            professional_report_evidence,
+            professional_report_policy,
+        )
+
+        bar = "gentle bar (Is this worth keeping?) -- judged through family"
+        report = json_module.dumps({
+            "format": "opencull-professional-shortlist-v1",
+            "candidate_policy": "effective", "profile": bar,
+            "entries": [{
+                "rank": 1, "photo": "A.JPG", "tier": "promising",
+                "score": 60, "confidence": 0.8, "warnings": [],
+                "rationale": "the light carries it", "raw_files": []}]})
+        evidence = professional_report_evidence(report)
+        self.assertIn(bar, evidence)
+        self.assertIn(bar, professional_report_policy(bar))
+
     def test_the_claim_names_the_bar_the_run_was_actually_given(self):
         """A gentle run must not be certified against a strict bar."""
         from shortlist_kernel import professional_report_policy
