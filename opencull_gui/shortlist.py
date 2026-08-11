@@ -96,6 +96,71 @@ def score_disagreements(entries) -> dict[str, str]:
     return flagged
 
 
+BATCH = 8
+CERTIFYING_VOTES = 5
+
+
+def run_phases(trace, rated: int, total: int) -> dict:
+    """Which of a shortlist run's three phases is under way.
+
+    Rating is countable from the checkpoint, and comparing from the
+    run's own trace, which is appended as each batch lands. Certifying
+    is not countable at all: a panel's five votes are recorded together
+    when the last one is in, so the honest thing to show is that it is
+    happening and how many votes it takes -- not a fraction invented to
+    look like progress.
+    """
+    import json as _json
+
+    batches = -(-total // BATCH) if total else 0
+    compared = 0
+    judged = False
+    path = Path(str(trace))
+    if path.is_file():
+        try:
+            lines = path.read_text(
+                encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            lines = []
+        for line in lines:
+            if '"kind": "judge"' in line or '"kind":"judge"' in line:
+                judged = True
+                continue
+            if '"kind": "gen"' not in line and '"kind":"gen"' not in line:
+                continue
+            try:
+                record = _json.loads(line)
+            except ValueError:
+                continue
+            # The comparison pass is the one that asks B; a rating asks
+            # A. A retry crosses over, which can only undercount, never
+            # claim work that did not happen.
+            if str(record.get("agent", "")).startswith("B="):
+                compared += 1
+    compared = min(compared, batches) if batches else compared
+    if rated < total:
+        phase = "rating"
+    elif compared < batches:
+        phase = "comparing"
+    else:
+        phase = "certifying"
+    return {
+        "phase": phase,
+        "compared": compared,
+        "batches": batches,
+        "votes": CERTIFYING_VOTES,
+        "judged": judged,
+    }
+
+
+def trace_for(job: dict):
+    """Where a job's own trace is written, if it has one."""
+    program = str((job or {}).get("program_path") or "")
+    if not program:
+        return None
+    return Path(program).parent / ".kimiya" / "trace.jsonl"
+
+
 def forget_assessment(checkpoint, photo: str) -> bool:
     """Drop one frame's rating so the next run buys that frame again.
 

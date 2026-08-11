@@ -54,6 +54,36 @@ def report_payload():
 
 
 class AssetFamilyTests(unittest.TestCase):
+    def test_the_run_says_which_of_its_three_phases_it_is_in(self):
+        import json as json_module
+
+        from opencull_gui.shortlist import run_phases
+
+        with tempfile.TemporaryDirectory() as temporary:
+            trace = Path(temporary) / "trace.jsonl"
+            trace.write_text("")
+            # Frames still being rated.
+            self.assertEqual(
+                run_phases(trace, rated=40, total=102)["phase"], "rating")
+            # Rated; comparisons under way, counted from the trace.
+            trace.write_text("\n".join(
+                json_module.dumps({"kind": "gen", "agent": "B=m@h"})
+                for _ in range(10)))
+            state = run_phases(trace, rated=102, total=102)
+            self.assertEqual(state["phase"], "comparing")
+            self.assertEqual((state["compared"], state["batches"]), (10, 13))
+            # Ratings ask A and must never be counted as comparisons.
+            trace.write_text("\n".join(
+                [json_module.dumps({"kind": "gen", "agent": "A=m@h"})] * 50))
+            self.assertEqual(
+                run_phases(trace, rated=102, total=102)["compared"], 0)
+            # Every batch compared: the panel is what remains.
+            trace.write_text("\n".join(
+                [json_module.dumps({"kind": "gen", "agent": "B=m@h"})] * 13))
+            settled = run_phases(trace, rated=102, total=102)
+            self.assertEqual(settled["phase"], "certifying")
+            self.assertEqual(settled["votes"], 5)
+
     def test_a_frame_the_model_cannot_read_is_recorded_not_fatal(self):
         import json as json_module
 

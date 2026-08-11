@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QMessageBox,
+    QProgressBar,
     QPushButton,
     QScrollArea,
     QStackedWidget,
@@ -46,7 +47,9 @@ from opencull_gui.shortlist import (
     bar_checkpoint_path,
     forget_assessment,
     readable_checkpoint,
+    run_phases,
     tier_stars,
+    trace_for,
     unfinished_assessments,
     write_manual_shortlist,
 )
@@ -209,8 +212,6 @@ class CullProgress(QWidget):
         self.message.setWordWrap(True)
         self.message.setFont(theme.body(10))
         outer.addWidget(self.message)
-        from PySide6.QtWidgets import QProgressBar
-
         self.meter = QProgressBar()
         self.meter.setRange(0, 100)
         self.meter.setTextVisible(False)
@@ -414,8 +415,6 @@ class AssessProgress(QWidget):
         self.message.setWordWrap(True)
         self.message.setFont(theme.body(10))
         outer.addWidget(self.message)
-        from PySide6.QtWidgets import QProgressBar
-
         self.meter = QProgressBar()
         self.meter.setRange(0, 100)
         self.meter.setTextVisible(False)
@@ -425,6 +424,22 @@ class AssessProgress(QWidget):
         self.detail.setObjectName("hint")
         self.detail.setFont(theme.body(9))
         outer.addWidget(self.detail)
+
+        # Rating is one phase of three. The other two have their own
+        # meter, because a full bar over a run that is still working
+        # reads as a run that has stalled.
+        self.stage_meter = QProgressBar()
+        self.stage_meter.setRange(0, 100)
+        self.stage_meter.setTextVisible(False)
+        self.stage_meter.setFixedHeight(4)
+        self.stage_meter.hide()
+        outer.addWidget(self.stage_meter)
+        self.stage_detail = QLabel("")
+        self.stage_detail.setObjectName("hint")
+        self.stage_detail.setWordWrap(True)
+        self.stage_detail.setFont(theme.body(9))
+        self.stage_detail.hide()
+        outer.addWidget(self.stage_detail)
         self.rated_title = QLabel("")
         self.rated_title.setObjectName("clusterTitle")
         self.rated_title.setFont(theme.display(12))
@@ -524,14 +539,10 @@ class AssessProgress(QWidget):
         total = int(progress.get("total_items") or 0)
         completed = int(progress.get("completed_items") or 0)
         if total and completed >= total:
-            # Every frame is rated and the run is still going: it is
-            # comparing frames against each other and putting the
-            # finished shortlist to its panel.
             self.meter.setValue(100)
             self.detail.setText(
-                f"All {total} frames are assessed. The run is now "
-                "comparing them against each other and certifying the "
-                "shortlist; nothing more is bought per frame.")
+                f"All {total} frames are assessed, and nothing more is "
+                "bought per frame.")
         elif total:
             self.meter.setValue(round(100 * completed / total))
             self.detail.setText(
@@ -541,7 +552,43 @@ class AssessProgress(QWidget):
         else:
             self.meter.setValue(job_progress(job) or 0)
             self.detail.setText("Preparing the selection.")
+        self._show_stage(job, completed, total)
         self._refill(self._assessed())
+
+    def _show_stage(self, job: dict, rated: int, total: int) -> None:
+        """What the run is doing once every frame has been rated."""
+        running = job.get("status") in {"running", "detached", "stopping"}
+        trace = trace_for(job)
+        phases_now = run_phases(trace, rated, total) if trace else None
+        if not running or not total or phases_now is None:
+            self.stage_meter.hide()
+            self.stage_detail.hide()
+            return
+        phase = phases_now["phase"]
+        if phase == "rating":
+            self.stage_meter.hide()
+            self.stage_detail.hide()
+            return
+        self.stage_meter.show()
+        self.stage_detail.show()
+        if phase == "comparing":
+            batches = phases_now["batches"]
+            done = phases_now["compared"]
+            self.stage_meter.setRange(0, 100)
+            self.stage_meter.setValue(
+                round(100 * done / batches) if batches else 0)
+            self.stage_detail.setText(
+                f"Comparing frames against each other · batch {done} of "
+                f"{batches}. This is what keeps one burst's best frame "
+                "from outranking a better frame elsewhere.")
+        else:
+            # A panel records its votes together, so there is no honest
+            # fraction to show -- only that it is under way.
+            self.stage_meter.setRange(0, 0)
+            self.stage_detail.setText(
+                f"Certifying the finished shortlist · a panel of "
+                f"{phases_now['votes']} independent votes, of which four "
+                "must agree. The shortlist is written only if they do.")
 
 
 RECULL_WARNING = (
