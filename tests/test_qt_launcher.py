@@ -24,7 +24,24 @@ except ImportError:  # pragma: no cover - exercised only without PySide6
 
 from opencull_gui import credentials, phases  # noqa: E402
 from opencull_gui.providers import AGENTS, ProviderStore  # noqa: E402
-from tests.test_qt_develop import build_shoot  # noqa: E402
+from tests.test_qt_develop import (  # noqa: E402
+    assess_and_suggest,
+    build_shoot,
+)
+
+
+def assessed_shoot(root: Path, report_path: Path, photos: Path, marked):
+    """A shoot with an assessment and some frames marked to develop."""
+    shortlist_path = assess_and_suggest(
+        root, report_path, photos, marked=marked)
+    # The suggestion phase must be able to run: clear the answers this
+    # helper leaves behind, so nothing is already written.
+    from opencull_gui.project import ensure_project_layout
+
+    for stale in ensure_project_layout(photos)["Recipes"].glob(
+            "*edit-directions*"):
+        stale.unlink()
+    return shortlist_path, shortlist_path.with_suffix(".review.json")
 
 
 def qt_available() -> bool:
@@ -1027,6 +1044,102 @@ class LauncherWindowTests(unittest.TestCase):
         self.assertIn(
             "Resume assessment",
             [b.text() for b in page.findChildren(QPushButton)])
+
+    def test_the_ai_editing_page_shows_progress_while_running(self):
+        import json as json_module
+
+        from opencull_qt.launcher import SuggestProgress
+
+        window, services = self.build(projects=[])
+        shoot = Path(tempfile.mkdtemp())
+        report_path, photos_path = build_shoot(shoot)
+        shortlist_path, review_path = assessed_shoot(
+            shoot, report_path, photos_path, marked=("A.JPG", "B.JPG"))
+        checkpoint = shoot / "directions.checkpoint.json"
+        checkpoint.write_text(json_module.dumps(
+            {"entries": [{"photo": "A.JPG"}]}), encoding="utf-8")
+        services._jobs.append(
+            {"id": "s1", "kind": "edit_suggestions",
+             "photos": str(photos_path), "status": "running",
+             "checkpoint": str(checkpoint), "log": "x",
+             "message": "Writing directions.",
+             "only_photos": ["A.JPG", "B.JPG"],
+             "progress": {"completed_items": 1, "total_items": 2}})
+        project = {"id": "p1", "name": "A", "photos": str(photos_path),
+                   "report": str(report_path), "available": True,
+                   "report_available": True, "shortlist_available": True,
+                   "shortlist": str(shortlist_path),
+                   "shortlist_review": str(review_path)}
+        window.open_project(project, phases.SUGGESTIONS)
+        self.addCleanup(window.show_projects)
+
+        page = window.review_page.page_for(phases.SUGGESTIONS)
+        self.assertIsInstance(page, SuggestProgress)
+        self.assertEqual(page.meter.value(), 50)
+        # The frames answered so far, and the ones still to be paid for.
+        self.assertIn("1", page.answered_title.text())
+        self.assertIn("Still to ask about · 1", page.waiting_title.text())
+
+    def test_a_paused_suggestion_pass_offers_to_resume(self):
+        from PySide6.QtWidgets import QPushButton
+
+        from opencull_qt.launcher import SuggestProgress
+        from opencull_qt.shell import Invitation
+
+        shoot = Path(tempfile.mkdtemp())
+        report_path, photos_path = build_shoot(shoot)
+        shortlist_path, review_path = assessed_shoot(
+            shoot, report_path, photos_path, marked=("A.JPG",))
+        job = {"id": "s1", "kind": "edit_suggestions",
+               "photos": str(photos_path), "status": "running",
+               "checkpoint": str(shoot / "c.json"), "log": "x",
+               "message": "running", "only_photos": ["A.JPG"],
+               "progress": {"completed_items": 0, "total_items": 1}}
+        project = {"id": "p1", "name": "A", "photos": str(photos_path),
+                   "report": str(report_path), "available": True,
+                   "report_available": True, "shortlist_available": True,
+                   "shortlist": str(shortlist_path),
+                   "shortlist_review": str(review_path)}
+        window, services = self.build(projects=[project], jobs=[job])
+        window.open_project(project, phases.SUGGESTIONS)
+        self.addCleanup(window.show_projects)
+        shell = window.review_page
+        self.assertIsInstance(
+            shell.page_for(phases.SUGGESTIONS), SuggestProgress)
+
+        job["status"] = "paused"
+        window.refresh()
+
+        page = shell.page_for(phases.SUGGESTIONS)
+        self.assertIsInstance(page, Invitation)
+        self.assertIn(
+            "Resume writing directions",
+            [button.text() for button in page.findChildren(QPushButton)])
+        for button in page.findChildren(QPushButton):
+            if button.text() == "Resume writing directions":
+                button.click()
+        services.jobs.action.assert_called_once_with("s1", "resume")
+
+    def test_a_scene_run_says_which_frames_cost_nothing(self):
+        from opencull_gui.photos import PhotoStore
+        from opencull_qt.launcher import SuggestProgress
+        from opencull_qt.previews import PreviewLoader
+
+        shoot = Path(tempfile.mkdtemp())
+        _report, photos_path = build_shoot(shoot)
+        loader = PreviewLoader(PhotoStore(photos_path, shoot / "cache"))
+        self.addCleanup(loader.shutdown)
+        # Two calls, four frames developed: the other two inherit, and a
+        # page that counted only the calls would look half-finished.
+        page = SuggestProgress(
+            "A", names=["A.JPG", "B.JPG"], loader=loader, covered=4)
+        self.addCleanup(page.deleteLater)
+        page.set_job({"status": "running",
+                      "progress": {"completed_items": 1, "total_items": 2}})
+        self.assertEqual(page.meter.value(), 50)
+        self.assertIn("covering 4 frames", page.detail.text())
+        self.assertIn("2 more frames take these treatments",
+                      page.inheriting.text())
 
     def test_every_rated_photo_carries_its_own_eye(self):
         import json as json_module

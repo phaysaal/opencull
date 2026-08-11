@@ -592,6 +592,169 @@ class AssessProgress(QWidget):
                 "must agree. The shortlist is written only if they do.")
 
 
+class SuggestProgress(QWidget):
+    """The AI editing phase while its run is actually running.
+
+    A suggestion pass is the most expensive thing this application does --
+    a call per frame, or per scene -- and it used to run behind a sentence
+    saying the answers would appear when it finished. The frames it has
+    answered gather above and the ones still to come thin out below, both
+    read from the run's own checkpoint, so a run that has stopped paying
+    for anything is visibly distinct from one still working.
+    """
+
+    def __init__(self, name: str, on_pause=None,
+                 names: list[str] | None = None, loader=None,
+                 checkpoint: Path | None = None, covered: int = 0,
+                 parent: QWidget | None = None):
+        super().__init__(parent)
+        self.names = list(names or [])
+        self.loader = loader
+        self.checkpoint = checkpoint
+        # A scene run asks about one frame and develops several. The frames
+        # this page counts are the ones being paid for; the rest inherit,
+        # and saying how many is the difference between a run that looks
+        # half-finished and one that is doing what was agreed.
+        self.covered = int(covered)
+        self._shown: tuple[int, int] = (-1, -1)
+        self.setObjectName("page")
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(36, 30, 36, 26)
+        outer.setSpacing(8)
+
+        head = QHBoxLayout()
+        head.setSpacing(10)
+        title = QLabel(f"Writing editing directions for {name}")
+        title.setObjectName("clusterTitle")
+        title.setFont(theme.display(20))
+        head.addWidget(title, 1)
+        self.pause_button = None
+        if on_pause is not None:
+            self.pause_button = QPushButton("Pause")
+            self.pause_button.setObjectName("ghost")
+            self.pause_button.setFont(theme.body(9))
+            self.pause_button.setToolTip(
+                "Stop after the current frame. Every treatment written so "
+                "far is checkpointed; resuming buys only the rest.")
+            self.pause_button.clicked.connect(lambda _=False: on_pause())
+            head.addWidget(self.pause_button)
+        outer.addLayout(head)
+
+        self.message = QLabel("The edit-direction worker is starting.")
+        self.message.setObjectName("hint")
+        self.message.setWordWrap(True)
+        self.message.setFont(theme.body(10))
+        outer.addWidget(self.message)
+        self.meter = QProgressBar()
+        self.meter.setRange(0, 100)
+        self.meter.setTextVisible(False)
+        self.meter.setFixedHeight(4)
+        outer.addWidget(self.meter)
+        self.detail = QLabel("")
+        self.detail.setObjectName("hint")
+        self.detail.setWordWrap(True)
+        self.detail.setFont(theme.body(9))
+        outer.addWidget(self.detail)
+
+        self.inheriting = QLabel("")
+        self.inheriting.setObjectName("hint")
+        self.inheriting.setWordWrap(True)
+        self.inheriting.setFont(theme.body(9))
+        self.inheriting.hide()
+        outer.addWidget(self.inheriting)
+
+        self.answered_title = QLabel("")
+        self.answered_title.setObjectName("clusterTitle")
+        self.answered_title.setFont(theme.display(12))
+        outer.addWidget(self.answered_title)
+        self._answered_slot = QVBoxLayout()
+        outer.addLayout(self._answered_slot, 3)
+        self.waiting_title = QLabel("")
+        self.waiting_title.setObjectName("clusterTitle")
+        self.waiting_title.setFont(theme.display(12))
+        outer.addWidget(self.waiting_title)
+        self._waiting_slot = QVBoxLayout()
+        outer.addLayout(self._waiting_slot, 2)
+        self.answered_sheet: QWidget | None = None
+        self.waiting_sheet: QWidget | None = None
+
+    def _written(self) -> list[str]:
+        """The frames the checkpoint already holds a treatment for."""
+        if self.checkpoint is None:
+            return []
+        try:
+            state = json.loads(
+                readable_checkpoint(self.checkpoint).read_text(
+                    encoding="utf-8"))
+        except (OSError, ValueError):
+            return []
+        found = []
+        for item in state.get("entries", []):
+            if isinstance(item, str):
+                try:
+                    item = json.loads(item)
+                except ValueError:
+                    continue
+            if isinstance(item, dict) and item.get("photo"):
+                found.append(str(item["photo"]))
+        return found
+
+    def _refill(self, answered: list[str]) -> None:
+        waiting = [name for name in self.names if name not in set(answered)]
+        state = (len(answered), len(waiting))
+        if state == self._shown or self.loader is None:
+            return
+        self._shown = state
+        for slot, old in ((self._answered_slot, self.answered_sheet),
+                          (self._waiting_slot, self.waiting_sheet)):
+            if old is not None:
+                slot.removeWidget(old)
+                old.deleteLater()
+        self.answered_title.setVisible(bool(answered))
+        self.answered_title.setText(f"Treatments written · {len(answered)}")
+        self.waiting_title.setVisible(bool(waiting))
+        self.waiting_title.setText(f"Still to ask about · {len(waiting)}")
+        self.inheriting.setVisible(bool(self._inherited()))
+        self.inheriting.setText(
+            f"{self._inherited()} more frames take these treatments from "
+            "their scene, and are not asked about separately.")
+        self.answered_sheet = ContactSheet(answered, self.loader)
+        self._answered_slot.addWidget(self.answered_sheet)
+        self.waiting_sheet = None
+        if waiting:
+            self.waiting_sheet = ContactSheet(waiting, self.loader)
+            self._waiting_slot.addWidget(self.waiting_sheet)
+
+    def _inherited(self) -> int:
+        """Frames the run develops without asking about them."""
+        return max(0, self.covered - len(self.names))
+
+    def set_job(self, job: dict) -> None:
+        self.message.setText(str(job.get("message") or ""))
+        if self.pause_button is not None:
+            self.pause_button.setEnabled(
+                job.get("status") in {"running", "detached"})
+        progress = job.get("progress") or {}
+        total = int(progress.get("total_items") or 0)
+        completed = int(progress.get("completed_items") or 0)
+        shared = self._inherited()
+        if total and completed >= total:
+            self.meter.setValue(100)
+            self.detail.setText(
+                f"All {total} calls are answered. Nothing further is bought.")
+        elif total:
+            self.meter.setValue(round(100 * completed / total))
+            self.detail.setText(
+                f"{completed} of {total} calls answered"
+                + (f", covering {self.covered} frames." if shared else ".")
+                + " Each answer is checkpointed as it lands; an interrupted "
+                "run resumes without buying it again.")
+        else:
+            self.meter.setValue(job_progress(job) or 0)
+            self.detail.setText("Reading the marked frames.")
+        self._refill(self._written())
+
+
 RECULL_WARNING = (
     "Culling {name} again discards the current selection and asks the models "
     "to choose from scratch. It costs another full run.\n\n"
@@ -911,6 +1074,19 @@ class Launcher(QMainWindow):
                 shell.rebuild(phases.ASSESSMENT)
         elif assess_page is not None and assessing is not None:
             shell.rebuild(phases.ASSESSMENT)
+        suggest_page = shell.page_for(phases.SUGGESTIONS)
+        suggesting = next(
+            (job for job in self._suggestion_jobs(
+                str(current.get("photos", "")))
+             if job.get("status") in
+             {"running", "queued", "stopping", "detached"}), None)
+        if isinstance(suggest_page, SuggestProgress):
+            if suggesting is not None:
+                suggest_page.set_job(suggesting)
+            else:
+                shell.rebuild(phases.SUGGESTIONS)
+        elif suggest_page is not None and suggesting is not None:
+            shell.rebuild(phases.SUGGESTIONS)
 
     def folder_contents(self, project: dict) -> dict:
         """Classify a folder's photographs, walking it at most once."""
@@ -1135,6 +1311,50 @@ class Launcher(QMainWindow):
             and str(job.get("photos") or "")
             and Path(str(job["photos"])) == Path(photos)]
 
+    def _suggestion_jobs(self, photos: str) -> list[dict]:
+        try:
+            queue = self.services.jobs.public()["jobs"]
+        except Exception:                            # noqa: BLE001 - transient
+            return []
+        return [
+            job for job in queue
+            if job.get("kind") == "edit_suggestions"
+            and str(job.get("photos") or "")
+            and Path(str(job["photos"])) == Path(photos)]
+
+    @staticmethod
+    def _scene_coverage(bench: Bench, asked: list[str]) -> int:
+        """How many frames the run develops, asked about or inheriting.
+
+        Only the plan the photographer approved counts. A run that asked
+        per frame has no plan, and its coverage is simply what it asked.
+        """
+        from opencull_gui import scenes
+
+        try:
+            path = scenes.plan_path(
+                bench.layout["Recipes"], bench.shortlist_path.stem)
+            plan = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, KeyError):
+            return len(asked)
+        wanted = set(asked)
+        return sum(
+            len(scene.get("photos", []))
+            for scene in plan.get("scenes", []) or []
+            if isinstance(scene, dict)
+            and str(scene.get("representative") or "") in wanted) or len(asked)
+
+    @staticmethod
+    def _marked_photos(bench: Bench) -> list[str]:
+        """The frames marked worth developing, for a run that named none."""
+        try:
+            state = bench.shortlist_reviews.public_state()
+        except Exception:                            # noqa: BLE001 - absent
+            return []
+        return sorted(
+            photo for photo, entry in state.get("entries", {}).items()
+            if isinstance(entry, dict) and entry.get("interesting") is True)
+
     def _culling_jobs(self, photos: str) -> list[dict]:
         try:
             queue = self.services.jobs.public()["jobs"]
@@ -1280,7 +1500,11 @@ class Launcher(QMainWindow):
             project,
             profile_selected=bool(self.style_profiles.selected()),
             marked=bench.marked(), culled=bench.culled(),
-            suggested=bench.suggested())
+            suggested=bench.suggested(),
+            suggesting=any(
+                job.get("status") in ACTIVE
+                for job in self._suggestion_jobs(
+                    str(project.get("photos", "")))))
 
     @staticmethod
     def _wire_selection(invitation, sheet, label) -> None:
@@ -1478,6 +1702,38 @@ class Launcher(QMainWindow):
         return panel
 
     def _suggestions_page(self, bench: Bench):
+        # The phase follows its run, as the cull and the assessment do: a
+        # page of treatments while there are none is a page of nothing.
+        mine = self._suggestion_jobs(str(bench.project.get("photos", "")))
+        running = next(
+            (job for job in mine
+             if job.get("status") in
+             {"running", "queued", "stopping", "detached"}), None)
+        if running is not None:
+            asked = [str(name) for name in (running.get("only_photos") or [])]
+            names = asked or self._marked_photos(bench)
+            progress = SuggestProgress(
+                str(bench.project.get("name") or ""),
+                on_pause=lambda job=str(running.get("id", "")):
+                    self.pause_job(job),
+                names=names,
+                loader=self._loader,
+                checkpoint=Path(str(running.get("checkpoint") or "")),
+                covered=self._scene_coverage(bench, names))
+            progress.set_job(running)
+            return progress
+        paused = next(
+            (job for job in reversed(mine)
+             if job.get("status") == "paused"), None)
+        if paused is not None:
+            return Invitation(
+                "This suggestion pass is paused mid-run",
+                str(paused.get("message") or
+                    "The run stopped partway and left its checkpoint. "
+                    "Resuming keeps every treatment already written."),
+                "Resume writing directions",
+                lambda job=str(paused.get("id", "")): self.resume_job(job),
+                "")
         page = SuggestionsPage(
             bench.shortlist, bench.shortlist_reviews, bench.directions,
             loader=self._loader)
@@ -1734,7 +1990,10 @@ class Launcher(QMainWindow):
         self._say(
             f"Queued. {len(wanted)} frame"
             f"{'' if len(wanted) == 1 else 's'} will get editing "
-            "directions; they appear here when the run finishes.", "ok")
+            "directions; the run's progress is on this page.", "ok")
+        # So the phase turns into its progress page now rather than at the
+        # next tick of the clock.
+        self.refresh()
 
     def verify_render(self, workspace, request: dict) -> None:
         """Ask a model whether one rendering did what it promised."""

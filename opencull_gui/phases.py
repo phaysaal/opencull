@@ -104,6 +104,7 @@ def plan(
     marked: int | None = None,
     culled: bool | None = None,
     suggested: bool | None = None,
+    suggesting: bool = False,
     manifest: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Describe every phase of one folder, in order.
@@ -198,7 +199,10 @@ def plan(
         detail="A profile is in use." if profile_selected else
         "Optional. Without one, suggestions have no personal treatment."))
 
-    if directions:
+    if suggesting:
+        phases.append(entry(
+            SUGGESTIONS, "running", detail="Writing directions now."))
+    elif directions:
         phases.append(entry(
             SUGGESTIONS, "done",
             detail=f"{rounds} round{'s' if rounds > 1 else ''} asked for."
