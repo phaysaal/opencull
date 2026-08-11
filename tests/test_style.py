@@ -277,6 +277,21 @@ class StyleDialogTests(unittest.TestCase):
         ):
             dialog.add_examples()
 
+    def test_the_page_stays_gathered_when_both_panes_are_put_away(self):
+        """Spare height belongs at the foot, not shared out between labels."""
+        from PySide6.QtWidgets import QLayout
+
+        dialog = self.dialog()
+        write_profile(self.results / "personal-style-1.json")
+        dialog.refresh()
+        dialog.resize(1000, 900)
+        layout = dialog.layout()
+        last = layout.itemAt(layout.count() - 1)
+        self.assertIsNone(last.widget())
+        self.assertTrue(last.spacerItem() is not None)
+        self.assertEqual(
+            layout.sizeConstraint(), QLayout.SizeConstraint.SetDefaultConstraint)
+
     def test_an_empty_page_offers_to_start_rather_than_saying_it_is_empty(
             self):
         dialog = self.dialog()

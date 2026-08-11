@@ -286,7 +286,7 @@ class StylePanel(QWidget):
         self.body.setContentsMargins(14, 12, 14, 12)
         self.body.setSpacing(9)
         scroll.setWidget(holder)
-        layout.addWidget(scroll, 1)
+        layout.addWidget(scroll, 4)
 
         # The examples a new profile will be read from: chosen, seen,
         # and then watched as they are read. A set of photographs is
@@ -351,7 +351,7 @@ class StylePanel(QWidget):
         self.examples_grid.setContentsMargins(0, 4, 6, 4)
         self.examples_grid.setSpacing(10)
         self.examples_scroll.setWidget(examples_holder)
-        layout.addWidget(self.examples_scroll, 1)
+        layout.addWidget(self.examples_scroll, 4)
         self.examples: list[Path] = []
         self.staged: list[Path] = []
         self.showing = -1
@@ -424,6 +424,10 @@ class StylePanel(QWidget):
         self.status.setWordWrap(True)
         self.status.setFont(theme.body(9))
         layout.addWidget(self.status)
+        # Whatever height is left over belongs at the foot of the page.
+        # Without this the spare space is shared out between the labels,
+        # and a page with both scrolling panes put away drifts apart.
+        layout.addStretch(1)
 
     # --- state ----------------------------------------------------------
 
