@@ -50,7 +50,6 @@ class ProfileCard(QFrame):
     """One profile, shown by the photographs that taught it."""
 
     chosen = Signal(int)
-    used = Signal(int)
 
     WIDTH = 236
 
@@ -97,22 +96,6 @@ class ProfileCard(QFrame):
         count.setObjectName("cardCount")
         count.setFont(theme.body(9))
         body.addWidget(count)
-        row = QHBoxLayout()
-        row.setSpacing(7)
-        self.use_button = QPushButton("In use" if in_use else "Use this")
-        self.use_button.setObjectName("ghost")
-        self.use_button.setProperty("slim", True)
-        self.use_button.setFont(theme.body(9))
-        self.use_button.setEnabled(not in_use)
-        self.use_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.use_button.setToolTip(
-            "Suggestions are written in this profile's voice."
-            if not in_use else "Suggestions already use this profile.")
-        self.use_button.clicked.connect(
-            lambda _checked=False: self.used.emit(self.index))
-        row.addWidget(self.use_button)
-        row.addStretch(1)
-        body.addLayout(row)
         layout.addLayout(body)
 
     def paint_samples(self) -> None:
@@ -382,15 +365,6 @@ class StylePanel(QWidget):
         self.name_button.clicked.connect(self.rename)
         actions.addWidget(self.name_button)
 
-        self.forget_button = QPushButton("Stop using it")
-        self.forget_button.setObjectName("ghost")
-        self.forget_button.setFont(theme.body(10))
-        self.forget_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.forget_button.setToolTip(
-            "Suggestions go back to three treatments. The profile stays on "
-            "disk.")
-        self.forget_button.clicked.connect(self.forget)
-        actions.addWidget(self.forget_button)
         actions.addStretch(1)
 
         if self.closable:
@@ -459,10 +433,18 @@ class StylePanel(QWidget):
             for tile in self.tiles.values():
                 tile.set_state("")
             if job.get("status") == "completed":
+                # The photographs have been read; keeping them staged
+                # would invite reading them again.
+                self.staged = []
+                self.examples = []
+                self.viewing = ""
+                self.showing = -1
+                self.build_button.setText("Extract profile")
                 self.refresh()
+                self.show_examples()
                 self._report(
-                    "Your style profile is ready. Choose it to put it "
-                    "to use.", "ok")
+                    "Your style profile is ready. It is on the shelf "
+                    "above.", "ok")
             elif job.get("status") == "failed":
                 self._report(
                     "That profile run stopped before it finished. "
@@ -520,7 +502,6 @@ class StylePanel(QWidget):
         for index, item in enumerate(self.available):
             card = ProfileCard(index, item, item["path"] == selected)
             card.chosen.connect(self.show_profile)
-            card.used.connect(self.use_profile)
             self.profiles_row.addWidget(card)
             self.cards.append(card)
         self.profiles_row.addStretch(1)
@@ -531,7 +512,6 @@ class StylePanel(QWidget):
                 if item["path"] == selected:
                     self.current_profile = row
                     break
-        self.forget_button.setEnabled(bool(selected))
         if not self.available:
             # With nothing on the shelf there is nothing to open, so the
             # page says what a profile is for instead of showing a gap.
@@ -627,10 +607,6 @@ class StylePanel(QWidget):
         self.build_button.setText("Extract profile")
         self.show_examples()
 
-    def use_profile(self, row: int) -> None:
-        """Put a profile to use, which is a separate act from reading it."""
-        self._chose(row)
-
     def show_group(self, row: int) -> None:
         """The photographs an existing profile was read from."""
         if not (0 <= row < len(self.available)):
@@ -691,15 +667,6 @@ class StylePanel(QWidget):
         self._report(
             f"It is called {name.strip()} now." if name.strip()
             else "Back to the profile's own name.", "ok")
-
-    def forget(self) -> None:
-        self.store.forget()
-        self.refresh()
-        self._report(
-            "No profile is in use. The photographs and the profile itself are "
-            "untouched.", "ok")
-
-    # --- building -------------------------------------------------------
 
     def provider_id(self) -> str:
         profiles = (self.providers.public().get("profiles") or []

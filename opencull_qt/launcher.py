@@ -1720,9 +1720,11 @@ class Launcher(QMainWindow):
                 profile="professional",
                 # The project records which profile it last used; the
                 # window's selection is what a new run should use.
-                style_profile=(
-                    self.style_profiles.selected()
-                    or str(manifest.get("active_style_profile") or "")),
+                # No profile is privileged on the profile page any
+                # more, so the run takes the one this project last used,
+                # or failing that the newest built. Choosing among
+                # several belongs to this phase, not to the shelf.
+                style_profile=self.profile_for(manifest),
                 only_photos=list(wanted),
                 provider_profile_id=self.provider_id())
         except Exception as exc:
@@ -1748,6 +1750,17 @@ class Launcher(QMainWindow):
         self._say(
             f"Verifying {request['photo']}. The certificate covers the "
             "full-size render and appears here when it finishes.", "ok")
+
+    def profile_for(self, manifest: dict) -> str:
+        """Which personal profile a suggestion run should speak in."""
+        recorded = str(manifest.get("active_style_profile") or "")
+        if recorded and Path(recorded).is_file():
+            return recorded
+        chosen = self.style_profiles.selected()
+        if chosen:
+            return chosen
+        available = self.style_profiles.available()
+        return str(available[0]["path"]) if available else ""
 
     def provider_id(self) -> str:
         providers = getattr(self.services, "providers", None)

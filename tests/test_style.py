@@ -220,7 +220,6 @@ class StyleDialogTests(unittest.TestCase):
         shown = self._text(dialog)
         self.assertIn("No style profile is in use", shown)
         self.assertIn("standard, signature and creative", shown)
-        self.assertFalse(dialog.forget_button.isEnabled())
 
     def test_a_profile_reads_in_full_once_it_is_opened(self):
         write_profile(self.results / "personal-style-1.json")
@@ -253,12 +252,24 @@ class StyleDialogTests(unittest.TestCase):
         self.assertEqual(len(dialog.examples), 2)
         self.assertEqual(dialog.build_button.text(), "Extract profile")
 
-    def test_choosing_a_profile_puts_it_to_use(self):
-        write_profile(self.results / "personal-style-1.json")
+    def test_a_finished_run_leaves_the_shelf_not_its_working_set(self):
         dialog = self.dialog()
-        dialog._chose(0)
-        self.assertTrue(self.store.selected())
-        self.assertIn("suggestions will use", dialog.status.text())
+        self.stage(dialog, [self.root / "a.jpg", self.root / "b.jpg"])
+        self.assertTrue(dialog.examples_scroll.isVisibleTo(dialog))
+
+        dialog.show_run({"id": "s1", "kind": "style_profile",
+                         "status": "running",
+                         "progress": {"fraction": 0.6, "stage": "x"}})
+        dialog.show_run({"id": "s1", "kind": "style_profile",
+                         "status": "completed",
+                         "progress": {"fraction": 1.0}})
+
+        # The photographs have been read; nothing invites reading them
+        # again, and the page is back to its shelf.
+        self.assertEqual(dialog.examples, [])
+        self.assertFalse(dialog.examples_scroll.isVisibleTo(dialog))
+        self.assertFalse(dialog.add_button.isVisibleTo(dialog))
+        self.assertTrue(dialog.create_button.isVisibleTo(dialog))
 
     def test_building_without_a_provider_says_why_rather_than_failing(self):
         self.providers.public.return_value = {"profiles": []}
@@ -325,19 +336,17 @@ class StyleDialogTests(unittest.TestCase):
         card = dialog.cards[0]
         self.assertIn("photograph", card.findChildren(QLabel)[-1].text())
 
-    def test_reading_a_profile_is_not_putting_it_to_use(self):
+    def test_reading_a_profile_shows_it_without_adopting_it(self):
         dialog = self.dialog()
         write_profile(self.results / "personal-style-1.json")
         dialog.refresh()
 
         dialog.show_profile(0)
 
-        # Its details and its photographs are shown, and nothing has
-        # been adopted by the act of looking.
+        # Every profile is equally available to the suggestion phase, so
+        # looking at one settles nothing here.
         self.assertIn("PHOTOGRAPHS BEHIND", dialog.examples_title.text())
         self.assertEqual(self.store.selected(), "")
-        dialog.use_profile(0)
-        self.assertTrue(self.store.selected())
 
     def test_a_profile_is_named_for_the_folder_it_was_read_from(self):
         from opencull_gui.style import StyleProfileStore
@@ -451,14 +460,6 @@ class StyleDialogTests(unittest.TestCase):
         dialog.build()
         self.assertEqual(
             len(self.jobs.add_style_profile.call_args[0][0]), EXAMPLE_LIMIT)
-
-    def test_stopping_says_the_profile_is_kept(self):
-        write_profile(self.results / "personal-style-1.json")
-        self.store.select(self.results / "personal-style-1.json")
-        dialog = self.dialog()
-        dialog.forget()
-        self.assertIn("untouched", dialog.status.text())
-        self.assertTrue((self.results / "personal-style-1.json").is_file())
 
     @staticmethod
     def _text(dialog) -> str:
