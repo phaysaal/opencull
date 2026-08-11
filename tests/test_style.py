@@ -154,6 +154,10 @@ class StyleDialogTests(unittest.TestCase):
         self.root = Path(self._temporary.name)
         self.results = self.root / "results"
         self.results.mkdir()
+        # The panel stages photographs that exist, so the fixture makes
+        # them exist. Their content never matters; only their presence.
+        for name in ("a.jpg", "b.jpg"):
+            (self.root / name).write_bytes(b"jpeg")
         self.store = StyleProfileStore(
             self.root / "style-profile.json", self.results)
         self.jobs = mock.Mock()
@@ -240,16 +244,33 @@ class StyleDialogTests(unittest.TestCase):
         self.jobs.add_style_profile.assert_not_called()
         self.assertIn("Configure a model provider", dialog.status.text())
 
-    def test_building_reads_the_photographs_that_were_chosen(self):
+    def stage(self, dialog, picked):
+        """Choose photographs the way the panel now asks for them."""
         from unittest import mock
 
-        dialog = self.dialog()
-        picked = [str(self.root / "a.jpg"), str(self.root / "b.jpg")]
         with mock.patch(
             "opencull_qt.style.QFileDialog.getOpenFileNames",
-            return_value=(picked, ""),
+            return_value=([str(path) for path in picked], ""),
         ):
-            dialog.build()
+            dialog.add_examples()
+
+    def test_chosen_photographs_are_staged_and_shown_before_any_run(self):
+        dialog = self.dialog()
+        self.stage(dialog, [self.root / "a.jpg", self.root / "b.jpg"])
+        self.assertEqual(len(dialog.examples), 2)
+        self.jobs.add_style_profile.assert_not_called()
+        # The same photograph chosen twice is staged once.
+        self.stage(dialog, [self.root / "a.jpg"])
+        self.assertEqual(len(dialog.examples), 2)
+        # And it can be taken out again.
+        dialog.drop_example(str(self.root / "a.jpg"))
+        self.assertEqual(len(dialog.examples), 1)
+
+    def test_building_reads_the_photographs_that_were_chosen(self):
+        dialog = self.dialog()
+        picked = [str(self.root / "a.jpg"), str(self.root / "b.jpg")]
+        self.stage(dialog, picked)
+        dialog.build()
         self.jobs.add_style_profile.assert_called_once()
         arguments = self.jobs.add_style_profile.call_args
         self.assertEqual(arguments[0][0], picked)
@@ -262,10 +283,8 @@ class StyleDialogTests(unittest.TestCase):
         write_profile(self.results / "personal-style-1.json")
         self.store.select(self.results / "personal-style-1.json")
         dialog = self.dialog()
-        with mock.patch(
-            "opencull_qt.style.QFileDialog.getOpenFileNames",
-            return_value=([str(self.root / "a.jpg")], ""),
-        ), mock.patch.object(dialog, "_ask_mode", return_value="update"):
+        self.stage(dialog, [self.root / "a.jpg"])
+        with mock.patch.object(dialog, "_ask_mode", return_value="update"):
             dialog.build()
         arguments = self.jobs.add_style_profile.call_args
         self.assertEqual(arguments[1]["mode"], "update")
@@ -278,29 +297,28 @@ class StyleDialogTests(unittest.TestCase):
         write_profile(self.results / "personal-style-1.json")
         self.store.select(self.results / "personal-style-1.json")
         dialog = self.dialog()
-        with mock.patch(
-            "opencull_qt.style.QFileDialog.getOpenFileNames",
-            return_value=([str(self.root / "a.jpg")], ""),
-        ), mock.patch.object(dialog, "_ask_mode", return_value="cancel"):
+        self.stage(dialog, [self.root / "a.jpg"])
+        with mock.patch.object(dialog, "_ask_mode", return_value="cancel"):
             dialog.build()
         self.jobs.add_style_profile.assert_not_called()
 
-    def test_more_photographs_than_are_read_is_said_out_loud(self):
-        from unittest import mock
-
+    def test_more_photographs_than_are_read_is_said_when_added(self):
         from opencull_qt.style import EXAMPLE_LIMIT
 
         dialog = self.dialog()
-        picked = [str(self.root / f"{index}.jpg")
-                  for index in range(EXAMPLE_LIMIT + 10)]
-        with mock.patch(
-            "opencull_qt.style.QFileDialog.getOpenFileNames",
-            return_value=(picked, ""),
-        ):
-            dialog.build()
-        message = dialog.status.text()
-        self.assertIn(f"You chose {EXAMPLE_LIMIT + 10}", message)
-        self.assertIn(f"first {EXAMPLE_LIMIT} are read", message)
+        picked = []
+        for index in range(EXAMPLE_LIMIT + 10):
+            path = self.root / f"{index}.jpg"
+            path.write_bytes(b"jpeg")
+            picked.append(path)
+
+        self.stage(dialog, picked)
+
+        # The cap is said where it bites, not after a run has quietly
+        # read a subset of what was chosen.
+        self.assertEqual(len(dialog.examples), EXAMPLE_LIMIT)
+        self.assertIn(str(EXAMPLE_LIMIT), dialog.status.text())
+        dialog.build()
         self.assertEqual(
             len(self.jobs.add_style_profile.call_args[0][0]), EXAMPLE_LIMIT)
 

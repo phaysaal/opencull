@@ -10,11 +10,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtCore import QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QImageReader, QPixmap
 from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -42,6 +44,73 @@ EXAMPLE_LIMIT = 64
 PROFILE_ROW = 32
 
 
+class ExampleTile(QFrame):
+    """One chosen photograph, waiting to be read or already read."""
+
+    dropped = Signal(str)
+
+    SIZE = 132
+
+    def __init__(self, path: Path, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.path = Path(path)
+        self.setObjectName("frame")
+        self.setFixedSize(self.SIZE + 10, self.SIZE + 26)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(5, 5, 5, 3)
+        layout.setSpacing(2)
+        self.image = QLabel("…")
+        self.image.setObjectName("frameImage")
+        self.image.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.image.setFixedSize(self.SIZE, self.SIZE)
+        layout.addWidget(self.image)
+        caption = QLabel(self.path.name)
+        caption.setObjectName("frameName")
+        caption.setFont(theme.mono(7))
+        caption.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(caption)
+        self.badge = QLabel("", self)
+        self.badge.setObjectName("tileBadge")
+        self.badge.setFont(theme.body(8))
+        self.badge.hide()
+        self.setToolTip(str(self.path))
+
+    def paint_thumbnail(self) -> None:
+        """Decode at thumbnail size, which a finished export needs."""
+        reader = QImageReader(str(self.path))
+        reader.setAutoTransform(True)
+        size = reader.size()
+        if size.isValid() and max(size.width(), size.height()) > self.SIZE:
+            scale = self.SIZE / max(size.width(), size.height())
+            reader.setScaledSize(QSize(
+                max(1, int(size.width() * scale)),
+                max(1, int(size.height() * scale))))
+        image = reader.read()
+        if image.isNull():
+            self.image.setText("unreadable")
+            return
+        self.image.setPixmap(QPixmap.fromImage(image))
+        self.image.setText("")
+
+    def set_state(self, state: str) -> None:
+        """Waiting, being read now, or already read."""
+        marks = {"reading": "reading…", "read": "read ✓"}
+        self.badge.setText(marks.get(state, ""))
+        self.badge.setVisible(bool(marks.get(state)))
+        if marks.get(state):
+            self.badge.adjustSize()
+            self.badge.move(
+                5 + self.SIZE - self.badge.width() - 4, 9)
+            self.badge.raise_()
+        self.setProperty("kept", "true" if state == "read" else "false")
+        self.style().unpolish(self)
+        self.style().polish(self)
+
+    def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802 - Qt
+        self.dropped.emit(str(self.path))
+        super().mouseDoubleClickEvent(event)
+
+
 class StylePanel(QWidget):
     """Choose which profile is in use, and build a new one.
 
@@ -63,6 +132,7 @@ class StylePanel(QWidget):
         self.setObjectName("page")
         self._build()
         self.refresh()
+        self.show_examples()
 
     # --- construction ---------------------------------------------------
 
@@ -106,16 +176,68 @@ class StylePanel(QWidget):
         scroll.setWidget(holder)
         layout.addWidget(scroll, 1)
 
+        # The examples a new profile will be read from: chosen, seen,
+        # and then watched as they are read. A set of photographs is
+        # easier to judge as pictures than as a count.
+        examples_head = QHBoxLayout()
+        examples_head.setSpacing(10)
+        self.examples_title = QLabel("")
+        self.examples_title.setObjectName("bandTitle")
+        self.examples_title.setFont(theme.display(8))
+        examples_head.addWidget(self.examples_title)
+        examples_head.addStretch(1)
+        self.add_button = QPushButton("Add photographs…")
+        self.add_button.setObjectName("ghost")
+        self.add_button.setFont(theme.body(9))
+        self.add_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.add_button.setToolTip(
+            "Add finished photographs of your own. Add from several "
+            "folders if the look lives across them.")
+        self.add_button.clicked.connect(
+            lambda _checked=False: self.add_examples())
+        examples_head.addWidget(self.add_button)
+        self.clear_button = QPushButton("Clear")
+        self.clear_button.setObjectName("ghost")
+        self.clear_button.setFont(theme.body(9))
+        self.clear_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.clear_button.setToolTip("Take every chosen photograph out.")
+        self.clear_button.clicked.connect(
+            lambda _checked=False: self.clear_examples())
+        examples_head.addWidget(self.clear_button)
+        layout.addLayout(examples_head)
+
+        self.examples_hint = QLabel("")
+        self.examples_hint.setObjectName("hint")
+        self.examples_hint.setWordWrap(True)
+        self.examples_hint.setFont(theme.body(9))
+        layout.addWidget(self.examples_hint)
+
+        self.examples_scroll = QScrollArea()
+        self.examples_scroll.setWidgetResizable(True)
+        self.examples_scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.examples_scroll.setMinimumHeight(190)
+        examples_holder = QWidget()
+        examples_holder.setObjectName("page")
+        self.examples_grid = QGridLayout(examples_holder)
+        self.examples_grid.setContentsMargins(0, 4, 6, 4)
+        self.examples_grid.setSpacing(10)
+        self.examples_scroll.setWidget(examples_holder)
+        layout.addWidget(self.examples_scroll, 1)
+        self.examples: list[Path] = []
+        self.tiles: dict[str, ExampleTile] = {}
+        self._pending_thumbnails: list[str] = []
+
         actions = QHBoxLayout()
         actions.setSpacing(10)
-        self.build_button = QPushButton("Build from photographs…")
+        self.build_button = QPushButton("Extract profile")
         self.build_button.setObjectName("primary")
         self.build_button.setFont(theme.body(10))
         self.build_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.build_button.setToolTip(
-            "Choose finished photographs. Every one is shown to a vision "
-            "model, so this costs.")
-        self.build_button.clicked.connect(self.build)
+            "Read your style from the photographs above. Every one is "
+            "shown to a vision model, so this costs.")
+        self.build_button.clicked.connect(
+            lambda _checked=False: self.build())
         actions.addWidget(self.build_button)
 
         self.name_button = QPushButton("Name it…")
@@ -198,6 +320,8 @@ class StylePanel(QWidget):
             self._settled = settled
             # A run that has ended is reported once, when it ends --
             # not on every poll for the rest of the session.
+            for tile in self.tiles.values():
+                tile.set_state("")
             if job.get("status") == "completed":
                 self.refresh()
                 self._report(
@@ -213,6 +337,38 @@ class StylePanel(QWidget):
         said = str(progress.get("stage") or "").strip()
         self.stage.setText(
             f"{said}." if said else "The profile worker is starting.")
+        self._mark_examples_read(job)
+
+    def _mark_examples_read(self, job: dict) -> None:
+        """Show which photographs have gone to the model, and which are going.
+
+        The run reads them eight at a time and records each pass as it
+        lands, so the tiles can say what has been seen rather than
+        leaving a meter to stand for all of it.
+        """
+        from opencull_gui.shortlist import trace_for
+
+        if not self.examples:
+            return
+        trace = trace_for(job)
+        passes = 0
+        if trace is not None and Path(trace).is_file():
+            try:
+                lines = Path(trace).read_text(
+                    encoding="utf-8", errors="replace").splitlines()
+            except OSError:
+                lines = []
+            passes = sum(
+                1 for line in lines
+                if '"kind": "gen"' in line or '"kind":"gen"' in line)
+        read = passes * 8
+        for index, path in enumerate(self.examples):
+            tile = self.tiles.get(str(path))
+            if tile is None:
+                continue
+            tile.set_state(
+                "read" if index < read
+                else "reading" if index < read + 8 else "")
 
     def refresh(self) -> None:
         state = self.store.public()
@@ -338,29 +494,107 @@ class StylePanel(QWidget):
                     if self.providers is not None else [])
         return str(profiles[0]["id"]) if profiles else ""
 
-    def build(self) -> None:
-        """Read a new profile from photographs the photographer chooses."""
-        provider = self.provider_id()
-        if not provider:
-            self._report(
-                "Configure a model provider first: reading a style means "
-                "showing the photographs to a vision model.", "alarm")
-            return
+    def add_examples(self) -> None:
+        """Stage finished photographs, from as many folders as it takes."""
         chosen, _filter = QFileDialog.getOpenFileNames(
             self, "Choose photographs you have already edited",
             str(Path.home()),
             "Photographs (*.jpg *.jpeg *.png *.tif *.tiff)")
         if not chosen:
             return
+        known = {str(path) for path in self.examples}
+        added = 0
+        capped = False
+        for value in chosen:
+            path = Path(value).expanduser()
+            if str(path) in known or not path.is_file():
+                continue
+            if len(self.examples) >= EXAMPLE_LIMIT:
+                capped = True
+                break
+            self.examples.append(path)
+            known.add(str(path))
+            added += 1
+        if capped:
+            # Said where the cap bites, rather than after a run has
+            # quietly read a subset of what was chosen.
+            self._report(
+                f"{EXAMPLE_LIMIT} photographs is as many as one profile "
+                f"reads, so {len(chosen) - added} were left out. Clear "
+                "some to put others in.", "alarm")
+        elif added:
+            self._report("", "")
+        self.show_examples()
+
+    def clear_examples(self) -> None:
+        self.examples = []
+        self.show_examples()
+
+    def drop_example(self, path: str) -> None:
+        self.examples = [
+            item for item in self.examples if str(item) != str(path)]
+        self.show_examples()
+
+    def show_examples(self) -> None:
+        """Lay out the staged photographs, and say what they will cost."""
+        while self.examples_grid.count():
+            item = self.examples_grid.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
+        self.tiles = {}
+        count = len(self.examples)
+        self.examples_title.setText(
+            "PHOTOGRAPHS TO READ" if count else "NO PHOTOGRAPHS CHOSEN YET")
+        passes = -(-count // 8)
+        self.examples_hint.setText(
+            f"{count} chosen · read in {passes} "
+            f"pass{'' if passes == 1 else 'es'} of up to eight, "
+            "each pass refining what the last one learned. "
+            "Double-click a photograph to take it out."
+            if count else
+            "Add finished photographs of your own -- edited the way you "
+            "like them. Fifteen to forty that genuinely look alike teach "
+            "a sharper profile than a hundred mixed ones.")
+        self.build_button.setEnabled(bool(count))
+        columns = max(1, self.examples_scroll.viewport().width()
+                      // (ExampleTile.SIZE + 20))
+        for index, path in enumerate(self.examples):
+            tile = ExampleTile(path)
+            tile.dropped.connect(self.drop_example)
+            self.examples_grid.addWidget(
+                tile, index // columns, index % columns)
+            self.tiles[str(path)] = tile
+        self.examples_grid.setColumnStretch(columns, 1)
+        self._pending_thumbnails = [str(path) for path in self.examples]
+        QTimer.singleShot(0, self._paint_next_thumbnail)
+
+    def _paint_next_thumbnail(self) -> None:
+        """One at a time, so a folder of large exports does not freeze."""
+        while self._pending_thumbnails:
+            key = self._pending_thumbnails.pop(0)
+            tile = self.tiles.get(key)
+            if tile is None:
+                continue
+            tile.paint_thumbnail()
+            QTimer.singleShot(0, self._paint_next_thumbnail)
+            return
+
+    def build(self) -> None:
+        """Read a new profile from the photographs staged above."""
+        provider = self.provider_id()
+        if not provider:
+            self._report(
+                "Configure a model provider first: reading a style means "
+                "showing the photographs to a vision model.", "alarm")
+            return
+        chosen = [str(path) for path in self.examples]
+        if not chosen:
+            self._report(
+                "Add some finished photographs first.", "alarm")
+            return
         dropped = ""
-        if len(chosen) > EXAMPLE_LIMIT:
-            # Said in the message that survives, not in one the success
-            # message then overwrites: quietly reading 64 of 74 would look
-            # like all of them were read.
-            dropped = (
-                f" You chose {len(chosen)}; the first {EXAMPLE_LIMIT} are "
-                "read, which is as many as the profile pass looks at.")
-            chosen = chosen[:EXAMPLE_LIMIT]
         existing = self.store.selected()
         mode = "replace"
         if existing:
