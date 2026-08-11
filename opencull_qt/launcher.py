@@ -888,6 +888,11 @@ class Launcher(QMainWindow):
                 shell.rebuild(phases.CULL)
         elif page is not None and running is not None:
             shell.rebuild(phases.CULL)
+        profile_page = shell.page_for(phases.PROFILE)
+        if isinstance(profile_page, StylePanel):
+            profile_page.show_run(next(
+                (job for job in queue["jobs"]
+                 if job.get("kind") == "style_profile"), None))
         assess_page = shell.page_for(phases.ASSESSMENT)
         assessing = next(
             (job for job in self._professional_jobs(

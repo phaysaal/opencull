@@ -169,6 +169,34 @@ class StyleDialogTests(unittest.TestCase):
         self.addCleanup(page.deleteLater)
         return page
 
+    def test_a_running_profile_says_what_it_is_doing(self):
+        panel = self.dialog()
+        panel.show_run({
+            "kind": "style_profile", "status": "running",
+            "progress": {"fraction": 0.6,
+                         "stage": "Asking the profile model to learn "
+                                  "your editing style"}})
+        self.assertTrue(panel.meter.isVisibleTo(panel))
+        self.assertEqual(panel.meter.value(), 60)
+        self.assertIn("learn your editing style", panel.stage.text())
+        self.assertFalse(panel.build_button.isEnabled())
+
+    def test_a_finished_profile_puts_its_meter_away(self):
+        panel = self.dialog()
+        panel.show_run({"kind": "style_profile", "status": "running",
+                        "progress": {"fraction": 0.6, "stage": "x"}})
+        panel.show_run({"kind": "style_profile", "status": "completed",
+                        "progress": {"fraction": 1.0}})
+        self.assertFalse(panel.meter.isVisibleTo(panel))
+        self.assertTrue(panel.build_button.isEnabled())
+
+    def test_a_failed_profile_says_so_rather_than_going_quiet(self):
+        panel = self.dialog()
+        panel.show_run({
+            "kind": "style_profile", "status": "failed",
+            "message": "Kimiya exited with status 2."})
+        self.assertIn("stopped before it finished", panel.status.text())
+
     def test_with_no_profile_it_says_what_is_missing(self):
         dialog = self.dialog()
         shown = self._text(dialog)

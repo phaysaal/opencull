@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMessageBox,
+    QProgressBar,
     QPushButton,
     QScrollArea,
     QVBoxLayout,
@@ -147,6 +148,23 @@ class StylePanel(QWidget):
             actions.addWidget(close)
         layout.addLayout(actions)
 
+        # A run that says nothing reads as a run that died -- and this
+        # one did die twice in silence. The program narrates each step
+        # it takes; the meter and the line beneath it are that
+        # narration, shown while the run lasts and gone once it ends.
+        self.meter = QProgressBar()
+        self.meter.setRange(0, 100)
+        self.meter.setTextVisible(False)
+        self.meter.setFixedHeight(4)
+        self.meter.hide()
+        layout.addWidget(self.meter)
+        self.stage = QLabel("")
+        self.stage.setObjectName("hint")
+        self.stage.setWordWrap(True)
+        self.stage.setFont(theme.body(9))
+        self.stage.hide()
+        layout.addWidget(self.stage)
+
         self.status = QLabel("")
         self.status.setObjectName("status")
         self.status.setWordWrap(True)
@@ -160,6 +178,25 @@ class StylePanel(QWidget):
         self.status.setProperty("tone", tone)
         self.status.style().unpolish(self.status)
         self.status.style().polish(self.status)
+
+    def show_run(self, job: dict | None) -> None:
+        """What the profile run is doing, while it is doing it."""
+        active = bool(job) and job.get("status") in {
+            "running", "queued", "stopping", "detached"}
+        self.meter.setVisible(active)
+        self.stage.setVisible(active)
+        self.build_button.setEnabled(not active)
+        if not active:
+            if job and job.get("status") == "failed":
+                self._report(
+                    "That profile run stopped before it finished. "
+                    + str(job.get("message") or ""), "alarm")
+            return
+        progress = job.get("progress") or {}
+        self.meter.setValue(round(100 * float(progress.get("fraction", 0))))
+        said = str(progress.get("stage") or "").strip()
+        self.stage.setText(
+            f"{said}." if said else "The profile worker is starting.")
 
     def refresh(self) -> None:
         state = self.store.public()

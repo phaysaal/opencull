@@ -1610,6 +1610,22 @@ class JobManager:
                 "completed_items": completed,
                 "total_items": total,
             }
+        if kind == "style_profile":
+            # A style profile has no per-item checkpoint: the program
+            # narrates itself instead, and that narration is the only
+            # honest progress there is.
+            said = re.findall(
+                r"STYLE_PROGRESS\s+(\d{1,3})\s+([^\r\n]+)",
+                JobManager._log_tail(Path(str(job.get("log", "")))))
+            done = Path(job.get("output", "")).is_file()
+            percent = 100 if done else (int(said[-1][0]) if said else 0)
+            return {
+                "completed_clusters": 0, "total_clusters": 0,
+                "fraction": percent / 100,
+                "checkpoint_complete": done,
+                "completed_items": 0, "total_items": 0,
+                "stage": said[-1][1].strip() if said else "",
+            }
         if checkpoint.is_file():
             try:
                 data = json.loads(checkpoint.read_text(encoding="utf-8"))
