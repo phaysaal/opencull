@@ -11,7 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QImageReader, QPixmap
+from PySide6.QtGui import QFont, QImageReader, QPixmap
 from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
@@ -79,10 +79,16 @@ class ProfileCard(QFrame):
         body = QVBoxLayout()
         body.setContentsMargins(11, 8, 11, 9)
         body.setSpacing(3)
-        title = QLabel(str(item["name"]))
+        title = ElidedLabel(str(item["name"]))
         title.setObjectName("cardName")
-        title.setFont(theme.body(10, weight=title.font().Weight.DemiBold))
+        title.setFont(theme.body(10, weight=QFont.Weight.DemiBold))
         body.addWidget(title)
+        group = str(item.get("group") or "")
+        if group and group != item["name"]:
+            source = ElidedLabel(group)
+            source.setObjectName("rowPath")
+            source.setFont(theme.mono(8))
+            body.addWidget(source)
         confidence = (
             f" · {item['confidence']:.0%} confident"
             if item.get("confidence") is not None else "")
@@ -268,7 +274,7 @@ class StylePanel(QWidget):
         self.cards: list[ProfileCard] = []
         self.current_profile = -1
 
-        scroll = QScrollArea()
+        self.detail_scroll = scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         # Without this the holder grows to its widest child -- a full path --
         # and every wrapped paragraph then lays out at that width, off screen.
@@ -330,6 +336,8 @@ class StylePanel(QWidget):
         self.examples_scroll.setWidget(examples_holder)
         layout.addWidget(self.examples_scroll, 1)
         self.examples: list[Path] = []
+        self.staged: list[Path] = []
+        self.showing = -1
         self.viewing = ""
         self.tiles: dict[str, ExampleTile] = {}
         self._pending_thumbnails: list[str] = []
@@ -503,7 +511,15 @@ class StylePanel(QWidget):
                     self.current_profile = row
                     break
         self.forget_button.setEnabled(bool(selected))
-        self._show(state["profile"], selected)
+        if not self.available:
+            # With nothing on the shelf there is nothing to open, so the
+            # page says what a profile is for instead of showing a gap.
+            self._show(None, "")
+            self.detail_scroll.show()
+        elif self.showing < 0:
+            self.detail_scroll.hide()
+        elif 0 <= self.showing < len(self.available):
+            self._show(state["profile"], selected)
 
     def _show(self, summary, selected: str) -> None:
         while self.body.count():
@@ -557,10 +573,19 @@ class StylePanel(QWidget):
                 return
 
     def show_profile(self, row: int) -> None:
-        """Read how a profile was extracted, without putting it to use."""
+        """Open a profile's reading, or close it if it is already open.
+
+        The page opens as a shelf of profiles and nothing else. What a
+        profile says is worth a click, and worth a second click to put
+        away again.
+        """
         if not (0 <= row < len(self.available)):
             return
+        if row == self.showing:
+            self.hide_profile()
+            return
         self.current_profile = row
+        self.showing = row
         item = self.available[row]
         self.show_group(row)
         try:
@@ -570,6 +595,16 @@ class StylePanel(QWidget):
             return
         summary["name"] = item["name"]
         self._show(summary, item["path"])
+        self.detail_scroll.show()
+
+    def hide_profile(self) -> None:
+        """Put a profile's reading away, and the staged set back."""
+        self.showing = -1
+        self.detail_scroll.hide()
+        self.viewing = ""
+        self.examples = list(self.staged)
+        self.build_button.setText("Extract profile")
+        self.show_examples()
 
     def use_profile(self, row: int) -> None:
         """Put a profile to use, which is a separate act from reading it."""
@@ -655,20 +690,24 @@ class StylePanel(QWidget):
             "Photographs (*.jpg *.jpeg *.png *.tif *.tiff)")
         if not chosen:
             return
-        known = {str(path) for path in self.examples}
+        if self.viewing:
+            # Adding photographs is the start of a set of one's own, not
+            # a change to the profile being read.
+            self.hide_profile()
+        known = {str(path) for path in self.staged}
         added = 0
         capped = False
         for value in chosen:
             path = Path(value).expanduser()
             if str(path) in known or not path.is_file():
                 continue
-            if len(self.examples) >= EXAMPLE_LIMIT:
+            if len(self.staged) >= EXAMPLE_LIMIT:
                 capped = True
                 break
-            self.examples.append(path)
+            self.staged.append(path)
             known.add(str(path))
             added += 1
-        self.viewing = ""
+        self.examples = list(self.staged)
         self.build_button.setText("Extract profile")
         if capped:
             # Said where the cap bites, rather than after a run has
@@ -682,14 +721,14 @@ class StylePanel(QWidget):
         self.show_examples()
 
     def clear_examples(self) -> None:
-        self.examples = []
-        self.viewing = ""
-        self.build_button.setText("Extract profile")
-        self.show_examples()
+        self.staged = []
+        self.hide_profile()
 
     def drop_example(self, path: str) -> None:
         self.examples = [
             item for item in self.examples if str(item) != str(path)]
+        if not self.viewing:
+            self.staged = list(self.examples)
         self.show_examples()
 
     def show_examples(self) -> None:

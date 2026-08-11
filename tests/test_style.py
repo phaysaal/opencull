@@ -222,13 +222,36 @@ class StyleDialogTests(unittest.TestCase):
         self.assertIn("standard, signature and creative", shown)
         self.assertFalse(dialog.forget_button.isEnabled())
 
-    def test_the_profile_in_use_is_shown_in_full(self):
+    def test_a_profile_reads_in_full_once_it_is_opened(self):
         write_profile(self.results / "personal-style-1.json")
         self.store.select(self.results / "personal-style-1.json")
-        shown = self._text(self.dialog())
+        dialog = self.dialog()
+
+        # The page opens as a shelf: the reading waits to be asked for.
+        self.assertFalse(dialog.detail_scroll.isVisibleTo(dialog))
+        dialog.show_profile(0)
+
+        shown = self._text(dialog)
         self.assertIn("Warm documentary", shown)
         self.assertIn("Warm, low-contrast, generous shadows.", shown)
         self.assertIn("No heavy clarity on skin.", shown)
+        # And a second click puts it away again.
+        dialog.show_profile(0)
+        self.assertFalse(dialog.detail_scroll.isVisibleTo(dialog))
+
+    def test_a_staged_set_survives_a_look_at_another_profile(self):
+        write_profile(self.results / "personal-style-1.json")
+        dialog = self.dialog()
+        dialog.refresh()
+        self.stage(dialog, [self.root / "a.jpg", self.root / "b.jpg"])
+        self.assertEqual(len(dialog.examples), 2)
+
+        dialog.show_profile(0)
+        dialog.show_profile(0)
+
+        # What the photographer chose is still chosen.
+        self.assertEqual(len(dialog.examples), 2)
+        self.assertEqual(dialog.build_button.text(), "Extract profile")
 
     def test_choosing_a_profile_puts_it_to_use(self):
         write_profile(self.results / "personal-style-1.json")

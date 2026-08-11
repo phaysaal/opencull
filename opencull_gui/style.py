@@ -235,11 +235,11 @@ class StyleProfileStore:
             group = self.group_name(examples)
             found.append({
                 **summary,
-                # The photographer's own name wins; failing that the
-                # folder the photographs came from, which is a name they
-                # already chose, ahead of the one a model invented.
-                **({"name": given} if given
-                   else {"name": group} if group else {}),
+                # The photographer's own name wins. Failing that the
+                # one the model wrote, which says what the look is; the
+                # folder says which work it came from, and rides along
+                # as the subtitle rather than replacing the title.
+                **({"name": given} if given else {}),
                 "given_name": given,
                 "model_name": summary.get("name", ""),
                 # `examples` is the count the summary already reports;
