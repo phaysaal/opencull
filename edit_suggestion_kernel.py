@@ -17,10 +17,12 @@ FIELDS = (
     "signature_instructions", "creative_title", "creative_intent",
     "creative_instructions", "standard_recipe", "signature_recipe",
     "creative_recipe", "personal_title", "personal_intent",
-    "personal_instructions", "personal_recipe", "guardrails", "confidence",
+    "personal_instructions", "personal_recipe", "personal_style_choice",
+    "personal_style_reason", "guardrails", "confidence",
 )
 REQUIRED_FIELDS = tuple(field for field in FIELDS if field not in {
-    "personal_title", "personal_intent", "personal_instructions", "personal_recipe"})
+    "personal_title", "personal_intent", "personal_instructions",
+    "personal_recipe", "personal_style_choice", "personal_style_reason"})
 
 RECIPE_SECTIONS = (
     "base_and_lens", "composition", "global_exposure", "hdr_levels_curves",
@@ -40,9 +42,63 @@ def _load(path: str) -> tuple[Path, dict[str, Any]]:
     return resolved, value
 
 
+def _load_style_profile(path: str) -> dict[str, Any]:
+    """One personal style profile, with the identity of the file it came from."""
+    profile_path, profile = _load(path)
+    if profile.get("format") != "opencull-personal-style-profile-v1":
+        raise ValueError("unsupported personal style profile")
+    profile["path"] = str(profile_path)
+    profile["sha256"] = hashlib.sha256(profile_path.read_bytes()).hexdigest()
+    return profile
+
+
+def offered_styles(request: str) -> list[dict[str, Any]]:
+    """The styles a run may speak in, in the order they are offered."""
+    value = json.loads(str(request))
+    offered = value.get("style_profiles")
+    return offered if isinstance(offered, list) else []
+
+
+# How much of each style the menu carries. Enough to tell them apart and
+# to know which scenes each was learned on; not so much that eight of them
+# crowd out the photograph being looked at.
+STYLE_SIGNATURE = 420
+STYLE_ADAPTATION = 300
+
+
+def _say(body: dict[str, Any], *keys: str, limit: int = 300) -> str:
+    for key in keys:
+        text = str(body.get(key) or "").strip()
+        if text:
+            return text if len(text) <= limit else text[:limit].rstrip() + "…"
+    return ""
+
+
+def style_menu(profiles: list[dict[str, Any]]) -> str:
+    """The styles as a numbered menu, each said in its own words.
+
+    A name alone cannot be chosen between -- "Coastal Twilight" and
+    "Heritage Street" are labels, not evidence. Each entry carries what the
+    look actually is and what the profile itself says about adapting to a
+    scene, because that is the part that decides whether it fits.
+    """
+    lines = []
+    for number, profile in enumerate(profiles, start=1):
+        body = profile.get("profile", {}) if isinstance(profile, dict) else {}
+        signature = _say(
+            body, "visual_signature", "signature", limit=STYLE_SIGNATURE)
+        adaptation = _say(
+            body, "scene_adaptation", limit=STYLE_ADAPTATION)
+        lines.append(
+            f"{number}. {body.get('profile_name', 'Untitled style')}\n"
+            f"   Look: {signature}"
+            + (f"\n   Suits: {adaptation}" if adaptation else ""))
+    return "\n\n".join(lines)
+
+
 def build_edit_request(
     shortlist_path: str, review_path: str, photos: str, style_profile: str = "",
-    only_photo: str = "", only_photos: str = "[]",
+    only_photo: str = "", only_photos: str = "[]", style_profiles: str = "[]",
 ) -> str:
     shortlist_file, shortlist = _load(shortlist_path)
     review_file, review = _load(review_path)
@@ -65,14 +121,30 @@ def build_edit_request(
         for entry in shortlist.get("entries", [])
         if isinstance(entry, dict) and isinstance(entry.get("photo"), str)
     }
-    personal_profile = None
+    # A photographer has more than one taste, and which one a photograph
+    # wants is a judgement about the photograph. Every style is offered and
+    # the answer says which it chose; a single style is the same thing with
+    # one option, so nothing here special-cases it.
+    try:
+        offered = json.loads(str(style_profiles or "[]"))
+    except json.JSONDecodeError as exc:
+        raise ValueError("style_profiles must be a JSON list") from exc
+    if not isinstance(offered, list) or not all(
+        isinstance(item, str) for item in offered
+    ):
+        raise ValueError("style_profiles must be a JSON list of file paths")
+    chosen_paths = [str(item).strip() for item in offered if str(item).strip()]
     if str(style_profile).strip():
-        profile_path, personal_profile = _load(style_profile)
-        if personal_profile.get("format") != "opencull-personal-style-profile-v1":
-            raise ValueError("unsupported personal style profile")
-        personal_profile["path"] = str(profile_path)
-        personal_profile["sha256"] = hashlib.sha256(
-            profile_path.read_bytes()).hexdigest()
+        chosen_paths.insert(0, str(style_profile).strip())
+    seen: set[str] = set()
+    style_bank: list[dict[str, Any]] = []
+    for path in chosen_paths:
+        profile = _load_style_profile(path)
+        if profile["sha256"] in seen:
+            continue
+        seen.add(profile["sha256"])
+        style_bank.append(profile)
+    personal_profile = style_bank[0] if len(style_bank) == 1 else None
     target_photo = str(only_photo).strip()
     try:
         requested_photos = json.loads(str(only_photos or "[]"))
@@ -107,6 +179,7 @@ def build_edit_request(
             "raw_files": entry.get("raw_files", []),
             "human_note": human.get("note", ""),
             "style_profile": personal_profile,
+            "style_profiles": style_bank,
         })
     candidates.sort(key=lambda item: (item.get("rank", 10**9), item["photo"]))
     if targets and {item["photo"] for item in candidates} != targets:
@@ -121,6 +194,7 @@ def build_edit_request(
         "only_photo": target_photo,
         "only_photos": sorted(targets),
         "style_profile": personal_profile,
+        "style_profiles": style_bank,
     }
     return json.dumps({
         "format": "opencull-edit-direction-request-v1",
@@ -147,7 +221,30 @@ def edit_candidate_path(request: str, candidate: dict[str, Any]) -> str:
 
 def edit_direction_prompt(candidate: dict[str, Any], profile: str) -> str:
     raw = bool(candidate.get("raw_files"))
-    personal = candidate.get("style_profile")
+    bank = candidate.get("style_profiles") or []
+    if bank:
+        # The photographer's tastes are offered as a menu and the answer
+        # names the number it used. A number cannot be a style that does
+        # not exist, which a name could.
+        styles = f"""
+The photographer has {len(bank)} personal style
+{'profile' if len(bank) == 1 else 'profiles'}, each learned from their own
+finished work:
+
+{style_menu(bank)}
+
+For option 4, choose the ONE of these that this particular photograph asks
+for -- the light it was taken in, its subject, and its place -- rather than
+the one that is listed first. Set personal_style_choice to that number, and
+say in personal_style_reason what in this photograph made it the right one
+and what would have made another better. Judge the photograph, not the
+prose: a style whose signature does not fit this scene is the wrong answer
+even when it is the photographer's favourite."""
+    else:
+        styles = """
+The photographer has no personal style profile, so option 4 is your own
+reading of what a personal treatment of this photograph would be. Set
+personal_style_choice to 0 and leave personal_style_reason empty."""
     return f"""You are a senior photographic editor and colorist. Inspect the
 actual supplied photograph, not merely its metadata. Propose three genuinely
 different, tasteful edit directions appropriate to this exact scene.
@@ -158,7 +255,7 @@ Existing rationale: {candidate.get('rationale', '')}
 Human note: {candidate.get('human_note', '')}
 RAW companion known: {'yes' if raw else 'no'}
 Context profile: {profile}
-Personal style profile (use only for option 4): {json.dumps(personal or {})}
+{styles}
 
 Return:
 1. Standard professional: polished, natural, durable, publication-quality.
@@ -166,7 +263,7 @@ Return:
    moment, and believable light.
 3. Creative: a bold reinterpretation that remains aesthetically coherent and
    never becomes gimmicky, ugly, or destructive to the subject.
-4. Personal style, professionally refined: apply the user's learned style
+4. Personal style, professionally refined: apply the chosen learned style
    profile while correcting technical weaknesses and adapting it to this scene.
 
 For each option give a short title, artistic intent, and actionable editing
@@ -194,8 +291,17 @@ a number from 0 through 1. Before responding, verify that every recipe string
 is complete JSON and that its final section closes both the list and object."""
 
 
-def edit_direction_repair_prompt(value: Any) -> str:
+def edit_direction_repair_prompt(value: Any, candidate: Any = None) -> str:
     """Request a format-only repair after deterministic validation fails."""
+    offered = len((candidate or {}).get("style_profiles") or []) if isinstance(
+        candidate, dict) else 0
+    style_rule = (
+        f"personal_style_choice must be a whole number from 1 through "
+        f"{offered}, naming which of the photographer's styles the personal "
+        f"treatment speaks in. Keep the one the malformed object used if it "
+        f"is in range."
+        if offered else
+        "personal_style_choice must be 0: no personal style was offered.")
     return f"""You are repairing structured data, not re-editing a photograph.
 The JSON-compatible object below was produced by another photographic model,
 but it failed OpenCull's deterministic schema validation. Return the complete
@@ -204,7 +310,7 @@ parameter guidance, and guardrails. Do not summarize, omit, embellish, or
 replace its recommendations.
 
 Required top-level fields: {', '.join(FIELDS)}.
-Confidence must be a number from 0 through 1. Each of standard_recipe,
+Confidence must be a number from 0 through 1. {style_rule} Each of standard_recipe,
 signature_recipe, creative_recipe, and personal_recipe must be a JSON object
 encoded as text. Every encoded recipe must contain exactly these keys:
 {', '.join(RECIPE_SECTIONS)}. Every recipe value must be a non-empty ordered
@@ -218,10 +324,18 @@ Malformed object:
 def normalize_edit_direction(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         return {}
-    clean = {
+    clean: dict[str, Any] = {
         field: str(value.get(field, "")).strip()
-        for field in FIELDS if field != "confidence"
+        for field in FIELDS
+        if field not in {"confidence", "personal_style_choice"}
     }
+    # Which style was used is a number into the menu the prompt offered. A
+    # number that cannot be read is no choice at all rather than the first.
+    try:
+        clean["personal_style_choice"] = int(
+            float(str(value.get("personal_style_choice", 0)).strip() or 0))
+    except (TypeError, ValueError):
+        clean["personal_style_choice"] = -1
     confidence = value.get("confidence", 0)
     try:
         clean["confidence"] = round(float(confidence), 4)
@@ -264,7 +378,28 @@ def normalize_edit_direction(value: Any) -> dict[str, Any]:
     return clean
 
 
-def valid_edit_direction(value: Any) -> bool:
+def valid_style_choice(value: Any, candidate: Any = None) -> bool:
+    """Whether the style it says it used is one it was actually offered.
+
+    A treatment attributed to a style nobody offered is a treatment whose
+    provenance is invented, so this is checked as strictly as the recipes
+    are. With no styles offered the only honest answer is none.
+    """
+    if not isinstance(value, dict):
+        return False
+    offered = len((candidate or {}).get("style_profiles") or []) if isinstance(
+        candidate, dict) else 0
+    choice = value.get("personal_style_choice")
+    if not isinstance(choice, int) or isinstance(choice, bool):
+        return False
+    if not offered:
+        return choice == 0
+    return 1 <= choice <= offered
+
+
+def valid_edit_direction(value: Any, candidate: Any = None) -> bool:
+    if not valid_style_choice(value, candidate):
+        return False
     recipes_valid = True
     for field in ("standard_recipe", "signature_recipe", "creative_recipe", "personal_recipe"):
         if not value.get(field):
@@ -302,14 +437,40 @@ def valid_edit_direction(value: Any) -> bool:
     )
 
 
+def chosen_style(
+    direction: dict[str, Any], candidate: dict[str, Any],
+) -> dict[str, Any] | None:
+    """The style this answer says it spoke in, resolved to the file itself.
+
+    The number is turned back into a path and a hash here, so a treatment
+    can be read months later against the profile that produced it rather
+    than against a name that may since have been changed.
+    """
+    bank = candidate.get("style_profiles") or []
+    choice = direction.get("personal_style_choice")
+    if not isinstance(choice, int) or not 1 <= choice <= len(bank):
+        return None
+    profile = bank[choice - 1]
+    body = profile.get("profile", {}) if isinstance(profile, dict) else {}
+    return {
+        "path": profile.get("path", ""),
+        "sha256": profile.get("sha256", ""),
+        "profile_name": body.get("profile_name", ""),
+        "reason": str(direction.get("personal_style_reason", "")).strip(),
+        "offered": len(bank),
+    }
+
+
 def edit_direction_json(
     direction: dict[str, Any], candidate: dict[str, Any],
     format_repaired: bool = False,
 ) -> dict[str, Any]:
+    style = chosen_style(direction, candidate)
     return {
         "photo": candidate["photo"],
         "format_repaired": bool(format_repaired),
         **direction,
+        **({"personal_style": style} if style else {}),
     }
 
 
@@ -330,7 +491,7 @@ def mark_edit_direction_validation(
     return marked
 
 
-def validation_failures(value: Any) -> list[str]:
+def validation_failures(value: Any, candidate: Any = None) -> list[str]:
     """Name every reason a direction fails validation, for the record."""
     if not isinstance(value, dict):
         return [f"direction is {type(value).__name__}, not a mapping"]
@@ -345,6 +506,9 @@ def validation_failures(value: Any) -> list[str]:
     if not (isinstance(confidence, (int, float))
             and 0 <= confidence <= 1):
         failures.append("confidence is not a number between 0 and 1")
+    if not valid_style_choice(value, candidate):
+        failures.append(
+            "personal_style_choice does not name one of the styles offered")
     titles = {
         str(value.get(f"{kind}_title", "")).casefold()
         for kind in ("standard", "signature", "creative")
@@ -409,20 +573,36 @@ def rejected_edit_direction_json(
     }
     if direction is not None:
         entry["kimiya_validation"]["failures"] = (
-            validation_failures(direction)[:8])
+            validation_failures(direction, candidate)[:8])
     return entry
+
+
+def as_offered(entry: Any) -> dict[str, Any]:
+    """A stored entry read back as the menu it was chosen from.
+
+    An entry carries the style it resolved to rather than the list it
+    picked from, so re-validating it later has to reconstruct how many
+    were on the table. Only the count matters to the check.
+    """
+    style = (entry.get("personal_style") or {}) if isinstance(
+        entry, dict) else {}
+    try:
+        offered = int(style.get("offered", 0) or 0)
+    except (TypeError, ValueError):
+        offered = 0
+    return {"style_profiles": [None] * max(0, offered)}
 
 
 def edit_direction_needs_validation(entry: dict[str, Any]) -> bool:
     return (
         isinstance(entry, dict)
         and entry.get("kimiya_validation", {}).get("status") != "rejected"
-        and valid_edit_direction(entry)
+        and valid_edit_direction(entry, as_offered(entry))
     )
 
 
 def valid_edit_report_entry(entry: dict[str, Any]) -> bool:
-    if valid_edit_direction(entry):
+    if valid_edit_direction(entry, as_offered(entry)):
         return True
     validation = entry.get("kimiya_validation", {}) if isinstance(entry, dict) else {}
     return (
@@ -487,8 +667,17 @@ def build_edit_report(
 ) -> str:
     value = json.loads(request)
     personal_style = value.get("style_profile")
+    bank = value.get("style_profiles") or []
     return json.dumps({
         "format": FORMAT,
+        # Every style the run could have spoken in. Which one each frame
+        # actually used is on the frame, because that is where the choice
+        # was made.
+        "style_profiles": [
+            {"path": item.get("path", ""),
+             "sha256": item.get("sha256", ""),
+             "profile_name": item.get("profile", {}).get("profile_name", "")}
+            for item in bank if isinstance(item, dict)],
         "request_signature": value["signature"],
         "shortlist_sha256": value["shortlist_sha256"],
         "review_revision": value["review_revision"],

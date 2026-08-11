@@ -8,6 +8,7 @@ param profile: text = "family"
 param resume: bool = true
 param checkpoint: text = ""
 param style_profile: text = ""
+param style_profiles: text = "[]"
 param only_photo: text = ""
 param only_photos: text = "[]"
 
@@ -37,10 +38,12 @@ schema EditDirections:
     personal_intent: text
     personal_instructions: text
     personal_recipe: text
+    personal_style_choice: num
+    personal_style_reason: text
     guardrails: text
     confidence: num
 
-request := build_edit_request(shortlist, review, photos, style_profile, only_photo, only_photos)
+request := build_edit_request(shortlist, review, photos, style_profile, only_photo, only_photos, style_profiles)
 candidates := parse_edit_candidates(request)
 checkpoint_file := edit_checkpoint_path(output, checkpoint)
 entries := load_edit_checkpoint(checkpoint_file, request, resume)
@@ -52,13 +55,13 @@ forall candidate in pending:
     raw := memo gen<EditDirections>(edit_direction_prompt(candidate, profile), images=[photo]) by A
     direction := normalize_edit_direction(raw)
     format_repaired := false
-    if check valid_edit_direction(direction):
+    if check valid_edit_direction(direction, candidate):
         check true
     else:
-        repaired_raw := memo gen<EditDirections>(edit_direction_repair_prompt(raw)) by B
+        repaired_raw := memo gen<EditDirections>(edit_direction_repair_prompt(raw, candidate)) by B
         direction := normalize_edit_direction(repaired_raw)
         format_repaired := true
-    if check valid_edit_direction(direction):
+    if check valid_edit_direction(direction, candidate):
         entry := edit_direction_json(direction, candidate, format_repaired)
     else:
         entry := rejected_edit_direction_json(candidate, format_repaired, direction)

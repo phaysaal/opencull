@@ -24,7 +24,6 @@ from .project import (
     load_project,
     register_file_artifact,
     register_job_output,
-    update_project,
 )
 from .providers import (
     DEFAULT_JUDGMENT_POLICY,
@@ -195,13 +194,19 @@ class JobManager:
                 job["export_destination"] = str(receipt.get("destination", ""))
                 job["export_sha256"] = str(receipt.get("sha256", ""))
             project = register_job_output(Path(requested), job)
-            style_profile = str(job.get("style_profile") or "").strip()
-            if style_profile and Path(style_profile).is_file():
-                project = register_file_artifact(
-                    Path(requested), "style_profile", Path(style_profile),
-                    stage="style")
-                project = update_project(
-                    Path(requested), active_style_profile=style_profile)
+            # Every style the run could speak in is recorded as an artifact
+            # of the shoot. None of them becomes "the" style: which one a
+            # photograph used is written on that photograph's own entry, and
+            # a folder-wide pin would silently steer the next run.
+            offered = [
+                str(job.get("style_profile") or "").strip(),
+                *(str(item) for item in (job.get("style_profiles") or [])),
+            ]
+            for style_profile in dict.fromkeys(filter(None, offered)):
+                if Path(style_profile).is_file():
+                    project = register_file_artifact(
+                        Path(requested), "style_profile", Path(style_profile),
+                        stage="style")
             job["project_id"] = project.get("id")
             job.pop("project_registration_error", None)
         except (OSError, ValueError, KeyError) as exc:
@@ -442,6 +447,7 @@ class JobManager:
                 f"output={job['output']}",
                 f"profile={job['profile']}",
                 f"style_profile={job.get('style_profile', '')}",
+                f"style_profiles={json.dumps(job.get('style_profiles', []))}",
                 f"only_photo={job.get('only_photo', '')}",
                 f"only_photos={json.dumps(job.get('only_photos', []))}",
                 "resume=true",
@@ -913,6 +919,7 @@ class JobManager:
         model: str = "",
         consensus: bool = False,
         style_profile: str = "",
+        style_profiles: list[str] | None = None,
         only_photo: str = "",
         only_photos: list[str] | None = None,
     ) -> dict[str, Any]:
@@ -926,6 +933,15 @@ class JobManager:
         style_path = Path(style_profile).expanduser().resolve() if str(style_profile).strip() else None
         if style_path is not None and not style_path.is_file():
             raise JobError("personal style profile does not exist")
+        # Every style the run may speak in. The run chooses among them per
+        # photograph, so a missing one is a menu that lies about itself.
+        style_bank = []
+        for item in style_profiles or []:
+            resolved = Path(str(item)).expanduser().resolve()
+            if not resolved.is_file():
+                raise JobError("personal style profile does not exist")
+            if str(resolved) not in style_bank:
+                style_bank.append(str(resolved))
         profile = str(profile or "").strip()
         if not profile or len(profile) > 700:
             raise JobError(
@@ -985,6 +1001,7 @@ class JobManager:
                 "log": f"{chosen_output}.log",
                 "profile": profile,
                 "style_profile": str(style_path) if style_path else "",
+                "style_profiles": style_bank,
                 "only_photo": str(only_photo).strip(),
                 "only_photos": [
                     str(item).strip() for item in (only_photos or [])

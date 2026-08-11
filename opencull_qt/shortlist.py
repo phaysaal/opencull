@@ -133,12 +133,13 @@ class ShortlistPage(QWidget):
     reask_wanted = Signal(str)      # ask again about one photograph
 
     def __init__(self, shortlist, reviews, loader: PreviewLoader,
-                 directions=None, parent: QWidget | None = None):
+                 directions=None, styles=(), parent: QWidget | None = None):
         super().__init__(parent)
         self.shortlist = shortlist
         self.reviews = reviews
         self.loader = loader
         self.directions = directions
+        self.styles = list(styles)
         self.entries = list(shortlist.entries)
         self.by_hand = rated_by_hand(shortlist)
         self.current = str(self.entries[0]["photo"]) if self.entries else ""
@@ -1022,7 +1023,8 @@ class ShortlistPage(QWidget):
     def _ask_scope(self, waiting: int, done: int, plan=()) -> str:
         return ask_suggestion_scope(
             self, waiting, done, plan, loader=self.loader,
-            photos_root=photos_root_of(self.shortlist))
+            photos_root=photos_root_of(self.shortlist),
+            styles=self.styles)
 
     def step(self, delta: int) -> None:
         if not self.entries:

@@ -194,9 +194,12 @@ def plan(
             "An assessment reads a selection, and this folder has none yet. "
             "Cull it, or open it once to select everything."))
 
+    # No style is "in use": the styles are a shelf the AI editing phase
+    # draws from, choosing one per scene. Having any is what matters.
     phases.append(entry(
         PROFILE, "done" if profile_selected else "ready",
-        detail="A profile is in use." if profile_selected else
+        detail="Every style here is offered to the AI editing phase."
+        if profile_selected else
         "Optional. Without one, suggestions have no personal treatment."))
 
     if suggesting:

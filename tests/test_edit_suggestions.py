@@ -9,8 +9,10 @@ from edit_suggestion_kernel import (
     RECIPE_SECTIONS,
     build_edit_report,
     build_edit_request,
+    chosen_style,
     edit_direction_json,
     edit_direction_needs_validation,
+    edit_direction_prompt,
     edit_direction_repair_prompt,
     mark_edit_direction_validation,
     normalize_edit_direction,
@@ -18,6 +20,7 @@ from edit_suggestion_kernel import (
     rejected_edit_direction_json,
     valid_edit_direction,
     valid_edit_report,
+    valid_style_choice,
 )
 
 
@@ -204,3 +207,128 @@ class EditSuggestionKernelTests(unittest.TestCase):
             self.assertEqual(
                 report["style_profile_sha256"],
                 json.loads(request)["style_profile"]["sha256"])
+
+
+class PersonalStyleChoiceTests(EditSuggestionKernelTests):
+    """A photographer has several tastes; each photograph asks for one."""
+
+    def styles(self, root: Path, *names: str) -> list[str]:
+        paths = []
+        for index, name in enumerate(names):
+            path = root / f"style-{index}.json"
+            path.write_text(json.dumps({
+                "format": "opencull-personal-style-profile-v1",
+                "profile": {
+                    "profile_name": name,
+                    "visual_signature": f"how {name} looks",
+                    "scene_adaptation": f"when {name} suits a scene"},
+            }), encoding="utf-8")
+            paths.append(str(path))
+        return paths
+
+    def request_with(self, root: Path, *names: str):
+        photos, shortlist, review = self.make_context(root)
+        request = build_edit_request(
+            str(shortlist), str(review), str(photos),
+            style_profiles=json.dumps(self.styles(root, *names)))
+        return request, parse_edit_candidates(request)[0]
+
+    def direction(self, choice, reason="the light suits it"):
+        recipe = json.dumps({
+            section: [f"Apply a restrained {section} adjustment."]
+            for section in RECIPE_SECTIONS})
+        return normalize_edit_direction({
+            "scene_reading": "A quiet blue-hour portrait.",
+            "standard_title": "Clean editorial",
+            "standard_intent": "Natural polish.",
+            "standard_instructions": "Balance exposure.",
+            "signature_title": "Indigo warmth",
+            "signature_intent": "Warm against cool.",
+            "signature_instructions": "Restrained split color.",
+            "creative_title": "Evening cinema",
+            "creative_intent": "Cinematic atmosphere.",
+            "creative_instructions": "Shape light.",
+            "guardrails": "Preserve expression.",
+            "confidence": 0.86,
+            "standard_recipe": recipe,
+            "signature_recipe": recipe,
+            "creative_recipe": recipe,
+            "personal_title": "Its own hand",
+            "personal_intent": "Speak in the chosen style.",
+            "personal_instructions": "Push cyan, hold terracotta.",
+            "personal_recipe": recipe,
+            "personal_style_choice": choice,
+            "personal_style_reason": reason,
+        })
+
+    def test_every_style_is_offered_to_every_photograph(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _request, candidate = self.request_with(
+                root, "Coastal twilight", "Heritage street", "Child portrait")
+            offered = candidate["style_profiles"]
+            self.assertEqual(len(offered), 3)
+            names = [item["profile"]["profile_name"] for item in offered]
+            self.assertEqual(names[0], "Coastal twilight")
+            # The menu the model reads names each style and how it looks.
+            menu = edit_direction_prompt(candidate, "professional")
+            self.assertIn("Heritage street", menu)
+            self.assertIn("how Child portrait looks", menu)
+            # A name is a label; what the look is and when it suits a
+            # scene is the evidence a choice can rest on.
+            self.assertIn("when Heritage street suits a scene", menu)
+            self.assertIn("personal_style_choice", menu)
+
+    def test_the_chosen_style_is_resolved_to_the_file_it_came_from(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            request, candidate = self.request_with(
+                root, "Coastal twilight", "Heritage street")
+            direction = self.direction(2, "stone village in hard midday sun")
+            self.assertTrue(valid_edit_direction(direction, candidate))
+            entry = edit_direction_json(direction, candidate)
+            self.assertEqual(
+                entry["personal_style"]["profile_name"], "Heritage street")
+            self.assertEqual(
+                entry["personal_style"]["reason"],
+                "stone village in hard midday sun")
+            self.assertEqual(entry["personal_style"]["offered"], 2)
+            # And the run records every style it could have spoken in.
+            report = json.loads(build_edit_report(
+                request, [entry], "professional"))
+            self.assertEqual(
+                [item["profile_name"] for item in report["style_profiles"]],
+                ["Coastal twilight", "Heritage street"])
+            self.assertTrue(valid_edit_report(
+                build_edit_report(request, [entry], "professional"),
+                request, [candidate]))
+
+    def test_a_style_nobody_offered_is_not_a_provenance(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _request, candidate = self.request_with(root, "Coastal twilight")
+            for invented in (2, 0, -1, 99):
+                self.assertFalse(
+                    valid_edit_direction(self.direction(invented), candidate),
+                    f"choice {invented} was accepted against one style")
+            self.assertIsNone(chosen_style(self.direction(7), candidate))
+
+    def test_no_styles_offered_means_the_only_honest_choice_is_none(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            photos, shortlist, review = self.make_context(root)
+            request = build_edit_request(
+                str(shortlist), str(review), str(photos))
+            candidate = parse_edit_candidates(request)[0]
+            self.assertTrue(valid_style_choice(self.direction(0), candidate))
+            self.assertFalse(valid_style_choice(self.direction(1), candidate))
+            self.assertIn("no personal style profile",
+                          edit_direction_prompt(candidate, "professional"))
+
+    def test_an_unreadable_choice_is_no_choice_rather_than_the_first(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _request, candidate = self.request_with(root, "Coastal twilight")
+            direction = self.direction("the first one")
+            self.assertEqual(direction["personal_style_choice"], -1)
+            self.assertFalse(valid_edit_direction(direction, candidate))

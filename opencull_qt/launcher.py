@@ -1498,7 +1498,7 @@ class Launcher(QMainWindow):
     def phase_plan(self, project: dict, bench: Bench) -> list[dict]:
         return phases.plan(
             project,
-            profile_selected=bool(self.style_profiles.selected()),
+            profile_selected=bool(self.style_profiles.available()),
             marked=bench.marked(), culled=bench.culled(),
             suggested=bench.suggested(),
             suggesting=any(
@@ -1687,7 +1687,7 @@ class Launcher(QMainWindow):
             return invitation
         page = ShortlistPage(
             bench.shortlist, bench.shortlist_reviews, self._loader,
-            directions=bench.directions)
+            directions=bench.directions, styles=self.style_names())
         page.why_wanted.connect(self.explain_frame)
         page.reassess_wanted.connect(
             lambda pr=bench.project: self.reassess_project(pr))
@@ -1736,7 +1736,7 @@ class Launcher(QMainWindow):
                 "")
         page = SuggestionsPage(
             bench.shortlist, bench.shortlist_reviews, bench.directions,
-            loader=self._loader)
+            loader=self._loader, styles=self.style_names())
         page.why_wanted.connect(self.explain_frame)
         page.suggested.connect(
             lambda output, wanted: self.suggest_edits(
@@ -1975,13 +1975,12 @@ class Launcher(QMainWindow):
                 shortlist=str(shortlist.path), review=str(reviews.path),
                 photos=str(photos.root), output=output,
                 profile="professional",
-                # The project records which profile it last used; the
-                # window's selection is what a new run should use.
-                # No profile is privileged on the profile page any
-                # more, so the run takes the one this project last used,
-                # or failing that the newest built. Choosing among
-                # several belongs to this phase, not to the shelf.
-                style_profile=self.profile_for(manifest),
+                # Every style the photographer has built is offered, and
+                # the run says which one each photograph asked for. One
+                # style silently preferred over the others -- which is
+                # what a folder-wide pin did -- is a taste chosen by
+                # accident of build order.
+                style_profiles=self.profiles_for(),
                 only_photos=list(wanted),
                 provider_profile_id=self.provider_id())
         except Exception as exc:
@@ -2011,14 +2010,28 @@ class Launcher(QMainWindow):
             f"Verifying {request['photo']}. The certificate covers the "
             "full-size render and appears here when it finishes.", "ok")
 
+    def style_names(self) -> list[str]:
+        """What the photographer calls each of their styles."""
+        return [str(item["name"]) for item in self.style_profiles.available()]
+
+    def profiles_for(self) -> list[str]:
+        """Every personal style a suggestion run may speak in.
+
+        All of them, always. Which one suits a given photograph is a
+        judgement about that photograph, made where the photograph is
+        being looked at -- not here, by seniority.
+        """
+        return [str(item["path"]) for item in self.style_profiles.available()]
+
     def profile_for(self, manifest: dict) -> str:
-        """Which personal profile a suggestion run should speak in."""
+        """The one style a single-profile run would use, if there is one.
+
+        Kept for the paths that still speak of one profile -- explaining a
+        render made under it, for instance. It no longer decides anything.
+        """
         recorded = str(manifest.get("active_style_profile") or "")
         if recorded and Path(recorded).is_file():
             return recorded
-        chosen = self.style_profiles.selected()
-        if chosen:
-            return chosen
         available = self.style_profiles.available()
         return str(available[0]["path"]) if available else ""
 

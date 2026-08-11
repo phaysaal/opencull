@@ -96,11 +96,28 @@ class Treatment(QFrame):
         title.setWordWrap(True)
         head.addWidget(title, 1)
 
-        kind = QLabel(style.upper())
+        chosen = entry.get("personal_style") if style == "personal" else None
+        chosen = chosen if isinstance(chosen, dict) else None
+        kind = QLabel(
+            f"{style.upper()} · {chosen['profile_name'].upper()}"
+            if chosen and chosen.get("profile_name") else style.upper())
         kind.setObjectName("axisName")
         kind.setFont(theme.display(7))
+        kind.setWordWrap(True)
         head.addWidget(kind, 0, Qt.AlignmentFlag.AlignTop)
         layout.addLayout(head)
+
+        # Which of the photographer's styles this scene asked for, and what
+        # about the scene asked for it. A personal treatment that cannot
+        # name the taste it came from is not personal to anybody.
+        if chosen and str(chosen.get("reason") or "").strip():
+            because = QLabel(
+                f"Chosen from {chosen.get('offered', 0)} of your styles — "
+                + str(chosen["reason"]).strip())
+            because.setObjectName("hint")
+            because.setWordWrap(True)
+            because.setFont(theme.body(9))
+            layout.addWidget(because)
 
         rendered = bool(str(entry.get(f"{style}_recipe") or "").strip())
         for field, label in SECTIONS:
@@ -136,13 +153,17 @@ class SuggestionsPage(QWidget):
     why_wanted = Signal(str)        # the frame whose story is asked for
 
     def __init__(self, shortlist, reviews, directions, loader=None,
-                 parent: QWidget | None = None):
+                 styles=(), parent: QWidget | None = None):
         super().__init__(parent)
         self.setObjectName("page")
         self.shortlist = shortlist
         self.reviews = reviews
         self.directions = directions
         self.loader = loader
+        # The personal styles a run may speak in, by name, for saying so
+        # before the run is paid for. The choice among them is the model's,
+        # made per scene.
+        self.styles = list(styles)
         self.current = ""
         self.photos: list[str] = []
         self.sheet: ContactSheet | None = None
@@ -605,7 +626,8 @@ class SuggestionsPage(QWidget):
     def _ask_scope(self, waiting: int, done: int, plan=()) -> str:
         return ask_suggestion_scope(
             self, waiting, done, plan, loader=self.loader,
-            photos_root=photos_root_of(self.shortlist))
+            photos_root=photos_root_of(self.shortlist),
+            styles=self.styles)
 
     def step(self, delta: int) -> None:
         if not self.photos:
@@ -736,7 +758,7 @@ class ScenePlanDialog(QDialog):
     """
 
     def __init__(self, parent, plan, waiting: int, done: int, loader,
-                 photos_root):
+                 photos_root, styles=()):
         super().__init__(parent)
         self.setWindowTitle("Ask for editing directions?")
         self.setStyleSheet(theme.STYLESHEET)
@@ -766,6 +788,21 @@ class ScenePlanDialog(QDialog):
         lead.setWordWrap(True)
         lead.setFont(theme.body(10))
         column.addWidget(lead)
+
+        # No style is picked here, because the right one depends on the
+        # scene: each call is shown every style and says which the
+        # photograph asked for.
+        styles = list(styles)
+        if styles:
+            self.styles_note = QLabel(
+                f"Every scene is offered all {len(styles)} of your personal "
+                "styles and uses the one that suits it — "
+                + ", ".join(str(name) for name in styles[:4])
+                + (f" and {len(styles) - 4} more." if len(styles) > 4 else "."))
+            self.styles_note.setObjectName("hint")
+            self.styles_note.setWordWrap(True)
+            self.styles_note.setFont(theme.body(9))
+            column.addWidget(self.styles_note)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -817,7 +854,7 @@ class ScenePlanDialog(QDialog):
 
 
 def ask_suggestion_scope(parent, waiting: int, done: int, plan=(),
-                         loader=None, photos_root=None) -> str:
+                         loader=None, photos_root=None, styles=()) -> str:
     """What to spend, put as the choice it is.
 
     "scene" asks once per scene and shares the answer; "missing" asks for
@@ -830,7 +867,7 @@ def ask_suggestion_scope(parent, waiting: int, done: int, plan=(),
     plan = list(plan)
     if plan and loader is not None:
         dialog = ScenePlanDialog(parent, plan, waiting, done, loader,
-                                 photos_root)
+                                 photos_root, styles)
         dialog.exec()
         return dialog.choice
     scene_count = len(plan)

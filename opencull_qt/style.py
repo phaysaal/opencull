@@ -788,19 +788,6 @@ class StylePanel(QWidget):
             "Add photographs to refine this profile. Its own are already "
             "in it, so only the new ones are read.")
 
-    def _chose(self, row: int) -> None:
-        if not (0 <= row < len(self.available)):
-            return
-        self.show_group(row)
-        try:
-            self.store.select(self.available[row]["path"])
-        except StyleProfileError as exc:
-            self._report(str(exc), "alarm")
-            return
-        self.refresh()
-        self._report(
-            f"{self.available[row]['name']} is the profile suggestions will "
-            "use.", "ok")
 
     def retire(self, row: int) -> None:
         """Take one profile off the shelf, keeping the profile itself."""

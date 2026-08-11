@@ -241,6 +241,49 @@ class AskingTests(SuggestionsPageTests):
         self.assertIn(plan[0]["representative"], shown)
         self.assertIn("2 frames, 1 scene", shown)
 
+    def test_a_personal_treatment_names_the_style_it_spoke_in(self):
+        from opencull_qt.suggestions import Treatment
+
+        card = Treatment("personal", {
+            "personal_title": "Cyan Alpine Architecture",
+            "personal_intent": "adapt the signature to this valley",
+            "personal_recipe": "{}",
+            "personal_style": {
+                "profile_name": "Vivid Heritage Street Architecture",
+                "reason": "stone village under hard midday sun",
+                "offered": 8},
+        })
+        self.addCleanup(card.deleteLater)
+        shown = "\n".join(label.text() for label in card.findChildren(QLabel))
+        self.assertIn("VIVID HERITAGE STREET ARCHITECTURE", shown)
+        self.assertIn("Chosen from 8 of your styles", shown)
+        self.assertIn("stone village under hard midday sun", shown)
+
+    def test_a_treatment_from_before_the_choice_says_only_personal(self):
+        from opencull_qt.suggestions import Treatment
+
+        card = Treatment("personal", {
+            "personal_title": "Its own hand", "personal_recipe": "{}"})
+        self.addCleanup(card.deleteLater)
+        shown = "\n".join(label.text() for label in card.findChildren(QLabel))
+        self.assertIn("PERSONAL", shown)
+        self.assertNotIn("Chosen from", shown)
+
+    def test_the_ask_says_the_styles_are_chosen_scene_by_scene(self):
+        from opencull_gui import scenes
+        from opencull_qt.suggestions import ScenePlanDialog
+
+        page = self.page(marked=(NAMES[0], NAMES[1]), suggested=False)
+        plan = scenes.plan_for(page.shortlist, [NAMES[0], NAMES[1]])
+        dialog = ScenePlanDialog(
+            page, plan, 2, 0, page.loader, None,
+            ["Coastal twilight", "Heritage street"])
+        self.addCleanup(dialog.deleteLater)
+        shown = "\n".join(
+            label.text() for label in dialog.findChildren(QLabel))
+        self.assertIn("all 2 of your personal styles", shown)
+        self.assertIn("Coastal twilight", shown)
+
     def test_the_dialog_reports_which_scope_was_pressed(self):
         from opencull_gui import scenes
         from opencull_qt.suggestions import ScenePlanDialog
