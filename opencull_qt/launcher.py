@@ -890,9 +890,14 @@ class Launcher(QMainWindow):
             shell.rebuild(phases.CULL)
         profile_page = shell.page_for(phases.PROFILE)
         if isinstance(profile_page, StylePanel):
+            style_runs = [job for job in queue["jobs"]
+                          if job.get("kind") == "style_profile"]
+            # The run in flight, or the newest one. Never the oldest:
+            # a failure from an hour ago is not what is happening now.
             profile_page.show_run(next(
-                (job for job in queue["jobs"]
-                 if job.get("kind") == "style_profile"), None))
+                (job for job in reversed(style_runs)
+                 if job.get("status") in ACTIVE),
+                style_runs[-1] if style_runs else None))
         assess_page = shell.page_for(phases.ASSESSMENT)
         assessing = next(
             (job for job in self._professional_jobs(

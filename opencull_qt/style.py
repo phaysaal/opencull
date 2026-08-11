@@ -180,14 +180,30 @@ class StylePanel(QWidget):
         self.status.style().polish(self.status)
 
     def show_run(self, job: dict | None) -> None:
-        """What the profile run is doing, while it is doing it."""
+        """What the profile run is doing, while it is doing it.
+
+        And what became of it once, when it ends: a profile that is
+        ready says so and appears in the list, a run that stopped says
+        that instead.
+        """
         active = bool(job) and job.get("status") in {
             "running", "queued", "stopping", "detached"}
         self.meter.setVisible(active)
         self.stage.setVisible(active)
         self.build_button.setEnabled(not active)
         if not active:
-            if job and job.get("status") == "failed":
+            settled = str((job or {}).get("id") or "")
+            if not job or settled == getattr(self, "_settled", ""):
+                return
+            self._settled = settled
+            # A run that has ended is reported once, when it ends --
+            # not on every poll for the rest of the session.
+            if job.get("status") == "completed":
+                self.refresh()
+                self._report(
+                    "Your style profile is ready. Choose it to put it "
+                    "to use.", "ok")
+            elif job.get("status") == "failed":
                 self._report(
                     "That profile run stopped before it finished. "
                     + str(job.get("message") or ""), "alarm")

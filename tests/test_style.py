@@ -181,19 +181,33 @@ class StyleDialogTests(unittest.TestCase):
         self.assertIn("learn your editing style", panel.stage.text())
         self.assertFalse(panel.build_button.isEnabled())
 
-    def test_a_finished_profile_puts_its_meter_away(self):
+    def test_a_finished_profile_puts_its_meter_away_and_says_so(self):
         panel = self.dialog()
-        panel.show_run({"kind": "style_profile", "status": "running",
+        panel.show_run({"id": "s1", "kind": "style_profile",
+                        "status": "running",
                         "progress": {"fraction": 0.6, "stage": "x"}})
-        panel.show_run({"kind": "style_profile", "status": "completed",
+        panel.show_run({"id": "s1", "kind": "style_profile",
+                        "status": "completed",
                         "progress": {"fraction": 1.0}})
         self.assertFalse(panel.meter.isVisibleTo(panel))
         self.assertTrue(panel.build_button.isEnabled())
+        self.assertIn("ready", panel.status.text())
+
+    def test_an_ended_run_is_reported_once_not_on_every_poll(self):
+        panel = self.dialog()
+        panel.show_run({"id": "s1", "kind": "style_profile",
+                        "status": "failed", "message": "exited"})
+        self.assertIn("stopped before it finished", panel.status.text())
+        panel._report("", "")
+        for _ in range(3):
+            panel.show_run({"id": "s1", "kind": "style_profile",
+                            "status": "failed", "message": "exited"})
+        self.assertEqual(panel.status.text(), "")
 
     def test_a_failed_profile_says_so_rather_than_going_quiet(self):
         panel = self.dialog()
         panel.show_run({
-            "kind": "style_profile", "status": "failed",
+            "id": "s9", "kind": "style_profile", "status": "failed",
             "message": "Kimiya exited with status 2."})
         self.assertIn("stopped before it finished", panel.status.text())
 
