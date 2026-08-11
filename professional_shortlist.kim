@@ -88,8 +88,17 @@ forall batch in professional_batches(candidates, 8):
         batch_photos := batch_photos + [batch_photo]
     batch_assessments := assessments_for_candidates(assessments, batch)
     raw_calibration := memo gen<ProfessionalCalibration>(professional_calibration_prompt(batch, batch_assessments, profile), images=batch_photos) by B
-    check valid_professional_calibration(raw_calibration, batch)
-    calibrations := calibrations + [professional_calibration_json(raw_calibration, batch)]
+    -- A comparison is an adjustment to ratings that already stand, so a
+    -- batch nobody can compare is a batch left as it was rated, not a
+    -- dead run. Ask once more, then carry on without it.
+    if check valid_professional_calibration(raw_calibration, batch):
+        calibrations := calibrations + [professional_calibration_json(raw_calibration, batch)]
+    else:
+        retried_calibration := memo gen<ProfessionalCalibration>(professional_calibration_prompt(batch, batch_assessments, profile), images=batch_photos) by A
+        if check valid_professional_calibration(retried_calibration, batch):
+            calibrations := calibrations + [professional_calibration_json(retried_calibration, batch)]
+        else:
+            check true
 
 shortlist := build_professional_shortlist(bundle, assessments, calibrations, profile)
 check professional_report_valid(shortlist, bundle, candidates)
