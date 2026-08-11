@@ -224,7 +224,7 @@ class StyleProfileStore:
         found: list[dict[str, Any]] = []
         if not self.results.is_dir():
             return found
-        for path in self.results.glob("*.json"):
+        for path in sorted(self.results.glob("*.json")):
             try:
                 value = read_profile(path)
             except StyleProfileError:
@@ -250,6 +250,34 @@ class StyleProfileStore:
                 "modified": path.stat().st_mtime_ns})
         found.sort(key=lambda item: item["modified"], reverse=True)
         return found
+
+    def retire(self, path: str | Path) -> Path:
+        """Take a profile off the shelf without destroying it.
+
+        A render made under a profile can only be explained while that
+        profile still exists, so removing one moves it aside rather than
+        deleting it. It stops being offered, its name is forgotten, and
+        it stops being the profile in use if it was.
+        """
+        resolved = Path(str(path)).expanduser().resolve()
+        read_profile(resolved)
+        retired = self.results / "Retired profiles"
+        retired.mkdir(parents=True, exist_ok=True)
+        destination = retired / resolved.name
+        number = 2
+        while destination.exists():
+            destination = retired / f"{resolved.stem}-{number}.json"
+            number += 1
+        resolved.rename(destination)
+        stored = self._stored()
+        names = dict(stored.get("names") or {})
+        names.pop(str(resolved), None)
+        _atomic_json(self.path, {
+            "format": SELECTION_FORMAT,
+            "selected": ("" if stored.get("selected") == str(resolved)
+                         else stored.get("selected") or ""),
+            "names": names})
+        return destination
 
     def public(self) -> dict[str, Any]:
         chosen = self.selected()

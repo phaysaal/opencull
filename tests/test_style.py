@@ -326,6 +326,39 @@ class StyleDialogTests(unittest.TestCase):
         dialog.clear_examples()
         self.assertTrue(dialog.create_button.isVisibleTo(dialog))
 
+    def test_each_profile_carries_its_own_rename_and_remove(self):
+        from PySide6.QtWidgets import QPushButton
+
+        dialog = self.dialog()
+        write_profile(self.results / "personal-style-1.json")
+        dialog.refresh()
+        labels = [b.text() for b in dialog.cards[0].findChildren(QPushButton)]
+        self.assertEqual(labels, ["Rename", "Remove"])
+
+    def test_removing_a_profile_keeps_it_off_the_shelf_but_on_disk(self):
+        from unittest import mock
+
+        dialog = self.dialog()
+        write_profile(self.results / "personal-style-1.json")
+        self.store.select(self.results / "personal-style-1.json")
+        dialog.refresh()
+
+        # Refused, nothing happens.
+        with mock.patch.object(dialog, "_confirm_retire", return_value=False):
+            dialog.retire(0)
+        self.assertEqual(len(dialog.available), 1)
+
+        with mock.patch.object(dialog, "_confirm_retire", return_value=True):
+            dialog.retire(0)
+
+        self.assertEqual(dialog.available, [])
+        self.assertFalse((self.results / "personal-style-1.json").is_file())
+        self.assertTrue(
+            (self.results / "Retired profiles"
+             / "personal-style-1.json").is_file())
+        self.assertEqual(self.store.selected(), "")
+        self.assertIn("kept", dialog.status.text())
+
     def test_profiles_are_shown_as_their_photographs(self):
         from PySide6.QtWidgets import QLabel
 

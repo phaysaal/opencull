@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QInputDialog,
     QLabel,
+    QMessageBox,
     QProgressBar,
     QPushButton,
     QScrollArea,
@@ -50,6 +51,8 @@ class ProfileCard(QFrame):
     """One profile, shown by the photographs that taught it."""
 
     chosen = Signal(int)
+    rename_wanted = Signal(int)
+    retire_wanted = Signal(int)
 
     WIDTH = 236
 
@@ -96,6 +99,30 @@ class ProfileCard(QFrame):
         count.setObjectName("cardCount")
         count.setFont(theme.body(9))
         body.addWidget(count)
+
+        # What can be done to one profile belongs on that profile,
+        # rather than on a button that acts on whichever was last
+        # touched.
+        row = QHBoxLayout()
+        row.setSpacing(7)
+        for label, tip, signal in (
+            ("Rename", "Call this profile something of your own.",
+             self.rename_wanted),
+            ("Remove", "Take it off the shelf. The profile itself is "
+                       "kept, so renders made under it can still be "
+                       "explained.", self.retire_wanted),
+        ):
+            button = QPushButton(label)
+            button.setObjectName("ghost")
+            button.setProperty("slim", True)
+            button.setFont(theme.body(9))
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.setToolTip(tip)
+            button.clicked.connect(
+                lambda _checked=False, emit=signal: emit.emit(self.index))
+            row.addWidget(button)
+        row.addStretch(1)
+        body.addLayout(row)
         layout.addLayout(body)
 
     def paint_samples(self) -> None:
@@ -355,15 +382,6 @@ class StylePanel(QWidget):
             lambda _checked=False: self.build())
         actions.addWidget(self.build_button)
 
-        self.name_button = QPushButton("Name it…")
-        self.name_button.setObjectName("ghost")
-        self.name_button.setFont(theme.body(10))
-        self.name_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.name_button.setToolTip(
-            "Call this profile what you call it. Several profiles otherwise "
-            "all read as \"Personal style\".")
-        self.name_button.clicked.connect(self.rename)
-        actions.addWidget(self.name_button)
 
         actions.addStretch(1)
 
@@ -502,6 +520,8 @@ class StylePanel(QWidget):
         for index, item in enumerate(self.available):
             card = ProfileCard(index, item, item["path"] == selected)
             card.chosen.connect(self.show_profile)
+            card.rename_wanted.connect(self.rename)
+            card.retire_wanted.connect(self.retire)
             self.profiles_row.addWidget(card)
             self.cards.append(card)
         self.profiles_row.addStretch(1)
@@ -645,9 +665,46 @@ class StylePanel(QWidget):
             f"{self.available[row]['name']} is the profile suggestions will "
             "use.", "ok")
 
-    def rename(self) -> None:
-        """Name the highlighted profile, so several can be told apart."""
-        row = self.current_profile
+    def retire(self, row: int) -> None:
+        """Take one profile off the shelf, keeping the profile itself."""
+        if not (0 <= row < len(self.available)):
+            return
+        item = self.available[row]
+        if not self._confirm_retire(str(item["name"])):
+            return
+        try:
+            self.store.retire(item["path"])
+        except StyleProfileError as exc:
+            self._report(str(exc), "alarm")
+            return
+        self.showing = -1
+        self.current_profile = -1
+        self.detail_scroll.hide()
+        self.refresh()
+        self._report(
+            f"{item['name']} is off the shelf, and kept.", "ok")
+
+    def _confirm_retire(self, name: str) -> bool:
+        """Ask before taking a profile off the shelf."""
+        box = QMessageBox(self)
+        box.setWindowTitle("Remove this profile?")
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setText(f"Remove {name} from the shelf?")
+        box.setInformativeText(
+            "It stops being offered and stops being used. The profile "
+            "itself is kept in a Retired profiles folder, so any render "
+            "made under it can still be explained.")
+        remove = box.addButton(
+            "Remove", QMessageBox.ButtonRole.DestructiveRole)
+        keep = box.addButton("Keep it", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(keep)
+        box.exec()
+        return box.clickedButton() is remove
+
+    def rename(self, row: int = -1) -> None:
+        """Name one profile, so several can be told apart."""
+        if row < 0:
+            row = self.current_profile
         if not (0 <= row < len(self.available)):
             self._report("Choose a profile to name first.", "alarm")
             return
