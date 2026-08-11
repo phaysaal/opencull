@@ -20,8 +20,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QInputDialog,
     QLabel,
-    QListWidget,
-    QListWidgetItem,
     QMessageBox,
     QProgressBar,
     QPushButton,
@@ -30,10 +28,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from opencull_gui.style import StyleProfileError, StyleProfileStore
+from opencull_gui.style import (
+    StyleProfileError,
+    StyleProfileStore,
+    profile_summary,
+    read_profile,
+)
 
 from . import theme
-from .widgets import ElidedLabel, short_path
+from .widgets import ElidedLabel, Filmstrip, short_path
 
 # The kernel reads at most this many examples, so asking for more spends
 # nothing extra and says something untrue about what was read.
@@ -42,6 +45,96 @@ EXAMPLE_LIMIT = 64
 # Set on the items themselves; a row's painted height comes from the
 # stylesheet, which sizeHintForRow does not know about.
 PROFILE_ROW = 32
+
+
+class ProfileCard(QFrame):
+    """One profile, shown by the photographs that taught it."""
+
+    chosen = Signal(int)
+    used = Signal(int)
+
+    WIDTH = 236
+
+    def __init__(self, index: int, item: dict, in_use: bool,
+                 parent: QWidget | None = None):
+        super().__init__(parent)
+        self.index = index
+        self.item = item
+        self.setObjectName("card")
+        self.setFixedWidth(self.WIDTH)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setProperty("kept", "true" if in_use else "false")
+        self.setToolTip(
+            f"{item.get('model_name') or item['name']}\n"
+            "Click to read how this profile was extracted.")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        self.strip = Filmstrip(3)
+        self.strip.setFixedHeight(96)
+        self.strip.clicked.connect(lambda: self.chosen.emit(self.index))
+        self.strip.set_opens(True, "Read how this profile was extracted.")
+        layout.addWidget(self.strip)
+
+        body = QVBoxLayout()
+        body.setContentsMargins(11, 8, 11, 9)
+        body.setSpacing(3)
+        title = QLabel(str(item["name"]))
+        title.setObjectName("cardName")
+        title.setFont(theme.body(10, weight=title.font().Weight.DemiBold))
+        body.addWidget(title)
+        confidence = (
+            f" · {item['confidence']:.0%} confident"
+            if item.get("confidence") is not None else "")
+        count = QLabel(
+            f"{item['examples']} photograph"
+            f"{'' if item['examples'] == 1 else 's'}{confidence}")
+        count.setObjectName("cardCount")
+        count.setFont(theme.body(9))
+        body.addWidget(count)
+        row = QHBoxLayout()
+        row.setSpacing(7)
+        self.use_button = QPushButton("In use" if in_use else "Use this")
+        self.use_button.setObjectName("ghost")
+        self.use_button.setProperty("slim", True)
+        self.use_button.setFont(theme.body(9))
+        self.use_button.setEnabled(not in_use)
+        self.use_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.use_button.setToolTip(
+            "Suggestions are written in this profile's voice."
+            if not in_use else "Suggestions already use this profile.")
+        self.use_button.clicked.connect(
+            lambda _checked=False: self.used.emit(self.index))
+        row.addWidget(self.use_button)
+        row.addStretch(1)
+        body.addLayout(row)
+        layout.addLayout(body)
+
+    def paint_samples(self) -> None:
+        """Three of its photographs, spread across the set."""
+        paths = [
+            Path(value) for value in self.item.get("example_paths") or []
+            if Path(value).is_file()]
+        if not paths:
+            return
+        step = max(1, len(paths) // 3)
+        for slot, path in enumerate(paths[::step][:3]):
+            reader = QImageReader(str(path))
+            reader.setAutoTransform(True)
+            size = reader.size()
+            if size.isValid() and max(size.width(), size.height()) > 220:
+                scale = 220 / max(size.width(), size.height())
+                reader.setScaledSize(QSize(
+                    max(1, int(size.width() * scale)),
+                    max(1, int(size.height() * scale))))
+            image = reader.read()
+            if not image.isNull():
+                self.strip.set_frame(slot, QPixmap.fromImage(image))
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.chosen.emit(self.index)
+        super().mousePressEvent(event)
 
 
 class ExampleTile(QFrame):
@@ -156,11 +249,24 @@ class StylePanel(QWidget):
         lead.setFont(theme.body(10))
         layout.addWidget(lead)
 
-        self.profiles = QListWidget()
-        self.profiles.setObjectName("treatmentList")
-        self.profiles.setFixedHeight(PROFILE_ROW + 10)
-        self.profiles.currentRowChanged.connect(self._chose)
-        layout.addWidget(self.profiles)
+        # A photographer knows a body of work by its pictures, so the
+        # profiles are shown as their pictures rather than as a line of
+        # text about them.
+        self.profiles_scroll = QScrollArea()
+        self.profiles_scroll.setWidgetResizable(True)
+        self.profiles_scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.profiles_scroll.setFixedHeight(196)
+        self.profiles_scroll.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        profiles_holder = QWidget()
+        profiles_holder.setObjectName("page")
+        self.profiles_row = QHBoxLayout(profiles_holder)
+        self.profiles_row.setContentsMargins(0, 2, 0, 2)
+        self.profiles_row.setSpacing(12)
+        self.profiles_scroll.setWidget(profiles_holder)
+        layout.addWidget(self.profiles_scroll)
+        self.cards: list[ProfileCard] = []
+        self.current_profile = -1
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -375,37 +481,26 @@ class StylePanel(QWidget):
         state = self.store.public()
         self.available = state["available"]
         selected = state["selected"]
-        self.profiles.blockSignals(True)
-        self.profiles.clear()
-        for item in self.available:
-            mark = "✓" if item["path"] == selected else " "
-            confidence = (
-                f"   ·   {item['confidence']:.0%} confident"
-                if item.get("confidence") is not None else "")
-            group = str(item.get("group") or "")
-            source = (
-                f"   ·   from {group}"
-                if group and group != item["name"] else "")
-            entry = QListWidgetItem(
-                f" {mark}  {item['name']}   ·   {item['examples']} "
-                f"photograph{'' if item['examples'] == 1 else 's'}"
-                f"{source}{confidence}")
-            entry.setData(Qt.ItemDataRole.UserRole, item["path"])
-            entry.setToolTip(
-                f"{item.get('model_name') or item['name']}\n"
-                f"{short_path(item['path'])}\n"
-                "Click to see the photographs it was read from.")
-            entry.setSizeHint(QSize(0, PROFILE_ROW))
-            self.profiles.addItem(entry)
-        self.profiles.blockSignals(False)
-        self.profiles.setFixedHeight(
-            max(self.profiles.count(), 1) * PROFILE_ROW + 10)
+        while self.profiles_row.count():
+            item = self.profiles_row.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
+        self.cards = []
+        for index, item in enumerate(self.available):
+            card = ProfileCard(index, item, item["path"] == selected)
+            card.chosen.connect(self.show_profile)
+            card.used.connect(self.use_profile)
+            self.profiles_row.addWidget(card)
+            self.cards.append(card)
+        self.profiles_row.addStretch(1)
+        self.profiles_scroll.setVisible(bool(self.cards))
+        QTimer.singleShot(0, self._paint_next_card)
         if selected:
             for row, item in enumerate(self.available):
                 if item["path"] == selected:
-                    self.profiles.blockSignals(True)
-                    self.profiles.setCurrentRow(row)
-                    self.profiles.blockSignals(False)
+                    self.current_profile = row
                     break
         self.forget_button.setEnabled(bool(selected))
         self._show(state["profile"], selected)
@@ -453,6 +548,33 @@ class StylePanel(QWidget):
             self.body.addWidget(body)
         self.body.addStretch(1)
 
+    def _paint_next_card(self) -> None:
+        for card in self.cards:
+            if not getattr(card, "_painted", False):
+                card._painted = True
+                card.paint_samples()
+                QTimer.singleShot(0, self._paint_next_card)
+                return
+
+    def show_profile(self, row: int) -> None:
+        """Read how a profile was extracted, without putting it to use."""
+        if not (0 <= row < len(self.available)):
+            return
+        self.current_profile = row
+        item = self.available[row]
+        self.show_group(row)
+        try:
+            summary = profile_summary(read_profile(Path(item["path"])))
+        except StyleProfileError as exc:
+            self._report(str(exc), "alarm")
+            return
+        summary["name"] = item["name"]
+        self._show(summary, item["path"])
+
+    def use_profile(self, row: int) -> None:
+        """Put a profile to use, which is a separate act from reading it."""
+        self._chose(row)
+
     def show_group(self, row: int) -> None:
         """The photographs an existing profile was read from."""
         if not (0 <= row < len(self.available)):
@@ -475,9 +597,9 @@ class StylePanel(QWidget):
         self.build_button.setEnabled(bool(self.examples))
 
     def _chose(self, row: int) -> None:
-        self.show_group(row)
         if not (0 <= row < len(self.available)):
             return
+        self.show_group(row)
         try:
             self.store.select(self.available[row]["path"])
         except StyleProfileError as exc:
@@ -490,7 +612,7 @@ class StylePanel(QWidget):
 
     def rename(self) -> None:
         """Name the highlighted profile, so several can be told apart."""
-        row = self.profiles.currentRow()
+        row = self.current_profile
         if not (0 <= row < len(self.available)):
             self._report("Choose a profile to name first.", "alarm")
             return

@@ -254,6 +254,30 @@ class StyleDialogTests(unittest.TestCase):
         ):
             dialog.add_examples()
 
+    def test_profiles_are_shown_as_their_photographs(self):
+        from PySide6.QtWidgets import QLabel
+
+        dialog = self.dialog()
+        write_profile(self.results / "personal-style-1.json")
+        dialog.refresh()
+        self.assertEqual(len(dialog.cards), 1)
+        card = dialog.cards[0]
+        self.assertIn("photograph", card.findChildren(QLabel)[-1].text())
+
+    def test_reading_a_profile_is_not_putting_it_to_use(self):
+        dialog = self.dialog()
+        write_profile(self.results / "personal-style-1.json")
+        dialog.refresh()
+
+        dialog.show_profile(0)
+
+        # Its details and its photographs are shown, and nothing has
+        # been adopted by the act of looking.
+        self.assertIn("PHOTOGRAPHS BEHIND", dialog.examples_title.text())
+        self.assertEqual(self.store.selected(), "")
+        dialog.use_profile(0)
+        self.assertTrue(self.store.selected())
+
     def test_a_profile_is_named_for_the_folder_it_was_read_from(self):
         from opencull_gui.style import StyleProfileStore
 
