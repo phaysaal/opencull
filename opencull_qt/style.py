@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QFont, QImageReader, QPixmap
 from PySide6.QtWidgets import (
     QDialog,
@@ -55,6 +55,9 @@ class ProfileCard(QFrame):
     retire_wanted = Signal(int)
 
     WIDTH = 236
+    # Uniform, so a shelf of profiles reads as a shelf and the rows can
+    # be measured rather than guessed at.
+    HEIGHT = 204
 
     def __init__(self, index: int, item: dict, in_use: bool,
                  parent: QWidget | None = None):
@@ -62,7 +65,7 @@ class ProfileCard(QFrame):
         self.index = index
         self.item = item
         self.setObjectName("card")
-        self.setFixedWidth(self.WIDTH)
+        self.setFixedSize(self.WIDTH, self.HEIGHT)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setProperty("kept", "true" if in_use else "false")
         self.setToolTip(
@@ -271,15 +274,18 @@ class StylePanel(QWidget):
         self.profiles_scroll = QScrollArea()
         self.profiles_scroll.setWidgetResizable(True)
         self.profiles_scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.profiles_scroll.setFixedHeight(196)
-        self.profiles_scroll.setVerticalScrollBarPolicy(
+        # The shelf wraps rather than running off the edge: a profile
+        # hidden past the right margin is a profile nobody remembers
+        # they have.
+        self.profiles_scroll.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         profiles_holder = QWidget()
         profiles_holder.setObjectName("page")
-        self.profiles_row = QHBoxLayout(profiles_holder)
+        self.profiles_row = QGridLayout(profiles_holder)
         self.profiles_row.setContentsMargins(0, 2, 0, 2)
         self.profiles_row.setSpacing(12)
         self.profiles_scroll.setWidget(profiles_holder)
+        self.profiles_scroll.viewport().installEventFilter(self)
         layout.addWidget(self.profiles_scroll)
         self.cards: list[ProfileCard] = []
         self.current_profile = -1
@@ -558,9 +564,9 @@ class StylePanel(QWidget):
             card.chosen.connect(self.show_profile)
             card.rename_wanted.connect(self.rename)
             card.retire_wanted.connect(self.retire)
-            self.profiles_row.addWidget(card)
             self.cards.append(card)
-        self.profiles_row.addStretch(1)
+        self._shelf_columns = 0
+        self._deal_shelf()
         self.profiles_scroll.setVisible(bool(self.cards))
         QTimer.singleShot(0, self._paint_next_card)
         if selected:
@@ -620,6 +626,41 @@ class StylePanel(QWidget):
             body.setFont(theme.body(9))
             self.body.addWidget(body)
         self.body.addStretch(1)
+
+    def _deal_shelf(self) -> None:
+        """Lay the profiles into as many rows as the width needs."""
+        if not self.cards:
+            return
+        spacing = self.profiles_row.spacing()
+        available = self.profiles_scroll.viewport().width()
+        columns = max(1, (available + spacing) // (ProfileCard.WIDTH + spacing))
+        columns = int(min(columns, len(self.cards)))
+        if columns == self._shelf_columns:
+            return
+        self._shelf_columns = columns
+        while self.profiles_row.count():
+            self.profiles_row.takeAt(0)
+        for column in range(self.profiles_row.columnCount() + 1):
+            self.profiles_row.setColumnStretch(column, 0)
+        for index, card in enumerate(self.cards):
+            self.profiles_row.addWidget(
+                card, index // columns, index % columns)
+        self.profiles_row.setColumnStretch(columns, 1)
+        rows = -(-len(self.cards) // columns)
+        # Cards are one size, so the shelf's height is arithmetic. Two
+        # rows at most before it scrolls: past that the page is more
+        # shelf than work.
+        def height(count: int) -> int:
+            return count * ProfileCard.HEIGHT + (count - 1) * spacing + 10
+
+        self.profiles_scroll.setFixedHeight(
+            min(height(rows), height(2)))
+
+    def eventFilter(self, watched, event):  # noqa: N802 - Qt naming
+        if (event.type() == QEvent.Type.Resize
+                and watched is self.profiles_scroll.viewport()):
+            self._deal_shelf()
+        return super().eventFilter(watched, event)
 
     def _hide_unread(self) -> None:
         for widget in (self.unread_note, self.retry_button,

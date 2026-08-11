@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 try:
+    from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QApplication
 except ImportError:  # pragma: no cover - exercised only without PySide6
     QApplication = None
@@ -374,6 +375,38 @@ class StyleDialogTests(unittest.TestCase):
         self.assertIn("stay recorded as unread", dialog.status.text())
         # The profile still says what it could not read.
         self.assertEqual(len(dialog.available[0]["unread"]), 1)
+
+    def test_the_shelf_wraps_instead_of_running_off_the_edge(self):
+        from opencull_qt.style import ProfileCard
+
+        dialog = self.dialog()
+        for index in range(6):
+            write_profile(self.results / f"personal-style-{index}.json")
+        dialog.refresh()
+        dialog.show()
+        self.addCleanup(dialog.hide)
+
+        def columns_at(width: int) -> int:
+            dialog.resize(width, 800)
+            QApplication.processEvents()
+            dialog._shelf_columns = 0
+            dialog._deal_shelf()
+            return dialog._shelf_columns
+
+        wide = columns_at(4 * (ProfileCard.WIDTH + 12) + 80)
+        narrow = columns_at(2 * (ProfileCard.WIDTH + 12) + 80)
+
+        # Never all six in a line, and narrower means fewer across --
+        # wrapped into rows rather than scrolled sideways.
+        self.assertLess(wide, 6)
+        self.assertLess(narrow, wide)
+        self.assertEqual(
+            dialog.profiles_scroll.horizontalScrollBarPolicy(),
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        rows = {
+            dialog.profiles_row.getItemPosition(index)[0]
+            for index in range(dialog.profiles_row.count())}
+        self.assertGreater(len(rows), 1)
 
     def test_each_profile_carries_its_own_rename_and_remove(self):
         from PySide6.QtWidgets import QPushButton
