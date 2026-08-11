@@ -363,9 +363,10 @@ class StyleDialogTests(unittest.TestCase):
         # offers to refine rather than to start again.
         self.assertIn("PHOTOGRAPHS BEHIND", dialog.examples_title.text())
         self.assertEqual(dialog.build_button.text(), "Refine this profile")
-        # Adding photographs of your own leaves that mode behind.
+        # Photographs added while it is open refine that profile, and
+        # the button says what it will read.
         self.stage(dialog, [self.root / "a.jpg"])
-        self.assertEqual(dialog.build_button.text(), "Extract profile")
+        self.assertIn("Refine with 1", dialog.build_button.text())
 
     def test_chosen_photographs_are_staged_and_shown_before_any_run(self):
         dialog = self.dialog()
@@ -390,30 +391,46 @@ class StyleDialogTests(unittest.TestCase):
         self.assertEqual(arguments[1]["mode"], "replace")
         self.assertEqual(arguments[1]["existing"], "")
 
-    def test_a_second_profile_asks_whether_to_refine_or_start_again(self):
-        from unittest import mock
-
+    def test_a_second_profile_stands_beside_the_first(self):
+        """A photographer has more than one taste; profiles do not replace."""
         write_profile(self.results / "personal-style-1.json")
         self.store.select(self.results / "personal-style-1.json")
         dialog = self.dialog()
+        dialog.refresh()
+
         self.stage(dialog, [self.root / "a.jpg"])
-        with mock.patch.object(dialog, "_ask_mode", return_value="update"):
-            dialog.build()
+        dialog.build()
+
         arguments = self.jobs.add_style_profile.call_args
+        # Nothing is asked, nothing is refined, nothing is overwritten:
+        # a new profile is read from the new photographs alone.
+        self.assertEqual(arguments[1]["mode"], "replace")
+        self.assertEqual(arguments[1]["existing"], "")
+        self.assertNotEqual(
+            arguments[1]["output"], str(self.results / "personal-style-1.json"))
+        self.assertIn("beside the ones you already have",
+                      dialog.status.text())
+
+    def test_refining_reads_only_the_photographs_newly_added(self):
+        write_profile(self.results / "personal-style-1.json")
+        dialog = self.dialog()
+        dialog.refresh()
+        dialog.show_profile(0)
+
+        # With nothing new, there is nothing to refine with.
+        dialog.build()
+        self.jobs.add_style_profile.assert_not_called()
+        self.assertIn("Add the photographs", dialog.status.text())
+
+        self.stage(dialog, [self.root / "a.jpg"])
+        self.assertIn("Refine with 1", dialog.build_button.text())
+        dialog.build()
+
+        arguments = self.jobs.add_style_profile.call_args
+        self.assertEqual(arguments[0][0], [str(self.root / "a.jpg")])
         self.assertEqual(arguments[1]["mode"], "update")
         self.assertEqual(
-            arguments[1]["existing"], self.store.selected())
-
-    def test_cancelling_that_question_builds_nothing(self):
-        from unittest import mock
-
-        write_profile(self.results / "personal-style-1.json")
-        self.store.select(self.results / "personal-style-1.json")
-        dialog = self.dialog()
-        self.stage(dialog, [self.root / "a.jpg"])
-        with mock.patch.object(dialog, "_ask_mode", return_value="cancel"):
-            dialog.build()
-        self.jobs.add_style_profile.assert_not_called()
+            arguments[1]["existing"], str(self.results / "personal-style-1.json"))
 
     def test_more_photographs_than_are_read_is_said_when_added(self):
         from opencull_qt.style import EXAMPLE_LIMIT

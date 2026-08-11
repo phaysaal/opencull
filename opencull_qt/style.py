@@ -20,7 +20,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QInputDialog,
     QLabel,
-    QMessageBox,
     QProgressBar,
     QPushButton,
     QScrollArea,
@@ -193,7 +192,7 @@ class ExampleTile(QFrame):
 
     def set_state(self, state: str) -> None:
         """Waiting, being read now, or already read."""
-        marks = {"reading": "reading…", "read": "read ✓"}
+        marks = {"reading": "reading…", "read": "read ✓", "new": "new"}
         self.badge.setText(marks.get(state, ""))
         self.badge.setVisible(bool(marks.get(state)))
         if marks.get(state):
@@ -201,7 +200,8 @@ class ExampleTile(QFrame):
             self.badge.move(
                 5 + self.SIZE - self.badge.width() - 4, 9)
             self.badge.raise_()
-        self.setProperty("kept", "true" if state == "read" else "false")
+        self.setProperty(
+            "kept", "true" if state in {"read", "new"} else "false")
         self.style().unpolish(self)
         self.style().polish(self)
 
@@ -650,7 +650,10 @@ class StylePanel(QWidget):
             + ". Add more to refine it, or Clear to start a set of your "
             "own.")
         self.build_button.setText("Refine this profile")
-        self.build_button.setEnabled(bool(self.examples))
+        self.build_button.setEnabled(False)
+        self.build_button.setToolTip(
+            "Add photographs to refine this profile. Its own are already "
+            "in it, so only the new ones are read.")
 
     def _chose(self, row: int) -> None:
         if not (0 <= row < len(self.available)):
@@ -711,11 +714,12 @@ class StylePanel(QWidget):
             "Photographs (*.jpg *.jpeg *.png *.tif *.tiff)")
         if not chosen:
             return
-        if self.viewing:
-            # Adding photographs is the start of a set of one's own, not
-            # a change to the profile being read.
-            self.hide_profile()
         known = {str(path) for path in self.staged}
+        if self.viewing:
+            # Photographs added while a profile is open refine that
+            # profile; its own are already in it, so only the new ones
+            # are read.
+            known |= {str(path) for path in self.examples}
         added = 0
         capped = False
         for value in chosen:
@@ -728,8 +732,12 @@ class StylePanel(QWidget):
             self.staged.append(path)
             known.add(str(path))
             added += 1
-        self.examples = list(self.staged)
-        self.build_button.setText("Extract profile")
+        if self.viewing:
+            self.examples = self.examples + [
+                path for path in self.staged if path not in self.examples]
+        else:
+            self.examples = list(self.staged)
+            self.build_button.setText("Extract profile")
         if capped:
             # Said where the cap bites, rather than after a run has
             # quietly read a subset of what was chosen.
@@ -773,6 +781,18 @@ class StylePanel(QWidget):
         if starting:
             self._paint_thumbnails = []
             return
+        if self.viewing:
+            fresh = len(self.staged)
+            self.build_button.setEnabled(bool(fresh))
+            self.build_button.setText(
+                f"Refine with {fresh} new photograph"
+                f"{'' if fresh == 1 else 's'}" if fresh
+                else "Refine this profile")
+            for path in self.staged:
+                tile = self.tiles.get(str(path))
+                if tile is not None:
+                    tile.set_state("new")
+            return
         self.examples_title.setText("PHOTOGRAPHS TO READ")
         passes = -(-count // 8)
         self.examples_hint.setText(
@@ -812,55 +832,42 @@ class StylePanel(QWidget):
                 "Configure a model provider first: reading a style means "
                 "showing the photographs to a vision model.", "alarm")
             return
-        chosen = [str(path) for path in self.examples]
-        if not chosen:
-            self._report(
-                "Add some finished photographs first.", "alarm")
-            return
-        dropped = ""
-        existing = self.store.selected()
-        mode = "replace"
-        if existing:
-            answer = self._ask_mode(len(chosen))
-            if answer == "cancel":
+        # Which act this is was settled by which button was pressed, so
+        # nothing needs asking. A photographer has more than one taste,
+        # and each profile stands on its own: refining one never
+        # disturbs another, and starting one never replaces anything.
+        if self.viewing:
+            chosen = [str(path) for path in self.staged]
+            if not chosen:
+                self._report(
+                    "Add the photographs that should refine this profile. "
+                    "Its own are already in it.", "alarm")
                 return
-            mode = answer
+            existing, mode = self.viewing, "update"
+        else:
+            chosen = [str(path) for path in self.staged]
+            if not chosen:
+                self._report(
+                    "Add some finished photographs first.", "alarm")
+                return
+            existing, mode = "", "replace"
+        dropped = ""
         try:
             self.jobs.add_style_profile(
                 chosen, output=str(self.store.suggested_output(_stamp())),
-                existing=existing if mode == "update" else "",
-                mode=mode, provider_profile_id=provider,
+                existing=existing, mode=mode, provider_profile_id=provider,
                 limit=EXAMPLE_LIMIT)
         except Exception as exc:
             self._report(str(exc), "alarm")
             return
+        many = f"{len(chosen)} photograph{'' if len(chosen) == 1 else 's'}"
         self._report(
-            f"Reading your style from {len(chosen)} "
-            f"photograph{'' if len(chosen) == 1 else 's'}.{dropped} It "
-            "appears here when it finishes; choose it then to put it to use.",
+            (f"Refining that profile with {many}. The refined profile "
+             "appears here when it finishes; the one it came from is kept."
+             if mode == "update" else
+             f"Reading a new profile from {many}.{dropped} It appears here "
+             "when it finishes, beside the ones you already have."),
             "ok")
-
-    def _ask_mode(self, count: int) -> str:
-        box = QMessageBox(self)
-        box.setWindowTitle("Refine or start again?")
-        box.setIcon(QMessageBox.Icon.Question)
-        box.setText("You already have a style profile in use.")
-        box.setInformativeText(
-            f"These {count} photograph{'' if count == 1 else 's'} can refine "
-            "what Darkimiya already knows about how you edit, or describe "
-            "your style from scratch.\n\n"
-            "Either way the existing profile stays on disk and can be chosen "
-            "again.")
-        refine = box.addButton("Refine the current one", QMessageBox.ButtonRole.AcceptRole)
-        box.addButton("Start again", QMessageBox.ButtonRole.DestructiveRole)
-        cancel = box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
-        box.setDefaultButton(refine)
-        box.exec()
-        clicked = box.clickedButton()
-        if clicked is cancel:
-            return "cancel"
-        return "update" if clicked is refine else "replace"
-
 
 def _stamp() -> str:
     from datetime import datetime
