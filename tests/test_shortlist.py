@@ -54,6 +54,45 @@ def report_payload():
 
 
 class AssetFamilyTests(unittest.TestCase):
+    def test_a_contradicted_verdict_does_not_rule_the_order(self):
+        """A strong frame scored 5 must not outrank an ordinary one at 70."""
+        from opencull_gui.shortlist import settled_order
+
+        entries = (
+            [{"photo": f"P{n}.JPG", "tier": "promising", "score": 60 - n}
+             for n in range(6)]
+            + [{"photo": f"O{n}.JPG", "tier": "ordinary", "score": 45 - n}
+               for n in range(6)]
+            + [{"photo": "ODD-HIGH.JPG", "tier": "strong", "score": 5},
+               {"photo": "ODD-LOW.JPG", "tier": "ordinary", "score": 70}]
+        )
+        order = settled_order(entries)
+        self.assertGreater(order.index("ODD-HIGH.JPG"), 3)
+        self.assertLess(
+            order.index("ODD-LOW.JPG"), order.index("ODD-HIGH.JPG"))
+
+    def test_agreeing_readings_leave_the_verdict_in_charge(self):
+        from opencull_gui.shortlist import settled_order
+
+        entries = [
+            {"photo": "S.JPG", "tier": "strong", "score": 80},
+            {"photo": "P.JPG", "tier": "promising", "score": 60},
+            {"photo": "O.JPG", "tier": "ordinary", "score": 40},
+            {"photo": "R.JPG", "tier": "reject", "score": 20},
+        ]
+        self.assertEqual(
+            settled_order(entries), ["S.JPG", "P.JPG", "O.JPG", "R.JPG"])
+
+    def test_your_own_rating_settles_the_order(self):
+        from opencull_gui.shortlist import settled_order
+
+        entries = [
+            {"photo": "A.JPG", "tier": "reject", "score": 30},
+            {"photo": "B.JPG", "tier": "promising", "score": 55},
+        ]
+        self.assertEqual(
+            settled_order(entries, {"A.JPG": "exceptional"})[0], "A.JPG")
+
     def test_each_bar_keeps_its_own_checkpoint(self):
         from opencull_gui.shortlist import bar_checkpoint_path
 

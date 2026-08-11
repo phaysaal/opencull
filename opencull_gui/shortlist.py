@@ -96,6 +96,52 @@ def score_disagreements(entries) -> dict[str, str]:
     return flagged
 
 
+def settled_order(entries, tiers=None) -> list[str]:
+    """The order to show frames in, given two readings of each.
+
+    Where a frame's verdict and its score agree, the verdict leads and
+    the score breaks ties inside a tier: the named tier is the steadier
+    reading, and the number is the finer one.
+
+    Where they contradict each other -- the flagged frames, a strong
+    verdict on a middling number or the reverse -- neither reading has
+    earned the right to place the frame alone. Such a frame sits between
+    what its two readings claim, which is the honest position for a
+    frame nobody is sure about, and it carries its flag so the doubt is
+    visible rather than implied.
+    """
+    tiers = tiers or {}
+    rows = []
+    for entry in entries:
+        photo = str(entry.get("photo", ""))
+        if not photo:
+            continue
+        tier = tiers.get(photo) or entry.get("tier")
+        try:
+            score = float(entry.get("score", 0))
+        except (TypeError, ValueError):
+            score = 0.0
+        rows.append((photo, tier_rank(tier), score))
+    if not rows:
+        return []
+    natural = {photo: index for index, (photo, _r, _s) in enumerate(rows)}
+    by_verdict = sorted(
+        rows, key=lambda r: (-r[1], -r[2], natural[r[0]]))
+    by_score = sorted(
+        rows, key=lambda r: (-r[2], -r[1], natural[r[0]]))
+    verdict_place = {row[0]: i for i, row in enumerate(by_verdict)}
+    score_place = {row[0]: i for i, row in enumerate(by_score)}
+    disputed = set(score_disagreements(entries))
+
+    def place(photo: str) -> tuple[float, int]:
+        verdict = verdict_place[photo]
+        if photo in disputed:
+            return ((verdict + score_place[photo]) / 2, natural[photo])
+        return (float(verdict), natural[photo])
+
+    return sorted((row[0] for row in rows), key=place)
+
+
 def tier_stars(tier) -> str:
     """A tier as stars, or nothing for a tier that is not one."""
     filled = TIER_STARS.get(str(tier or "").strip().lower(), 0)

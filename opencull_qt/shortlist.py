@@ -37,7 +37,7 @@ from opencull_gui.shortlist import (
     ASSESSMENT_FIELDS,
     rated_by_hand,
     score_disagreements,
-    tier_rank,
+    settled_order,
     tier_stars,
 )
 from opencull_gui.shortlist_reviews import ShortlistReviewError
@@ -438,23 +438,15 @@ class ShortlistPage(QWidget):
                 if getattr(self, "sort_by", None) is not None else "rating")
         if mode == "time":
             return by_time
-        order = {
-            str(entry["photo"]): index
-            for index, entry in enumerate(by_time)}
-
-        def key(entry: dict) -> tuple[int, float, int]:
-            photo = str(entry["photo"])
-            tier = self._effective_tier(photo, entry)
-            try:
-                score = float(entry.get("score", 0))
-            except (TypeError, ValueError):
-                score = 0.0
-            # The verdict decides; the score only breaks ties inside a
-            # tier, where it is the finer of the two readings. Frames
-            # that agree on both stay in shooting order.
-            return (-tier_rank(tier), -score, order[photo])
-
-        return sorted(by_time, key=key)
+        # The verdict leads and the score breaks its ties, except where
+        # the two contradict each other -- there the frame sits between
+        # what they each claim rather than obeying one of them.
+        tiers = {str(entry["photo"]): self._effective_tier(
+            str(entry["photo"]), entry) for entry in by_time}
+        placed = settled_order(by_time, tiers)
+        index = {photo: rank for rank, photo in enumerate(placed)}
+        return sorted(
+            by_time, key=lambda entry: index.get(str(entry["photo"]), 0))
 
     def _fill_entries(self) -> None:
         state = self._state()
