@@ -54,6 +54,62 @@ def report_payload():
 
 
 class AssetFamilyTests(unittest.TestCase):
+    def test_ratings_waiting_in_a_checkpoint_are_findable(self):
+        import json as json_module
+
+        from opencull_gui.shortlist import unfinished_assessments
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output = root / "Shoot.professional-shortlist.json"
+            (root / f"{output.name}.abcd1234.checkpoint.json").write_text(
+                json_module.dumps({
+                    "assessments": [{"photo": "A.JPG"}, {"photo": "B.JPG"}],
+                    "signature": {"profile": "gentle bar -- family",
+                                  "candidate_count": 9}}))
+            (root / f"{output.name}.99999999.checkpoint.json").write_text(
+                json_module.dumps({"assessments": [], "signature": {}}))
+
+            waiting = unfinished_assessments(output)
+
+            self.assertEqual(len(waiting), 1)
+            self.assertEqual(waiting[0]["rated"], 2)
+            self.assertEqual(waiting[0]["total"], 9)
+            self.assertIn("gentle", waiting[0]["bar"])
+
+    def test_the_report_ranks_by_the_same_settled_order(self):
+        """A shortlist must not present a 50 above a 74 as a ranking."""
+        import json as json_module
+
+        from shortlist_kernel import build_professional_shortlist
+
+        candidates = [
+            {"photo": f"F{n}.JPG", "cluster_id": f"group-{n:04d}",
+             "raw_files": []} for n in range(12)
+        ]
+        bundle = json_module.dumps({
+            "signature": "sig", "photos_root": "/x",
+            "candidate_policy": "effective", "candidates": candidates,
+            "source_report_sha256": "0" * 64, "review_revision": 0,
+            "review_sha256": "", "minimum_dimension": 640})
+        tiers = ["promising"] * 11 + ["strong"]
+        scores = [70 - n for n in range(11)] + [5]
+        assessments = [
+            json_module.dumps({
+                "photo": c["photo"], "cluster_id": c["cluster_id"],
+                "tier": tier, "score": score, "confidence": 0.8,
+                "rationale": "a visible reason",
+                "raw_files": [], "local_warnings": [], "asset_warning": "",
+                **dict.fromkeys(ASSESSMENT_FIELDS, "reading")})
+            for c, tier, score in zip(candidates, tiers, scores)
+        ]
+        report = json_module.loads(build_professional_shortlist(
+            bundle, assessments, [], "strict bar"))
+        first = report["entries"][0]
+        # The strong frame scored 5 does not lead a field of 70s.
+        self.assertNotEqual(first["photo"], "F11.JPG")
+        self.assertGreaterEqual(float(first["score"]), 60)
+
     def test_a_contradicted_verdict_does_not_rule_the_order(self):
         """A strong frame scored 5 must not outrank an ordinary one at 70."""
         from opencull_gui.shortlist import settled_order

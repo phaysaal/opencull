@@ -42,7 +42,11 @@ from opencull_gui.reviews import (
     default_review_path,
     narrow_selection,
 )
-from opencull_gui.shortlist import tier_stars, write_manual_shortlist
+from opencull_gui.shortlist import (
+    tier_stars,
+    unfinished_assessments,
+    write_manual_shortlist,
+)
 from opencull_gui.style import StyleProfileStore
 from scan import classify_folder
 
@@ -1348,6 +1352,10 @@ class Launcher(QMainWindow):
             culled = bench.culled()
             frames = bench.selection()
             count = len(frames)
+            # A run can rate every frame and still fail to certify. Say
+            # what is waiting rather than inviting a second purchase of
+            # work already paid for.
+            waiting = unfinished_assessments(bench.shortlist_path)
             sheet = ContactSheet(frames, self._loader, selectable=True)
             invitation = Invitation(
                 "This folder has not been assessed",
@@ -1358,7 +1366,13 @@ class Launcher(QMainWindow):
                 f"Assess these {count}" if culled else
                 f"Assess all {count} frames",
                 lambda: self.assess_project(bench.project, sheet.chosen()),
-                (f"These are the {count} frames the cull kept. Each ticked "
+                ((" ".join(
+                    f"A previous run under the {item['bar'].split('(')[0].strip()}"
+                    f" rated {item['rated']} of these frames; that work is "
+                    "kept, and choosing the same bar again continues from "
+                    "it rather than paying twice."
+                    for item in waiting[:1]) + " ") if waiting else "")
+                + (f"These are the {count} frames the cull kept. Each ticked "
                  "frame is read by a model, so this costs." if culled else
                  "This folder has not been culled, so the selection is every "
                  f"frame in it -- about {count} model calls rather than one "

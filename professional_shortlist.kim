@@ -107,4 +107,9 @@ else:
         act file.overwrite(checkpoint_file, final_checkpoint)
         commit(shortlist)
     else:
+        -- An abstention that keeps its evidence secret costs an
+        -- afternoon of guessing; the cull learned this the hard way.
+        refusal := professional_abstention_record(evidence, profile)
+        check len(refusal) > 0
+        act file.overwrite(output + ".abstained.txt", refusal)
         abstain

@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from opencull_gui.assets import index_asset_families
-from opencull_gui.shortlist import bar_checkpoint_path
+from opencull_gui.shortlist import bar_checkpoint_path, settled_order
 from scan import (  # noqa: F401
     BITMAP_EXTENSIONS,
     RAW_EXTENSIONS,
@@ -561,17 +561,28 @@ def build_professional_shortlist(
                 }
         for position, name in enumerate(calibration.get("ranking", [])):
             batch_rank[name] = (batch_number, position)
-    tier_order = {tier: number for number, tier in enumerate(TIERS)}
-    ordered = sorted(
+    # Settle the order the same way the interface does: the verdict
+    # leads and the score breaks its ties, except where the two
+    # contradict each other, and there the frame sits between what they
+    # each claim. A report that ranked strictly by tier could put a
+    # frame scored 50 above one scored 74 and present that as a
+    # ranking -- which is neither honest nor, as a live panel showed,
+    # certifiable.
+    settled = sorted(
         assessment_by_photo.values(),
         key=lambda item: (
-            tier_order.get(tier_by_photo.get(
-                item["photo"], item.get("tier")), 99),
-            -float(item.get("score", 0)),
             batch_rank.get(item["photo"], (999999, 999999)),
             item["photo"].casefold(),
         ),
     )
+    placement = {
+        photo: index for index, photo in enumerate(settled_order(
+            settled,
+            {item["photo"]: tier_by_photo.get(
+                item["photo"], item.get("tier")) for item in settled}))
+    }
+    ordered = sorted(
+        settled, key=lambda item: placement.get(item["photo"], 0))
     entries = []
     for rank, assessment in enumerate(ordered, start=1):
         photo = assessment["photo"]
@@ -685,6 +696,17 @@ def professional_report_evidence(report: str) -> str:
     }
     return "DETERMINISTIC PROFESSIONAL-SHORTLIST PROJECTION:\n" + json.dumps(
         projection, indent=2, sort_keys=True)
+
+
+def professional_abstention_record(evidence: str, profile: str = "") -> str:
+    """What the panel refused, exactly as it saw it."""
+    return (
+        "THE PANEL DECLINED TO CERTIFY THIS SHORTLIST.\n\n"
+        "CLAIM PUT TO THE PANEL:\n"
+        + professional_report_policy(profile)
+        + "\n\nEVIDENCE AS THE PANEL SAW IT (first 6000 characters are "
+        "what a judge reads):\n" + str(evidence)
+    )
 
 
 def professional_report_policy(profile: str = "") -> str:

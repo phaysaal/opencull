@@ -96,6 +96,36 @@ def score_disagreements(entries) -> dict[str, str]:
     return flagged
 
 
+def unfinished_assessments(output) -> list[dict]:
+    """Ratings already bought for a shortlist that was never written.
+
+    A run can rate every frame and still fail to certify, leaving the
+    work in its checkpoint and no artifact beside it. The phase would
+    then invite a fresh purchase of what has already been paid for, so
+    it needs to know what is waiting, and under which bar.
+    """
+    import json as _json
+
+    output = Path(str(output))
+    found = []
+    for path in sorted(output.parent.glob(f"{output.name}*checkpoint.json")):
+        try:
+            data = _json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        rated = len(data.get("assessments") or [])
+        if not rated:
+            continue
+        signature = data.get("signature") or {}
+        found.append({
+            "path": str(path),
+            "bar": str(signature.get("profile") or ""),
+            "rated": rated,
+            "total": int(signature.get("candidate_count") or 0),
+        })
+    return found
+
+
 def settled_order(entries, tiers=None) -> list[str]:
     """The order to show frames in, given two readings of each.
 
