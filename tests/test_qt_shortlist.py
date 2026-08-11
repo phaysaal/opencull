@@ -111,6 +111,15 @@ class ShortlistPageTests(unittest.TestCase):
         page.keyPressEvent(QKeyEvent(
             QKeyEvent.Type.KeyPress, key, Qt.KeyboardModifier.NoModifier))
 
+    def test_an_unmarked_shoot_is_not_announced_as_a_failure(self):
+        """Nothing marked yet is a fresh assessment, not an empty one."""
+        page = self.page()
+        heading = page.overview_heading.text()
+        self.assertIn("3 frames assessed", heading)
+        self.assertNotIn("0", heading)
+        # The shape of the assessment is the news at that moment.
+        self.assertIn("exceptional", page.overview_tally.text())
+
     def test_the_page_lands_on_a_grid_of_every_frame(self):
         page = self.page()
         self.assertEqual(page.views.currentIndex(), 0)
@@ -137,7 +146,7 @@ class ShortlistPageTests(unittest.TestCase):
         page.show_overview()
         self.assertEqual(
             page.sheet.tiles["A.JPG"].property("kept"), "true")
-        self.assertIn("1 worth developing", page.overview_heading.text())
+        self.assertIn("1 marked for developing", page.overview_heading.text())
 
     def test_a_tiles_eye_opens_that_frames_reasoning(self):
         from unittest import mock

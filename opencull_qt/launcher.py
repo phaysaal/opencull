@@ -276,13 +276,14 @@ class CullProgress(QWidget):
             if old is not None:
                 slot.removeWidget(old)
                 old.deleteLater()
-        self.kept_title.setText(
-            f"Kept so far · {len(keepers)}" if keepers
-            else "Kept so far · none yet")
+        # A section with nothing in it is not worth a heading; the run
+        # is young, not empty.
+        self.kept_title.setVisible(bool(keepers))
+        self.kept_title.setText(f"Keepers so far · {len(keepers)}")
         show_waiting = bool(waiting)
         self.waiting_title.setVisible(show_waiting)
         self.waiting_title.setText(
-            f"Awaiting a decision · {len(waiting)}")
+            f"Still to decide · {len(waiting)}")
         self.kept_sheet = ContactSheet(keepers, self.loader)
         self._kept_slot.addWidget(self.kept_sheet)
         self.waiting_sheet = None
@@ -496,14 +497,14 @@ class AssessProgress(QWidget):
         tiers = ", ".join(
             f"{count} {tier}" for tier, count in sorted(
                 tally.items(), key=lambda pair: -pair[1]))
+        self.rated_title.setVisible(bool(rated))
         self.rated_title.setText(
-            f"Assessed so far · {len(rated)}"
-            + (f" — {tiers}" if tiers else "")
-            if rated else "Assessed so far · none yet")
+            f"Rated so far · {len(rated)}" + (f"   ·   {tiers}" if tiers
+                                              else ""))
         show_waiting = bool(waiting)
         self.waiting_title.setVisible(show_waiting)
         self.waiting_title.setText(
-            f"Awaiting assessment · {len(waiting)}")
+            f"Still to rate · {len(waiting)}")
         self.rated_sheet = ContactSheet(rated, self.loader)
         self._records = {str(item.get("photo") or ""): item
                          for item in records}

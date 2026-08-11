@@ -38,6 +38,7 @@ from opencull_gui.shortlist import (
     rated_by_hand,
     score_disagreements,
     settled_order,
+    tier_rank,
     tier_stars,
 )
 from opencull_gui.shortlist_reviews import ShortlistReviewError
@@ -267,12 +268,17 @@ class ShortlistPage(QWidget):
         self.overview_heading.setObjectName("clusterTitle")
         self.overview_heading.setFont(theme.display(18))
         overview_column.addWidget(self.overview_heading)
+        self.overview_tally = QLabel("")
+        self.overview_tally.setObjectName("hint")
+        self.overview_tally.setFont(theme.body(10))
+        overview_column.addWidget(self.overview_tally)
         overview_hint = QLabel(
-            "Every frame with the rating it carries. Open one to read the "
-            "assessment and rate it yourself; the eye shows why the model "
-            "rated it as it did."
+            "Open a frame to read its assessment, or the eye to see why "
+            "the model rated it as it did. Mark the ones worth "
+            "developing: the editing pass reads exactly those."
             if not self.by_hand else
-            "Every frame in the selection. Open one to rate it.")
+            "Open a frame to rate it. Mark the ones worth developing: "
+            "the editing pass reads exactly those.")
         overview_hint.setObjectName("hint")
         overview_hint.setWordWrap(True)
         overview_hint.setFont(theme.body(10))
@@ -631,8 +637,18 @@ class ShortlistPage(QWidget):
         state = self._state()
         marks = state.get("entries", {})
         chosen = int(state.get("summary", {}).get("interesting", 0))
-        self.overview_heading.setText(
-            f"{len(self.entries)} frames · {chosen} worth developing")
+        total = len(self.entries) + len(self.unassessed())
+        # A heading reports what is true, and nothing is wrong with a
+        # shoot nobody has marked yet: it has just been assessed. The
+        # marks appear in the heading once there are marks to report.
+        headline = (
+            f"{total} frames to rate" if self.by_hand
+            else f"{total} frames assessed")
+        if chosen:
+            headline += f" · {chosen} marked for developing"
+        self.overview_heading.setText(headline)
+        self.overview_tally.setText(self._tally_line())
+        self.overview_tally.setVisible(bool(self.overview_tally.text()))
         if self.sheet is not None:
             self._sheet_slot.removeWidget(self.sheet)
             self.sheet.deleteLater()
@@ -678,6 +694,25 @@ class ShortlistPage(QWidget):
             tile.set_badge(stars, self._badge_tip(photo, entry, rated))
         marks = self._state().get("entries", {})
         tile.set_marked(bool(marks.get(photo, {}).get("interesting")))
+
+    def _tally_line(self) -> str:
+        """The shape of the assessment, best tier first."""
+        if self.by_hand:
+            return ""
+        counts: dict[str, int] = {}
+        for entry in self.entries:
+            tier = self._effective_tier(str(entry["photo"]), entry)
+            if tier:
+                counts[tier] = counts.get(tier, 0) + 1
+        parts = [
+            f"{counts[tier]} {tier}"
+            for tier in sorted(counts, key=tier_rank, reverse=True)
+        ]
+        unread = len(self.unassessed())
+        if unread:
+            parts.append(
+                f"{unread} the model could not read")
+        return "   ·   ".join(parts)
 
     def unassessed(self) -> dict[str, str]:
         """Frames the model could not read, and why, from the shortlist."""

@@ -777,9 +777,14 @@ class ReviewPage(QWidget):
         """Every group at once, each shown by its own photographs."""
         state = self.reviews.public_state()
         status = state["status"]
+        total = int(status["total_clusters"])
+        reviewed = int(status["reviewed_clusters"])
+        # Before any of it is reviewed, the count of reviews is not the
+        # news; the shoot is.
         self.overview_heading.setText(
-            f"{status['total_clusters']} groups · "
-            f"{status['reviewed_clusters']} reviewed")
+            f"{total} groups to review" if not reviewed
+            else f"{total} groups · {reviewed} reviewed"
+            if reviewed < total else f"All {total} groups reviewed")
         while self.overview_grid.count():
             item = self.overview_grid.takeAt(0)
             widget = item.widget()
