@@ -221,11 +221,16 @@ class ShortlistPageTests(unittest.TestCase):
         for field in ASSESSMENT_FIELDS:
             self.assertIn(f"{field} reading for A.JPG", shown)
 
-    def test_the_verdict_carries_tier_score_and_confidence(self):
+    def test_the_verdict_leads_with_one_figure_and_shows_its_working(self):
         page = self.page()
-        self.assertIn("EXCEPTIONAL", page.verdict.text())
-        self.assertIn("90/100", page.verdict.text())
-        self.assertIn("90%", page.verdict.text())
+        shown = page.verdict.text()
+        # Exceptional owns the top band, so 90 lands at 98 of 100.
+        self.assertIn("EXCEPTIONAL", shown)
+        self.assertIn("★★★★★", shown)
+        self.assertIn("standing 98/100", shown)
+        # The model's own score and confidence stay visible beneath it.
+        self.assertIn("score of 90", shown)
+        self.assertIn("90%", shown)
 
     def test_nothing_is_marked_until_a_person_marks_it(self):
         # The assessment is a reading, not a decision. An AI tier of

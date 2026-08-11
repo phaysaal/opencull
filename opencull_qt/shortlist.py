@@ -38,6 +38,7 @@ from opencull_gui.shortlist import (
     rated_by_hand,
     score_disagreements,
     settled_order,
+    standing,
     tier_rank,
     tier_stars,
 )
@@ -324,7 +325,7 @@ class ShortlistPage(QWidget):
             layout.addWidget(sort_label)
             self.sort_by = QComboBox()
             self.sort_by.setFont(theme.body(9))
-            self.sort_by.addItem("Rating, then score", "rating")
+            self.sort_by.addItem("Standing", "rating")
             self.sort_by.addItem("Time", "time")
             self.sort_by.currentIndexChanged.connect(
                 lambda _i: (self._fill_entries(), self.show_overview()))
@@ -494,8 +495,8 @@ class ShortlistPage(QWidget):
             # word beside a decision that overruled it is a list lying about
             # what will happen next.
             rated = str(marks.get(photo, {}).get("tier") or entry["tier"])
-            evidence = (
-                "" if self.by_hand else f"  {float(entry['score']):.0f}")
+            evidence = ("" if self.by_hand else
+                        f"  {standing(rated, entry.get('score', 0)):.0f}")
             overruled = " *" if rated != str(entry["tier"]) else ""
             odd = "  ⚠" if photo in self._disagreements else ""
             item = QListWidgetItem(
@@ -723,7 +724,9 @@ class ShortlistPage(QWidget):
         }
 
     def _badge_tip(self, photo: str, entry: dict, rated: str) -> str:
-        parts = [rated.title()]
+        parts = [
+            f"{rated.title()} · standing "
+            f"{standing(rated, entry.get('score', 0)):.0f} of 100"]
         if rated != str(entry.get("tier", "")):
             parts.append(f"your rating; the model said {entry['tier']}")
         if photo in getattr(self, "_disagreements", {}):
@@ -808,8 +811,12 @@ class ShortlistPage(QWidget):
         else:
             score = float(entry.get("score", 0))
             confidence = float(entry.get("confidence", 0))
-            shown = (f"{yours.upper()}   ·   {score:.0f}/100   ·   "
-                     f"{confidence:.0%} confident")
+            shown = (
+                f"{yours.upper()}   ·   {tier_stars(yours)}   ·   "
+                f"standing {standing(yours, score):.0f}/100")
+            shown += (
+                f"\n└─ {tier_rank(yours)} stars weighting the model's "
+                f"score of {score:.0f}, at {confidence:.0%} confidence")
             if proposed and yours != proposed:
                 # Never overwritten, only disagreed with: the shortlist is
                 # immutable evidence and the two readings stay side by side.

@@ -9,7 +9,11 @@ from pathlib import Path
 from typing import Any
 
 from opencull_gui.assets import index_asset_families
-from opencull_gui.shortlist import bar_checkpoint_path, settled_order
+from opencull_gui.shortlist import (
+    bar_checkpoint_path,
+    settled_order,
+    standing,
+)
 from scan import (  # noqa: F401
     BITMAP_EXTENSIONS,
     RAW_EXTENSIONS,
@@ -746,6 +750,9 @@ def professional_report_evidence(report: str) -> str:
             "photo": entry.get("photo"),
             "tier": entry.get("tier"),
             "score": entry.get("score"),
+            # The order the ranks follow, so a verifier can see that it
+            # descends rather than taking the ranking on trust.
+            "standing": standing(entry.get("tier"), entry.get("score")),
             "confidence": entry.get("confidence"),
             "warnings": entry.get("warnings", []),
             "rationale": str(entry.get("rationale", ""))[:200],

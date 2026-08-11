@@ -205,14 +205,36 @@ class AssetFamilyTests(unittest.TestCase):
         ]
         report = json_module.loads(build_professional_shortlist(
             bundle, assessments, [], "strict bar"))
-        first = report["entries"][0]
-        # The strong frame scored 5 does not lead a field of 70s.
-        self.assertNotEqual(first["photo"], "F11.JPG")
-        self.assertGreaterEqual(float(first["score"]), 60)
+        from opencull_gui.shortlist import standing
 
-    def test_a_contradicted_verdict_does_not_rule_the_order(self):
-        """A strong frame scored 5 must not outrank an ordinary one at 70."""
-        from opencull_gui.shortlist import settled_order
+        # The order is the order of standing, descending.
+        standings = [
+            standing(e["tier"], e["score"]) for e in report["entries"]]
+        self.assertEqual(standings, sorted(standings, reverse=True))
+        self.assertEqual(report["entries"][0]["photo"], "F11.JPG")
+
+    def test_standing_gives_each_tier_a_band_of_its_own(self):
+        from opencull_gui.shortlist import standing
+
+        for tier, low, high in (
+            ("reject", 0, 20), ("ordinary", 20, 40), ("promising", 40, 60),
+            ("strong", 60, 80), ("exceptional", 80, 100),
+        ):
+            self.assertEqual(standing(tier, 0), low)
+            self.assertEqual(standing(tier, 100), high)
+        # Inside a band the model's score orders the frames.
+        self.assertLess(standing("strong", 5), standing("strong", 72))
+        # The bands do not overlap, so a number never overturns a verdict.
+        self.assertGreater(standing("strong", 0), standing("promising", 99))
+        # A tier nobody recognises is worth nothing rather than crashing.
+        self.assertEqual(standing("banquet", 90), 0.0)
+
+    def test_a_contradicted_verdict_leads_but_is_flagged(self):
+        """The verdict owns the band; the flag carries the doubt."""
+        from opencull_gui.shortlist import (
+            score_disagreements,
+            settled_order,
+        )
 
         entries = (
             [{"photo": f"P{n}.JPG", "tier": "promising", "score": 60 - n}
@@ -223,9 +245,10 @@ class AssetFamilyTests(unittest.TestCase):
                {"photo": "ODD-LOW.JPG", "tier": "ordinary", "score": 70}]
         )
         order = settled_order(entries)
-        self.assertGreater(order.index("ODD-HIGH.JPG"), 3)
-        self.assertLess(
-            order.index("ODD-LOW.JPG"), order.index("ODD-HIGH.JPG"))
+        # The strong frame leads on its band even at a score of five,
+        # and wears the flag that says its readings disagree.
+        self.assertEqual(order[0], "ODD-HIGH.JPG")
+        self.assertIn("ODD-HIGH.JPG", score_disagreements(entries))
 
     def test_agreeing_readings_leave_the_verdict_in_charge(self):
         from opencull_gui.shortlist import settled_order

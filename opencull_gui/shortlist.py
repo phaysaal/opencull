@@ -238,50 +238,43 @@ def unfinished_assessments(output) -> list[dict]:
     return found
 
 
+def standing(tier, score) -> float:
+    """One figure for a frame, from the two readings it carries.
+
+    A verdict and a number side by side asked the photographer to
+    reconcile them at every glance. One figure out of a hundred settles
+    it: each tier owns a twenty-point band -- reject 0-20, ordinary
+    20-40, promising 40-60, strong 60-80, exceptional 80-100 -- and the
+    model's score places the frame inside its own band. The bands do
+    not overlap, so a verdict is never overturned by a number, and the
+    number still orders frames that share a verdict.
+    """
+    rank = tier_rank(tier)
+    if not rank:
+        return 0.0
+    try:
+        value = float(score)
+    except (TypeError, ValueError):
+        value = 0.0
+    return round(
+        ((rank - 1) * 100 + max(0.0, min(100.0, value))) / 5, 1)
+
+
 def settled_order(entries, tiers=None) -> list[str]:
-    """The order to show frames in, given two readings of each.
+    """The order to show frames in: by standing, best first.
 
-    Where a frame's verdict and its score agree, the verdict leads and
-    the score breaks ties inside a tier: the named tier is the steadier
-    reading, and the number is the finer one.
-
-    Where they contradict each other -- the flagged frames, a strong
-    verdict on a middling number or the reverse -- neither reading has
-    earned the right to place the frame alone. Such a frame sits between
-    what its two readings claim, which is the honest position for a
-    frame nobody is sure about, and it carries its flag so the doubt is
-    visible rather than implied.
+    One figure, one order. Frames of equal standing keep the sequence
+    they were shot in.
     """
     tiers = tiers or {}
     rows = []
-    for entry in entries:
+    for index, entry in enumerate(entries):
         photo = str(entry.get("photo", ""))
         if not photo:
             continue
         tier = tiers.get(photo) or entry.get("tier")
-        try:
-            score = float(entry.get("score", 0))
-        except (TypeError, ValueError):
-            score = 0.0
-        rows.append((photo, tier_rank(tier), score))
-    if not rows:
-        return []
-    natural = {photo: index for index, (photo, _r, _s) in enumerate(rows)}
-    by_verdict = sorted(
-        rows, key=lambda r: (-r[1], -r[2], natural[r[0]]))
-    by_score = sorted(
-        rows, key=lambda r: (-r[2], -r[1], natural[r[0]]))
-    verdict_place = {row[0]: i for i, row in enumerate(by_verdict)}
-    score_place = {row[0]: i for i, row in enumerate(by_score)}
-    disputed = set(score_disagreements(entries))
-
-    def place(photo: str) -> tuple[float, int]:
-        verdict = verdict_place[photo]
-        if photo in disputed:
-            return ((verdict + score_place[photo]) / 2, natural[photo])
-        return (float(verdict), natural[photo])
-
-    return sorted((row[0] for row in rows), key=place)
+        rows.append((photo, standing(tier, entry.get("score", 0)), index))
+    return [row[0] for row in sorted(rows, key=lambda r: (-r[1], r[2]))]
 
 
 def tier_stars(tier) -> str:
