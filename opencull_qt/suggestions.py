@@ -829,15 +829,27 @@ class ScenePlanDialog(QDialog):
         share.setCursor(Qt.CursorShape.PointingHandCursor)
         share.clicked.connect(lambda: self._choose("scene"))
         row.addWidget(share)
-        every = QPushButton(
-            f"Only the {waiting} without ({waiting} calls)" if done
-            else f"Every frame ({waiting} calls)")
-        every.setObjectName("ghost")
-        every.setFont(theme.body(10))
-        every.setCursor(Qt.CursorShape.PointingHandCursor)
-        every.clicked.connect(
-            lambda: self._choose("missing" if done else "all"))
-        row.addWidget(every)
+        # Three shapes of the same question. Asking again for frames that
+        # already have answers is the one that spends money for nothing, so
+        # it never wears the primary button and always says its price.
+        covered = sum(len(scene.get("photos", [])) for scene in plan)
+        if waiting and done:
+            buttons = [(f"Only the {waiting} without ({waiting} calls)",
+                        "missing"),
+                       (f"Redo all {done + waiting} ({done + waiting} calls)",
+                        "all")]
+        elif waiting:
+            buttons = [(f"Every frame ({waiting} calls)", "all")]
+        else:
+            buttons = [(f"Redo every frame ({covered} calls)", "all")]
+        for label, choice in buttons:
+            button = QPushButton(label)
+            button.setObjectName("ghost")
+            button.setFont(theme.body(10))
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.clicked.connect(
+                lambda _=False, value=choice: self._choose(value))
+            row.addWidget(button)
         row.addStretch(1)
         cancel = QPushButton("Cancel")
         cancel.setObjectName("ghost")
@@ -949,7 +961,10 @@ def launch_suggestions(page, payload: dict) -> None:
     if done and waiting:
         choice = page._ask_scope(len(waiting), len(done), offer)
     elif done:
-        choice = page._ask_scope(0, len(done), [])
+        # Asking again for a shoot that already has answers is still a
+        # shoot made of scenes. Withholding the scene plan here charged a
+        # call per frame for work seven calls would have redone.
+        choice = page._ask_scope(0, len(done), offer)
     elif offer:
         choice = page._ask_scope(len(targets), 0, offer)
     else:

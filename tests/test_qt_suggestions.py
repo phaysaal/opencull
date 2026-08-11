@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 try:
-    from PySide6.QtWidgets import QApplication, QLabel
+    from PySide6.QtWidgets import QApplication, QLabel, QPushButton
 except ImportError:  # pragma: no cover - exercised only without PySide6
     QApplication = None
 
@@ -296,6 +296,28 @@ class AskingTests(SuggestionsPageTests):
             self.assertEqual(dialog.choice, "cancel")
             dialog._choose(label)
             self.assertEqual(dialog.choice, expected)
+
+    def test_asking_again_can_still_ask_once_per_scene(self):
+        """The redo path withheld the scene plan and charged per frame."""
+        from opencull_qt.suggestions import ScenePlanDialog
+
+        # Every marked frame already answered: the only question left is
+        # whether to redo, and a redo is still made of scenes.
+        page = self.page(marked=(NAMES[0], NAMES[1]))
+        shown = {}
+        with mock.patch.object(
+                page, "_ask_scope",
+                side_effect=lambda w, d, plan: shown.update(
+                    waiting=w, done=d, plan=plan) or "cancel"):
+            page.suggest()
+        self.assertEqual((shown["waiting"], shown["done"]), (0, 2))
+        self.assertEqual(len(shown["plan"]), 1)
+
+        dialog = ScenePlanDialog(page, shown["plan"], 0, 2, page.loader, None)
+        self.addCleanup(dialog.deleteLater)
+        labels = [b.text() for b in dialog.findChildren(QPushButton)]
+        self.assertIn("One per scene (1 call)", labels)
+        self.assertIn("Redo every frame (2 calls)", labels)
 
     def test_choosing_scenes_asks_only_the_representatives(self):
         from opencull_gui import scenes
