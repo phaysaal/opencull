@@ -81,6 +81,54 @@ def build_style_request(photos: str, existing: str = "", limit: int | float = 64
     return json.dumps(value, indent=2, sort_keys=True)
 
 
+def style_example_batches(request: str, size: int | float = 8) -> list[str]:
+    """The examples split into groups a single call can actually carry.
+
+    A vision call takes a bounded number of images, and a photographer
+    choosing thirty examples means all thirty to be looked at. So the
+    profile is learned in passes: each batch is read with the profile
+    so far in hand, and refines it.
+    """
+    paths = style_example_paths(request)
+    step = max(1, min(8, int(size)))
+    return [
+        json.dumps(paths[index:index + step])
+        for index in range(0, len(paths), step)
+    ]
+
+
+def batch_paths(batch: str) -> list[str]:
+    try:
+        value = json.loads(str(batch))
+    except (TypeError, json.JSONDecodeError):
+        return []
+    return [str(item) for item in value] if isinstance(value, list) else []
+
+
+def batch_request(request: str, batch: str, carried: str = "") -> str:
+    """One pass's request: this batch of examples, and the profile so far.
+
+    The profile carried in is the one the previous passes built, so the
+    last pass has seen the influence of every example even though no
+    single call carried them all.
+    """
+    value = json.loads(str(request))
+    paths = set(batch_paths(batch))
+    value = dict(value)
+    value["examples"] = [
+        item for item in value.get("examples", [])
+        if str(item.get("path")) in paths
+    ]
+    if str(carried).strip():
+        try:
+            prior = json.loads(str(carried))
+        except (TypeError, json.JSONDecodeError):
+            prior = None
+        if isinstance(prior, dict):
+            value["existing_profile"] = prior.get("profile", prior)
+    return json.dumps(value, indent=2, sort_keys=True)
+
+
 def style_profile_prompt(request: str, mode: str = "update") -> str:
     prior = json.loads(request).get("existing_profile")
     return f"""You are a photographic colorist extracting an updateable personal

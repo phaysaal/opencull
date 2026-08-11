@@ -34,18 +34,30 @@ schema StyleProfile:
 
 print "STYLE_PROGRESS 8 Validating selected photographs"
 request := build_style_request(photos, existing, limit)
-images := []
-paths := style_example_paths(request)
+
+-- A vision call carries a bounded number of images, and a photographer
+-- who chose thirty examples meant all thirty to be looked at. The
+-- profile is learned in passes: each batch is read with the profile so
+-- far in hand, so the last pass has felt every example.
+carried := ""
+profile := ""
 print "STYLE_PROGRESS 24 Preparing selected photographs"
-forall path in paths:
-    image := observe image(path)
-    check image.exists
-    images := images + [image]
-print "STYLE_PROGRESS 48 Photographs prepared for the vision model"
-print "STYLE_PROGRESS 60 Asking the profile model to learn your editing style"
-raw := memo gen<StyleProfile>(style_profile_prompt(request, mode), images=images) by A
+forall batch in style_example_batches(request, 8):
+    images := []
+    forall path in batch_paths(batch):
+        image := observe image(path)
+        check image.exists
+        images := images + [image]
+    print "STYLE_PROGRESS 60 Asking the profile model to learn your editing style"
+    pass_request := batch_request(request, batch, carried)
+    raw := memo gen<StyleProfile>(style_profile_prompt(pass_request, mode), images=images) by A
+    candidate := normalize_style_profile(raw)
+    if check valid_style_profile(candidate):
+        profile := candidate
+        carried := style_profile_json(pass_request, candidate, mode)
+    else:
+        check true
 print "STYLE_PROGRESS 78 Validating the returned style profile"
-profile := normalize_style_profile(raw)
 check valid_style_profile(profile)
 print "STYLE_PROGRESS 88 Writing the updateable profile and revision history"
 report := style_profile_json(request, profile, mode)

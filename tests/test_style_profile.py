@@ -13,6 +13,37 @@ from style_profile_kernel import (
 
 
 class StyleProfileTests(unittest.TestCase):
+    def test_more_examples_than_one_call_can_carry_are_split(self):
+        """A vision call takes eight images; a photographer may choose more."""
+        import json as json_module
+
+        from style_profile_kernel import (
+            batch_paths,
+            batch_request,
+            style_example_batches,
+        )
+
+        request = json_module.dumps({
+            "format": "opencull-style-profile-request-v1",
+            "photos_root": "/x",
+            "examples": [
+                {"path": f"/x/{n}.jpg", "sha256": "z"} for n in range(11)],
+            "existing_profile": None, "signature": "s"})
+
+        batches = style_example_batches(request, 8)
+
+        self.assertEqual([len(batch_paths(b)) for b in batches], [8, 3])
+        # Each pass carries its own examples, and the profile built so far.
+        first = json_module.loads(batch_request(request, batches[0]))
+        self.assertEqual(len(first["examples"]), 8)
+        self.assertIsNone(first["existing_profile"])
+        carried = json_module.dumps({"profile": {"profile_name": "so far"}})
+        second = json_module.loads(
+            batch_request(request, batches[1], carried))
+        self.assertEqual(len(second["examples"]), 3)
+        self.assertEqual(
+            second["existing_profile"], {"profile_name": "so far"})
+
     def test_request_accepts_kimiya_numeric_limit_for_selection_manifest(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
