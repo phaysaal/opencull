@@ -302,6 +302,35 @@ def normalize_professional_assessment(record: Any) -> dict[str, Any]:
     return normalized
 
 
+def unassessed_frame_json(
+    candidate: dict[str, Any], reason: str = ""
+) -> str:
+    """Record a frame the model could not assess, without losing the run.
+
+    One unusable answer among a hundred used to end everything: the
+    check that guards the shortlist's quality also stopped the ninety-
+    nine frames behind it. A frame that cannot be assessed is a fact
+    about that frame, so it is written down as one and carried through
+    to the interface, where it can be asked again or left alone.
+    """
+    return json.dumps({
+        "photo": candidate["photo"],
+        "cluster_id": candidate["cluster_id"],
+        "raw_files": candidate.get("raw_files", []),
+        "local_warnings": candidate.get("local_warnings", []),
+        "asset_warning": candidate.get("asset_warning", ""),
+        "unassessed": str(reason).strip() or (
+            "The model's answer could not be read as an assessment."),
+    }, sort_keys=True)
+
+
+def is_unassessed(record: Any) -> bool:
+    return (
+        isinstance(record, dict)
+        and bool(str(record.get("unassessed", "")).strip())
+    )
+
+
 def professional_assessment_json(
     record: dict[str, Any], candidate: dict[str, Any]
 ) -> str:
@@ -420,11 +449,13 @@ def professional_checkpoint_path(
 def _valid_saved_assessment(
     value: Any, candidate: dict[str, Any]
 ) -> bool:
-    return (
-        isinstance(value, dict)
-        and value.get("photo") == candidate.get("photo")
-        and valid_professional_assessment(value)
-    )
+    if not isinstance(value, dict) or value.get("photo") != candidate.get(
+        "photo"
+    ):
+        return False
+    # A frame recorded as unassessed is a settled answer too: resuming
+    # must not ask for it again unless the photographer says so.
+    return is_unassessed(value) or valid_professional_assessment(value)
 
 
 def build_professional_checkpoint(
@@ -544,8 +575,16 @@ def build_professional_shortlist(
 ) -> str:
     source = json.loads(str(bundle))
     assessment_by_photo = {}
+    unassessed = []
     for value in assessments:
         item = json.loads(str(value))
+        if is_unassessed(item):
+            unassessed.append({
+                "photo": item["photo"],
+                "cluster_id": item.get("cluster_id", ""),
+                "reason": item["unassessed"],
+            })
+            continue
         assessment_by_photo[item["photo"]] = item
     calibration_values = [json.loads(str(value)) for value in calibrations]
     tier_by_photo = {}
@@ -615,6 +654,10 @@ def build_professional_shortlist(
         "profile": str(profile).strip().lower() or "family",
         "candidate_signature": source["signature"],
         "entries": entries,
+        # Frames the model could not read. They are neither ranked nor
+        # hidden: the shortlist says plainly which frames it has nothing
+        # to say about.
+        "unassessed": sorted(unassessed, key=lambda item: item["photo"]),
         "excluded": source.get("excluded", []),
         "statistics": {
             "evaluated": len(entries),
@@ -642,17 +685,23 @@ def professional_report_valid(
     except (TypeError, json.JSONDecodeError):
         return False
     entries = value.get("entries", []) if isinstance(value, dict) else []
+    unassessed = value.get("unassessed", []) if isinstance(value, dict) else []
     expected = {candidate["photo"] for candidate in candidates}
-    actual = {entry.get("photo") for entry in entries}
+    # Every candidate is accounted for: ranked, or named as one the
+    # model could not read. Silence about a frame is the one outcome
+    # this refuses.
+    actual = ({entry.get("photo") for entry in entries}
+              | {item.get("photo") for item in unassessed})
     return (
         value.get("format") == "opencull-professional-shortlist-v1"
         and value.get("source_report_sha256")
         == source.get("source_report_sha256")
-        and len(entries) == len(expected)
+        and len(entries) + len(unassessed) == len(expected)
         and actual == expected
         and [entry.get("rank") for entry in entries]
         == list(range(1, len(entries) + 1))
         and all(entry.get("tier") in TIERS for entry in entries)
+        and all(str(item.get("reason", "")).strip() for item in unassessed)
     )
 
 
@@ -671,6 +720,10 @@ def professional_report_evidence(report: str) -> str:
         # bar the evidence never showed them, they rightly said no.
         "bar": value.get("profile"),
         "entry_count": len(entries),
+        "unassessed_count": len(value.get("unassessed", [])),
+        "unassessed_photos": [
+            str(item.get("photo", ""))
+            for item in value.get("unassessed", [])][:8],
         "ranks_contiguous": [entry.get("rank") for entry in entries]
         == list(range(1, len(entries) + 1)),
         "tier_counts": {
@@ -733,7 +786,9 @@ def professional_report_policy(profile: str = "") -> str:
     return (
         "a read-only professional-editing shortlist: the projection's "
         "flags ranks_contiguous, all_rationales_present and "
-        "all_raw_paths_relative are all true, and the sampled rationales "
+        "all_raw_paths_relative are all true; any frame the model could "
+        "not read is named in unassessed_photos rather than ranked, and "
+        "unassessed_count may be zero; and the sampled rationales "
         "describe visible photographic qualities -- composition, light, "
         "subject, moment -- rather than file metadata, " + measured
     )

@@ -97,6 +97,7 @@ class ShortlistPage(QWidget):
     suggested = Signal(str, list)   # output path, photographs to ask about
     why_wanted = Signal(str)        # the frame whose story is asked for
     reassess_wanted = Signal()      # re-run the assessment from scratch
+    reask_wanted = Signal(str)      # ask again about one photograph
 
     def __init__(self, shortlist, reviews, loader: PreviewLoader,
                  directions=None, parent: QWidget | None = None):
@@ -182,6 +183,16 @@ class ShortlistPage(QWidget):
             lambda _checked=False: self.show_overview())
         head.insertWidget(0, back_to_grid)
         head.addWidget(why)
+        self.reask_button = QPushButton("Assess this frame again")
+        self.reask_button.setObjectName("ghost")
+        self.reask_button.setFont(theme.body(9))
+        self.reask_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.reask_button.setToolTip(
+            "Ask the models about this one photograph again. Every other "
+            "frame's rating is kept, so this costs one frame.")
+        self.reask_button.clicked.connect(
+            lambda _checked=False: self.reask_wanted.emit(self.current))
+        head.addWidget(self.reask_button)
         if not self.by_hand:
             self.detail_button = QPushButton("\U0001F441  Why this rating")
             self.detail_button.setObjectName("ghost")
@@ -211,6 +222,14 @@ class ShortlistPage(QWidget):
         self.verdict.setWordWrap(True)
         self.verdict.setFont(theme.display(9))
         judgement.addWidget(self.verdict)
+
+        self.unread_note = QLabel("")
+        self.unread_note.setObjectName("status")
+        self.unread_note.setProperty("tone", "alarm")
+        self.unread_note.setWordWrap(True)
+        self.unread_note.setFont(theme.body(9))
+        self.unread_note.hide()
+        judgement.addWidget(self.unread_note)
 
         self.rationale = QLabel("")
         self.rationale.setObjectName("hint")
@@ -618,6 +637,8 @@ class ShortlistPage(QWidget):
             self._sheet_slot.removeWidget(self.sheet)
             self.sheet.deleteLater()
         order = [str(entry["photo"]) for entry in self._ordered_entries()]
+        unread = self.unassessed()
+        order = order + [photo for photo in unread if photo not in order]
         self.sheet = ContactSheet(
             order, self.loader, limit=len(order), opens=True)
         self.sheet.opened.connect(self.show_entry)
@@ -633,6 +654,14 @@ class ShortlistPage(QWidget):
                 tile.set_badge(stars, self._badge_tip(photo, entry, rated))
             tile.set_marked(bool(marks.get(photo, {}).get("interesting")))
             tile.set_inspectable(not self.by_hand)
+        for photo, reason in unread.items():
+            tile = self.sheet.tiles.get(photo)
+            if tile is None:
+                continue
+            # No stars, because there is no verdict: the frame says so
+            # itself rather than passing as the lowest tier.
+            tile.set_badge("⚠ not assessed", reason)
+            tile.set_marked(bool(marks.get(photo, {}).get("interesting")))
         self._sheet_slot.addWidget(self.sheet)
         self.views.setCurrentIndex(0)
         self.list.hide()
@@ -649,6 +678,14 @@ class ShortlistPage(QWidget):
             tile.set_badge(stars, self._badge_tip(photo, entry, rated))
         marks = self._state().get("entries", {})
         tile.set_marked(bool(marks.get(photo, {}).get("interesting")))
+
+    def unassessed(self) -> dict[str, str]:
+        """Frames the model could not read, and why, from the shortlist."""
+        return {
+            str(item.get("photo", "")): str(item.get("reason", ""))
+            for item in (self.shortlist.data.get("unassessed") or [])
+            if str(item.get("photo", ""))
+        }
 
     def _badge_tip(self, photo: str, entry: dict, rated: str) -> str:
         parts = [rated.title()]
@@ -677,6 +714,13 @@ class ShortlistPage(QWidget):
             self._set_frame(pixmap)
 
         self.heading.setText(photo)
+        unread = self.unassessed().get(photo, "")
+        self.reask_button.setVisible(not self.by_hand)
+        self.unread_note.setText(
+            f"The model could not assess this frame. {unread} You can ask "
+            "again, rate it yourself below, or leave it as it is."
+            if unread else "")
+        self.unread_note.setVisible(bool(unread))
         mark = self._state().get("entries", {}).get(photo, {})
         self.set_rating(str(mark.get("tier") or entry.get("tier", "")))
         self._show_verdict()

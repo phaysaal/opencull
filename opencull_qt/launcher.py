@@ -43,6 +43,8 @@ from opencull_gui.reviews import (
     narrow_selection,
 )
 from opencull_gui.shortlist import (
+    bar_checkpoint_path,
+    forget_assessment,
     readable_checkpoint,
     tier_stars,
     unfinished_assessments,
@@ -1407,6 +1409,8 @@ class Launcher(QMainWindow):
         page.why_wanted.connect(self.explain_frame)
         page.reassess_wanted.connect(
             lambda pr=bench.project: self.reassess_project(pr))
+        page.reask_wanted.connect(
+            lambda photo, b=bench: self.reask_frame(b, photo))
         return page
 
     def _profile_page(self, bench: Bench):
@@ -1451,6 +1455,36 @@ class Launcher(QMainWindow):
 
     def open_shortlist(self, project: dict) -> None:
         self.open_project(project, phases.ASSESSMENT)
+
+    def reask_frame(self, bench: Bench, photo: str) -> None:
+        """Ask the models about one photograph again, and only that one."""
+        if not photo:
+            return
+        bar = str(bench.shortlist.data.get("profile") or "")
+        checkpoint = readable_checkpoint(
+            bar_checkpoint_path(bench.shortlist_path, bar))
+        if not forget_assessment(checkpoint, photo):
+            self._say(
+                "That frame's rating is not in the run's memory, so asking "
+                "again would re-read the whole selection. Use Reassess for "
+                "that.", "alarm")
+            return
+        review = default_review_path(bench.report_path)
+        try:
+            self.services.jobs.add_professional(
+                str(bench.report_path), str(bench.project.get("photos", "")),
+                review=str(review) if review.is_file() else "",
+                profile=bar, provider_profile_id=self.provider_id(),
+                reassess=True)
+        except Exception as exc:
+            self._say(str(exc), "alarm")
+            return
+        shell = self.review_page
+        if isinstance(shell, ProjectShell):
+            shell.rebuild(phases.ASSESSMENT)
+        self._say(
+            f"Asking about {photo} again. Every other rating is kept.", "ok")
+        self.refresh()
 
     def reassess_project(self, project: dict) -> None:
         """Ask the models to assess this folder's selection again."""

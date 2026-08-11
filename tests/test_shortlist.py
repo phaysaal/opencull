@@ -54,6 +54,63 @@ def report_payload():
 
 
 class AssetFamilyTests(unittest.TestCase):
+    def test_a_frame_the_model_cannot_read_is_recorded_not_fatal(self):
+        import json as json_module
+
+        from shortlist_kernel import (
+            build_professional_shortlist,
+            is_unassessed,
+            professional_report_valid,
+            unassessed_frame_json,
+        )
+
+        candidates = [
+            {"photo": "A.JPG", "cluster_id": "group-0001", "raw_files": []},
+            {"photo": "B.JPG", "cluster_id": "group-0002", "raw_files": []},
+        ]
+        bundle = json_module.dumps({
+            "signature": "sig", "photos_root": "/x",
+            "candidate_policy": "effective", "candidates": candidates,
+            "source_report_sha256": "0" * 64, "review_revision": 0,
+            "review_sha256": "", "minimum_dimension": 640})
+        good = json_module.dumps({
+            "photo": "A.JPG", "cluster_id": "group-0001",
+            "tier": "promising", "score": 60, "confidence": 0.8,
+            "rationale": "the light carries it", "raw_files": [],
+            "local_warnings": [], "asset_warning": "",
+            **dict.fromkeys(ASSESSMENT_FIELDS, "reading")})
+        bad = unassessed_frame_json(candidates[1], "nothing readable came back")
+        self.assertTrue(is_unassessed(json_module.loads(bad)))
+
+        report = json_module.loads(build_professional_shortlist(
+            bundle, [good, bad], [], "strict bar"))
+
+        # The good frame is ranked; the bad one is named, not silent.
+        self.assertEqual([e["photo"] for e in report["entries"]], ["A.JPG"])
+        self.assertEqual(report["unassessed"][0]["photo"], "B.JPG")
+        self.assertIn("readable", report["unassessed"][0]["reason"])
+        # And the whole thing still validates: every candidate accounted for.
+        self.assertTrue(professional_report_valid(
+            json_module.dumps(report), bundle, candidates))
+
+    def test_forgetting_one_rating_leaves_the_others(self):
+        import json as json_module
+
+        from opencull_gui.shortlist import forget_assessment
+
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "c.json"
+            path.write_text(json_module.dumps({
+                "assessments": [{"photo": "A.JPG"}, {"photo": "B.JPG"}],
+                "completed": True}))
+            self.assertTrue(forget_assessment(path, "B.JPG"))
+            data = json_module.loads(path.read_text())
+            self.assertEqual(
+                [a["photo"] for a in data["assessments"]], ["A.JPG"])
+            self.assertFalse(data["completed"])
+            # A frame that was never there is not a change.
+            self.assertFalse(forget_assessment(path, "Z.JPG"))
+
     def test_a_watcher_finds_the_checkpoint_a_run_adopted(self):
         from opencull_gui.shortlist import readable_checkpoint
 

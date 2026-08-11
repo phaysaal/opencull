@@ -63,8 +63,15 @@ forall candidate in pending:
     check photo.exists
     raw_assessment := memo gen<ProfessionalAssessment>(professional_assessment_prompt(candidate, profile), images=[photo]) by A
     assessment := normalize_professional_assessment(raw_assessment)
-    check valid_professional_assessment(assessment)
-    assessments := assessments + [professional_assessment_json(assessment, candidate)]
+    if check valid_professional_assessment(assessment):
+        assessments := assessments + [professional_assessment_json(assessment, candidate)]
+    else:
+        second := memo gen<ProfessionalAssessment>(professional_assessment_prompt(candidate, profile), images=[photo]) by B
+        retried := normalize_professional_assessment(second)
+        if check valid_professional_assessment(retried):
+            assessments := assessments + [professional_assessment_json(retried, candidate)]
+        else:
+            assessments := assessments + [unassessed_frame_json(candidate, "Two models answered, and neither answer could be read as an assessment of this frame.")]
     checkpoint_state := build_professional_checkpoint(bundle, candidates, assessments, profile, false)
     check len(checkpoint_state) > 0
     act file.overwrite(checkpoint_file, checkpoint_state)

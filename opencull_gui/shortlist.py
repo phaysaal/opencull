@@ -96,6 +96,34 @@ def score_disagreements(entries) -> dict[str, str]:
     return flagged
 
 
+def forget_assessment(checkpoint, photo: str) -> bool:
+    """Drop one frame's rating so the next run buys that frame again.
+
+    Asking again about a single photograph should cost one photograph,
+    not a hundred. The checkpoint is the run's memory, so forgetting one
+    record there is exactly the request -- everything else is resumed as
+    it was.
+    """
+    import json as _json
+
+    path = Path(str(checkpoint))
+    try:
+        data = _json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    kept = [
+        item for item in data.get("assessments") or []
+        if str((item or {}).get("photo")) != str(photo)
+    ]
+    if len(kept) == len(data.get("assessments") or []):
+        return False
+    data["assessments"] = kept
+    data["completed"] = False
+    path.write_text(
+        _json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+    return True
+
+
 def readable_checkpoint(path) -> Path:
     """The checkpoint a run is actually reading from.
 
