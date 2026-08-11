@@ -671,7 +671,7 @@ class StudioTests(unittest.TestCase):
 
     def test_the_studio_holds_the_photographers_three_things(self):
         shown = self.text(self.studio())
-        self.assertIn("PERSONAL PROFILES", shown)
+        self.assertIn("PERSONAL STYLE", shown)
         self.assertIn("THE TASTE LEDGER", shown)
         self.assertIn("PROVIDERS", shown)
 

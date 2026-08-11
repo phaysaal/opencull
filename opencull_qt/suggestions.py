@@ -12,6 +12,11 @@ the part worth reading. The recipe is shown too, because that is the only
 thing the renderer will actually execute: intent that did not compile into
 a recipe is a treatment that cannot be rendered, and saying so is more
 useful than quietly offering three where the model wrote four.
+
+The page also chooses. It used to open on "mark some in the assessment
+first", which is a page telling somebody to go and use a different page --
+so the frames are picked here instead, ranked as the assessment ranked
+them, and the tick written is the same mark the assessment shows.
 """
 
 from __future__ import annotations
@@ -28,15 +33,28 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from opencull_gui.development import BUILTIN_STYLES
+from opencull_gui.shortlist import settled_order, tier_rank
 
 from . import theme
+from .sheet import ContactSheet
 
 PHOTO_ROW = 30
+
+# Ticked by default when nobody has chosen yet: the tiers the assessment
+# placed at strong or above. Everything else stays unticked, because a
+# default that spends a call on every promising frame is a default that
+# spends money the photographer did not agree to.
+DEFAULT_TIER = tier_rank("strong")
+
+# The chooser draws thumbnails, and past a certain number they stop being
+# a sheet somebody reads and become a wall. The best-ranked are offered.
+CHOOSABLE = 120
 
 # Prose is read in a column, not across a whole window. The treatments stay
 # at a readable measure however wide the window is opened.
@@ -111,15 +129,17 @@ class SuggestionsPage(QWidget):
     suggested = Signal(str, list)   # output path, photographs to ask about
     why_wanted = Signal(str)        # the frame whose story is asked for
 
-    def __init__(self, shortlist, reviews, directions,
+    def __init__(self, shortlist, reviews, directions, loader=None,
                  parent: QWidget | None = None):
         super().__init__(parent)
         self.setObjectName("page")
         self.shortlist = shortlist
         self.reviews = reviews
         self.directions = directions
+        self.loader = loader
         self.current = ""
         self.photos: list[str] = []
+        self.sheet: ContactSheet | None = None
 
         self._build()
         self.refresh()
@@ -133,7 +153,15 @@ class SuggestionsPage(QWidget):
         self.bar = self._bar()
         outer.addWidget(self.bar)
 
-        split = QHBoxLayout()
+        # Two faces of one page: the treatments, and the choice of which
+        # frames to ask about. The choice is not a dialog, because it is
+        # revisited -- a shoot is developed in passes, not in one sitting.
+        self.faces = QStackedWidget()
+        outer.addWidget(self.faces, 1)
+
+        treatments = QWidget()
+        treatments.setObjectName("page")
+        split = QHBoxLayout(treatments)
         split.setContentsMargins(0, 0, 0, 0)
         split.setSpacing(0)
 
@@ -189,6 +217,14 @@ class SuggestionsPage(QWidget):
             "Every marked frame is a separate call to a model, so this costs.")
         self.ask_button.clicked.connect(self.suggest)
         actions.addWidget(self.ask_button)
+        self.choose_button = QPushButton("Choose frames…")
+        self.choose_button.setObjectName("ghost")
+        self.choose_button.setFont(theme.body(10))
+        self.choose_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.choose_button.setToolTip(
+            "Change which assessed frames are marked to develop.")
+        self.choose_button.clicked.connect(lambda: self.show_chooser())
+        actions.addWidget(self.choose_button)
         actions.addStretch(1)
         column.addLayout(actions)
 
@@ -199,7 +235,9 @@ class SuggestionsPage(QWidget):
         column.addWidget(self.status)
 
         split.addWidget(right, 1)
-        outer.addLayout(split, 1)
+        self.faces.addWidget(treatments)
+        self.chooser = self._chooser()
+        self.faces.addWidget(self.chooser)
 
     def _bar(self) -> QWidget:
         bar = QFrame()
@@ -216,7 +254,7 @@ class SuggestionsPage(QWidget):
         back.clicked.connect(self.closed)
         layout.addWidget(back)
 
-        self.title = QLabel("EDITING SUGGESTIONS")
+        self.title = QLabel("AI EDITING")
         self.title.setObjectName("chromeTitle")
         self.title.setFont(theme.display(11))
         layout.addWidget(self.title)
@@ -228,6 +266,201 @@ class SuggestionsPage(QWidget):
         layout.addWidget(self.progress)
         self.indicator = self.progress
         return bar
+
+    def _chooser(self) -> QWidget:
+        """The face that picks which frames are worth a call."""
+        face = QWidget()
+        face.setObjectName("page")
+        column = QVBoxLayout(face)
+        column.setContentsMargins(22, 16, 22, 14)
+        column.setSpacing(10)
+
+        self.chooser_heading = QLabel("Choose the frames to develop")
+        self.chooser_heading.setObjectName("clusterTitle")
+        self.chooser_heading.setFont(theme.display(17))
+        column.addWidget(self.chooser_heading)
+
+        self.chooser_lead = QLabel("")
+        self.chooser_lead.setObjectName("hint")
+        self.chooser_lead.setWordWrap(True)
+        self.chooser_lead.setFont(theme.body(10))
+        column.addWidget(self.chooser_lead)
+
+        self.chooser_holder = QVBoxLayout()
+        self.chooser_holder.setContentsMargins(0, 0, 0, 0)
+        column.addLayout(self.chooser_holder, 1)
+
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        self.mark_button = QPushButton("Mark these frames")
+        self.mark_button.setObjectName("primary")
+        self.mark_button.setFont(theme.body(10))
+        self.mark_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.mark_button.clicked.connect(lambda: self.apply_marks())
+        row.addWidget(self.mark_button)
+        self.chooser_back = QPushButton("Back to the treatments")
+        self.chooser_back.setObjectName("ghost")
+        self.chooser_back.setFont(theme.body(10))
+        self.chooser_back.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.chooser_back.clicked.connect(lambda: self.show_treatments())
+        row.addWidget(self.chooser_back)
+        row.addStretch(1)
+        column.addLayout(row)
+
+        self.chooser_status = QLabel("")
+        self.chooser_status.setObjectName("hint")
+        self.chooser_status.setWordWrap(True)
+        self.chooser_status.setFont(theme.body(9))
+        column.addWidget(self.chooser_status)
+        return face
+
+    # --- choosing what to ask about ---------------------------------------
+
+    def candidates(self) -> list[str]:
+        """The assessed frames, best-ranked first."""
+        marks = self.reviews.public_state().get("entries", {})
+        tiers = {
+            photo: str(entry.get("tier") or "")
+            for photo, entry in marks.items()
+            if isinstance(entry, dict) and entry.get("tier")}
+        return settled_order(self.shortlist.entries, tiers)
+
+    def _tier_of(self, photo: str) -> str:
+        """The photographer's tier for a frame, or the assessment's."""
+        entry = self.reviews.public_state().get("entries", {}).get(photo)
+        if isinstance(entry, dict) and entry.get("tier"):
+            return str(entry["tier"])
+        return str((self.shortlist.entry_by_photo.get(photo) or {}).get(
+            "tier") or "")
+
+    def show_chooser(self) -> None:
+        """Show the frames of this assessment, ranked, ready to be picked."""
+        while self.chooser_holder.count():
+            item = self.chooser_holder.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
+        self.sheet = None
+
+        ranked = self.candidates()
+        offered = ranked[:CHOOSABLE]
+        if not offered or self.loader is None:
+            self.chooser_lead.setText(
+                "There are no assessed frames to choose from yet."
+                if not offered else
+                "The frames cannot be shown here. Mark them in the "
+                "assessment instead.")
+            self.mark_button.setEnabled(False)
+            self.chooser_back.setVisible(bool(self.photos))
+            self.faces.setCurrentWidget(self.chooser)
+            return
+
+        marked = {
+            photo for photo, entry in
+            self.reviews.public_state().get("entries", {}).items()
+            if isinstance(entry, dict) and entry.get("interesting") is True}
+        # Nobody has chosen yet, so the assessment's own verdict proposes:
+        # strong and above, and nothing further down. A default that ticked
+        # every promising frame would spend a call on each of them.
+        start = marked or {
+            photo for photo in offered
+            if tier_rank(self._tier_of(photo)) >= DEFAULT_TIER}
+
+        lead = (
+            f"{len(offered)} assessed frames, best first. Ticked frames are "
+            "marked worth developing; click a frame to change it. Marking "
+            "costs nothing — asking for suggestions is what spends a call "
+            "per frame.")
+        if len(ranked) > len(offered):
+            lead += (f" The {len(ranked) - len(offered)} lowest-ranked are "
+                     "not offered here; mark those in the assessment.")
+        self.chooser_lead.setText(lead)
+
+        self.sheet = ContactSheet(
+            offered, self.loader, selectable=True, limit=CHOOSABLE,
+            hint="Click a frame to tick or untick it.")
+        self.sheet.include_only(start)
+        self.sheet.changed.connect(self._recount)
+        self.chooser_holder.addWidget(self.sheet, 1)
+        self._recount()
+        self.chooser_status.setText("")
+        self.faces.setCurrentWidget(self.chooser)
+
+    def show_treatments(self) -> None:
+        self.faces.setCurrentIndex(0)
+
+    def _recount(self) -> None:
+        chosen = len(self.sheet.chosen()) if self.sheet is not None else 0
+        self.mark_button.setText(
+            "Mark no frames" if not chosen else
+            f"Mark {chosen} frame{'' if chosen == 1 else 's'}")
+        self.mark_button.setEnabled(True)
+        self.chooser_back.setVisible(bool(self.photos))
+
+    def apply_marks(self) -> None:
+        """Write the ticks as marks, one frame at a time.
+
+        A frame the store refuses is recorded and named rather than
+        abandoning the rest: nineteen frames marked and one explained beats
+        twenty frames unmarked and one exception.
+        """
+        if self.sheet is None:
+            return
+        wanted = set(self.sheet.chosen())
+        offered = set(self.sheet.selection)
+        state = self.reviews.public_state()
+        entries = state.get("entries", {})
+        already = {
+            photo for photo, entry in entries.items()
+            if isinstance(entry, dict) and entry.get("interesting") is True}
+        changing = sorted(
+            (wanted - already) | ((already & offered) - wanted))
+        if not changing:
+            self.chooser_status.setText(
+                f"{len(wanted)} frames were already marked; nothing changed.")
+            self.refresh()
+            if self.photos:
+                self.show_treatments()
+            return
+
+        refused: list[str] = []
+        for photo in changing:
+            entry = entries.get(photo) if isinstance(
+                entries.get(photo), dict) else {}
+            try:
+                state = self.reviews.update(
+                    photo,
+                    self._tier_of(photo) or "ordinary",
+                    bool(entry.get("edit_raw", False)),
+                    str(entry.get("note", "")),
+                    # A tick is a decision about a frame, not a claim to
+                    # have read its assessment. Whether it was reviewed
+                    # stays whatever the assessment page recorded.
+                    bool(entry.get("reviewed", False)),
+                    state.get("revision"),
+                    photo in wanted)
+                entries = state.get("entries", {})
+            except Exception as exc:                 # noqa: BLE001 - reported
+                refused.append(f"{photo} ({exc})")
+
+        self.refresh()
+        marked = len(self.photos)
+        if refused:
+            self.chooser_status.setText(
+                f"{marked} frames are marked. These could not be: "
+                + "; ".join(refused))
+            return
+        told = (f"{marked} frame{'' if marked == 1 else 's'} marked worth "
+                "developing. Nothing has been spent yet.")
+        if not marked:
+            # Unmarking everything leaves nothing to read on the other
+            # face, so the page stays where the work is.
+            self.chooser_status.setText(
+                "Nothing is marked now, so there is nothing to ask about.")
+            return
+        self.show_treatments()
+        self._report(told)
 
     # --- state ------------------------------------------------------------
 
@@ -262,12 +495,17 @@ class SuggestionsPage(QWidget):
             f"{len(answered)} of {len(self.photos)} marked frames answered"
             if self.photos else "nothing marked to develop")
         self.ask_button.setEnabled(bool(self.photos))
+        self.choose_button.setVisible(bool(self.photos))
         if self.photos:
             target = self.current if self.current in self.photos else self.photos[0]
             self.list.setCurrentRow(self.photos.index(target))
             self.show_photo(target)
         else:
             self._show_nothing()
+            # Nothing marked is the state this page can fix itself, so it
+            # opens on the choice rather than on an instruction to go
+            # somewhere else.
+            self.show_chooser()
 
     def _chose_row(self, row: int) -> None:
         if 0 <= row < len(self.photos):
@@ -330,8 +568,8 @@ class SuggestionsPage(QWidget):
         self._clear()
         empty = QLabel(
             "Suggestions are asked for one frame at a time, for the frames "
-            "you marked as worth developing. Mark some in the assessment "
-            "first.")
+            "marked as worth developing. Choose them here or in the "
+            "assessment; it is the same mark either way.")
         empty.setObjectName("hint")
         empty.setWordWrap(True)
         empty.setFont(theme.body(10))

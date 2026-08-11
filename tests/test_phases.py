@@ -137,12 +137,16 @@ class SuggestionTests(unittest.TestCase):
             marked=None, manifest={})
         self.assertEqual(state(plan, phases.SUGGESTIONS), "ready")
 
-    def test_marking_nothing_blocks_with_the_remedy(self):
+    def test_marking_nothing_opens_anyway_and_says_what_is_missing(self):
+        # The frames are chosen on the page itself, so an empty selection
+        # is a thing to do there rather than a locked door.
         plan = phases.plan(
             project(report_available=True, shortlist_available=True),
             marked=0, manifest={})
-        self.assertEqual(state(plan, phases.SUGGESTIONS), "blocked")
-        self.assertIn("Mark frames", reason(plan, phases.SUGGESTIONS))
+        self.assertEqual(state(plan, phases.SUGGESTIONS), "ready")
+        entry = next(
+            item for item in plan if item["id"] == phases.SUGGESTIONS)
+        self.assertIn("Nothing marked yet", entry["detail"])
 
     def test_asked_rounds_are_counted(self):
         plan = phases.plan(

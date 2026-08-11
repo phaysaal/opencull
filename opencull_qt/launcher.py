@@ -1479,7 +1479,8 @@ class Launcher(QMainWindow):
 
     def _suggestions_page(self, bench: Bench):
         page = SuggestionsPage(
-            bench.shortlist, bench.shortlist_reviews, bench.directions)
+            bench.shortlist, bench.shortlist_reviews, bench.directions,
+            loader=self._loader)
         page.why_wanted.connect(self.explain_frame)
         page.suggested.connect(
             lambda output, wanted: self.suggest_edits(

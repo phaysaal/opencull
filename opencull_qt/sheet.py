@@ -254,6 +254,7 @@ class ContactSheet(QWidget):
     def __init__(self, names: list[str], loader: PreviewLoader,
                  columns: int = COLUMNS, limit: int = LIMIT,
                  selectable: bool = False, opens: bool = False,
+                 hint: str = "Click a frame to leave it out.",
                  parent: QWidget | None = None):
         super().__init__(parent)
         self.setObjectName("page")
@@ -273,10 +274,12 @@ class ContactSheet(QWidget):
             row = QHBoxLayout()
             row.setContentsMargins(0, 0, 0, 2)
             row.setSpacing(8)
-            hint = QLabel("Click a frame to leave it out.")
-            hint.setObjectName("hint")
-            hint.setFont(theme.body(9))
-            row.addWidget(hint)
+            # What a click means depends on what the sheet is for: leaving
+            # a frame out of a run, or picking the few worth paying for.
+            note = QLabel(hint)
+            note.setObjectName("hint")
+            note.setFont(theme.body(9))
+            row.addWidget(note)
             row.addStretch(1)
             for label, included in (("Tick all", True), ("Untick all", False)):
                 button = QPushButton(label)
@@ -343,7 +346,12 @@ class ContactSheet(QWidget):
         """Deal the tiles the width the window actually has."""
         if not self.names:
             return
-        available = self.scroll.viewport().width()
+        margins = self.grid.contentsMargins()
+        # The grid's own margins are not width the tiles can use. Dealing
+        # them out anyway overflows the viewport by exactly that much, and
+        # a sheet that fits is shown with a scrollbar it does not need.
+        available = (self.scroll.viewport().width()
+                     - margins.left() - margins.right())
         if available <= 0:
             return
         columns, tile = self.sheet_geometry(
@@ -403,6 +411,22 @@ class ContactSheet(QWidget):
         else:
             self._left.add(name)
         self.tiles[name].set_included(name not in self._left)
+        self.changed.emit()
+
+    def include_only(self, names) -> None:
+        """Start from a chosen few rather than from everything.
+
+        The sheet's own default is everything-in-unless-clicked, which is
+        right for a run over a folder. A sheet that proposes a subset --
+        the frames an assessment ranked highest, say -- needs to say so on
+        the tiles rather than in a sentence above them.
+        """
+        if not self.selectable:
+            return
+        keep = set(names)
+        self._left = {name for name in self.selection if name not in keep}
+        for name, tile in self.tiles.items():
+            tile.set_included(name not in self._left)
         self.changed.emit()
 
     def set_all(self, included: bool) -> None:

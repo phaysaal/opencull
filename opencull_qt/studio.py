@@ -65,12 +65,9 @@ class StudioPage(QWidget):
         lead.setMaximumWidth(760)
         column.addWidget(lead)
 
-        # --- profiles ---------------------------------------------------
-        profiles_title = QLabel("PERSONAL PROFILES")
-        profiles_title.setObjectName("bandTitle")
-        profiles_title.setFont(theme.display(8))
-        column.addWidget(profiles_title)
-
+        # --- personal style ----------------------------------------------
+        # The panel carries its own band title, in the same hand as the
+        # others here, so a second one above it would only say it twice.
         self.panel = StylePanel(
             style_profiles, jobs, providers, closable=False)
         column.addWidget(self.panel)

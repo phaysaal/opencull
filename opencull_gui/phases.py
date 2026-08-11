@@ -21,10 +21,9 @@ particular is never gated on the AI: a calibrated baseline can be rendered
 from any frame, and a photographer who wants no suggestions should not have
 to buy them.
 
-The personal profile is never blocked at all. It belongs to the
-photographer rather than to the shoot, it can be built before any folder is
-opened, and it appears in the order only because it is what the suggestion
-phase reads.
+The personal style is never blocked at all. It belongs to the photographer
+rather than to the shoot, it can be built before any folder is opened, and
+it appears in the order only because it is what the AI editing phase reads.
 """
 
 from __future__ import annotations
@@ -49,8 +48,8 @@ ORDER = (CULL, ASSESSMENT, PROFILE, SUGGESTIONS, DEVELOPMENT, FINE_TUNING,
 TITLES = {
     CULL: "Cull",
     ASSESSMENT: "Assessment",
-    PROFILE: "Personal profile",
-    SUGGESTIONS: "Editing suggestions",
+    PROFILE: "Personal style",
+    SUGGESTIONS: "AI editing",
     DEVELOPMENT: "Development",
     FINE_TUNING: "Advanced fine tuning",
     EXPORT: "Export",
@@ -62,7 +61,7 @@ PURPOSE = {
     CULL: "Narrow the folder to the frames worth keeping.",
     ASSESSMENT: "Have the keepers judged, then decide which are worth developing.",
     PROFILE: "Read your own photographs to learn how you edit.",
-    SUGGESTIONS: "Ask for treatments for the frames you marked.",
+    SUGGESTIONS: "Have a model propose how to edit the frames you choose.",
     DEVELOPMENT: "Render a treatment and compare it against the frame as shot.",
     FINE_TUNING: "Move the numbers a treatment compiled into, within their bounds.",
     EXPORT: "Write the finished rendering where it is going.",
@@ -207,14 +206,17 @@ def plan(
     elif not assessed:
         phases.append(entry(
             SUGGESTIONS, "blocked",
-            "Suggestions are written against an assessment. Assess first."))
-    elif marked == 0:
-        phases.append(entry(
-            SUGGESTIONS, "blocked",
-            "Nothing is marked as worth developing. Mark frames in the "
-            "assessment first."))
+            "Editing suggestions are written against an assessment. "
+            "Assess first."))
     else:
-        phases.append(entry(SUGGESTIONS, "ready"))
+        # Nothing marked is not a locked door. The assessment ranked these
+        # frames, so the phase has its input; which of them to pay for is a
+        # choice made on the way in, and the page itself is where it is
+        # made.
+        phases.append(entry(
+            SUGGESTIONS, "ready",
+            detail=f"{marked} frames marked to develop." if marked else
+            "Nothing marked yet. Choose the frames to treat on the page."))
 
     # Never gated on the AI: the calibrated baseline is available for any
     # frame, and asking for it should not require paying for a cull first.
@@ -235,7 +237,7 @@ def plan(
         phases.append(entry(
             FINE_TUNING, "blocked",
             "Fine tuning moves the numbers a treatment compiled into, so "
-            "there has to be a treatment. Ask for editing suggestions first."))
+            "there has to be a treatment. Ask for AI editing first."))
 
     if exports:
         phases.append(entry(

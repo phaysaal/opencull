@@ -23,10 +23,16 @@ from opencull_gui.project import ensure_project_layout  # noqa: E402
 from opencull_gui.report import load_report  # noqa: E402
 from opencull_gui.shortlist import load_shortlist  # noqa: E402
 from opencull_gui.shortlist_reviews import (  # noqa: E402
+    ShortlistReviewError,
     ShortlistReviewStore,
     default_shortlist_review_path,
 )
-from tests.test_qt_develop import NAMES, assess_and_suggest, build_shoot  # noqa: E402
+from opencull_qt.previews import PreviewLoader  # noqa: E402
+from tests.test_qt_develop import (  # noqa: E402
+    NAMES,
+    assess_and_suggest,
+    build_shoot,
+)
 
 
 @unittest.skipUnless(QApplication is not None, "PySide6 is not installed")
@@ -73,7 +79,9 @@ class SuggestionsPageTests(unittest.TestCase):
                 reviews.public_state()["revision"], interesting=True)
         directions = DirectionsIndex(
             shortlist, reviews, ensure_project_layout(self.photos)["Recipes"])
-        page = SuggestionsPage(shortlist, reviews, directions)
+        loader = PreviewLoader(self.photos)
+        page = SuggestionsPage(shortlist, reviews, directions, loader=loader)
+        self.addCleanup(loader.shutdown)
         self.addCleanup(page.deleteLater)
         return page
 
@@ -117,10 +125,73 @@ class SuggestionsPageTests(unittest.TestCase):
         page = self.page(marked=(NAMES[0], NAMES[1]), answered=(NAMES[0],))
         self.assertIn("1 of 2 marked frames answered", page.progress.text())
 
-    def test_nothing_marked_says_where_to_mark(self):
+    def test_nothing_marked_opens_the_chooser_rather_than_a_dead_end(self):
         page = self.page(marked=())
-        self.assertIn("Mark some in the assessment", self.text(page))
         self.assertFalse(page.ask_button.isEnabled())
+        # The page can fix this state itself, so it opens on the choice.
+        self.assertIs(page.faces.currentWidget(), page.chooser)
+        self.assertIsNotNone(page.sheet)
+        self.assertEqual(
+            set(page.sheet.selection), set(page.shortlist.entry_by_photo))
+
+    def test_the_chooser_proposes_strong_and_above_and_no_further(self):
+        page = self.page(marked=())
+        strong = {
+            photo for photo, entry in page.shortlist.entry_by_photo.items()
+            if str(entry.get("tier")) in {"strong", "exceptional"}}
+        self.assertEqual(set(page.sheet.chosen()), strong)
+
+    def test_ticking_frames_here_writes_the_assessments_own_mark(self):
+        page = self.page(marked=())
+        page.sheet.include_only([NAMES[0], NAMES[1]])
+        page.apply_marks()
+
+        marks = page.reviews.public_state()["entries"]
+        self.assertTrue(marks[NAMES[0]]["interesting"])
+        self.assertTrue(marks[NAMES[1]]["interesting"])
+        self.assertEqual(page.photos, sorted([NAMES[0], NAMES[1]]))
+        self.assertTrue(page.ask_button.isEnabled())
+        self.assertIs(page.faces.currentWidget(), page.faces.widget(0))
+
+    def test_a_mark_is_not_a_claim_to_have_reviewed_the_frame(self):
+        page = self.page(marked=())
+        page.sheet.include_only([NAMES[0]])
+        page.apply_marks()
+        self.assertFalse(
+            page.reviews.public_state()["entries"][NAMES[0]]["reviewed"])
+
+    def test_unmarking_everything_stays_where_the_work_is(self):
+        page = self.page(marked=(NAMES[0],))
+        page.show_chooser()
+        page.sheet.set_all(False)
+        page.apply_marks()
+        self.assertEqual(page.photos, [])
+        self.assertIs(page.faces.currentWidget(), page.chooser)
+        self.assertIn("nothing to ask about", page.chooser_status.text())
+
+    def test_unticking_a_marked_frame_takes_the_mark_off(self):
+        page = self.page(marked=(NAMES[0], NAMES[1]))
+        page.show_chooser()
+        self.assertEqual(set(page.sheet.chosen()), {NAMES[0], NAMES[1]})
+        page.sheet.include_only([NAMES[0]])
+        page.apply_marks()
+        self.assertEqual(page.photos, [NAMES[0]])
+
+    def test_a_refused_frame_is_named_and_the_rest_are_still_marked(self):
+        page = self.page(marked=())
+        page.sheet.include_only([NAMES[0], NAMES[1]])
+        real = page.reviews.update
+
+        def refuse(photo, *arguments, **keywords):
+            if photo == NAMES[1]:
+                raise ShortlistReviewError("no such frame")
+            return real(photo, *arguments, **keywords)
+
+        with mock.patch.object(page.reviews, "update", side_effect=refuse):
+            page.apply_marks()
+        self.assertEqual(page.photos, [NAMES[0]])
+        self.assertIn(NAMES[1], page.chooser_status.text())
+        self.assertIn("no such frame", page.chooser_status.text())
 
 
 @unittest.skipUnless(QApplication is not None, "PySide6 is not installed")
