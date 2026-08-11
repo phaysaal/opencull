@@ -72,6 +72,34 @@ AXIS_LABELS = {
 }
 
 
+class _WrappedReading(QLabel):
+    """A wrapped label that admits how tall its wrapping makes it.
+
+    A plain word-wrapped QLabel reports the height of one line however
+    many it draws, so anything sized from it reserves one line and cuts
+    the rest off. Everything above this label -- the axis, the band,
+    the page -- is sized from it, so it has to tell the truth.
+    """
+
+    def __init__(self, text: str):
+        super().__init__(text)
+        self.setWordWrap(True)
+        policy = QSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+        policy.setHeightForWidth(True)
+        self.setSizePolicy(policy)
+
+    def sizeHint(self):  # noqa: N802 - Qt naming
+        hint = super().sizeHint()
+        width = self.width() or hint.width()
+        return QSize(hint.width(), self.heightForWidth(width))
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        super().resizeEvent(event)
+        self.setMinimumHeight(self.heightForWidth(self.width()))
+        self.updateGeometry()
+
+
 class Axis(QWidget):
     """One line of the assessment: what was looked at, and what was seen."""
 
@@ -80,15 +108,16 @@ class Axis(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(2)
+        self.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
 
         heading = QLabel(label.upper())
         heading.setObjectName("axisName")
         heading.setFont(theme.display(7))
         layout.addWidget(heading)
 
-        body = QLabel(text)
+        body = _WrappedReading(text)
         body.setObjectName("axisBody")
-        body.setWordWrap(True)
         body.setFont(theme.body(9))
         layout.addWidget(body)
 
@@ -217,8 +246,12 @@ class ShortlistPage(QWidget):
         # A band beneath the photograph rather than a column beside it:
         # the frame is what is being judged, so it gets the room, and
         # the reading is read across rather than down a narrow gutter.
-        panel.setMinimumHeight(170)
-        panel.setMaximumHeight(260)
+        # The band takes the height its own readings need -- a reading
+        # cut off at the fold is not a reading -- and the photograph
+        # keeps whatever is left, which on any usual window is most of
+        # it.
+        panel.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         judgement = QVBoxLayout(panel)
         judgement.setContentsMargins(18, 12, 12, 12)
         judgement.setSpacing(6)
@@ -246,10 +279,18 @@ class ShortlistPage(QWidget):
         scroll = QScrollArea()
         scroll.setObjectName("controlScroll")
         scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
         # Without this the holder grows to its widest child and every wrapped
         # paragraph then lays out at that width, off screen.
         scroll.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        # The band is sized by what it holds, so the readings are shown
+        # whole instead of scrolled; only a window too short for both
+        # falls back to scrolling.
+        scroll.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setSizeAdjustPolicy(
+            QScrollArea.SizeAdjustPolicy.AdjustToContents)
         holder = QWidget()
         holder.setObjectName("controls")
         # Ten readings across a full-width band read as columns, not as
@@ -260,6 +301,8 @@ class ShortlistPage(QWidget):
         self.axes.setVerticalSpacing(8)
         scroll.setWidget(holder)
         judgement.addWidget(scroll, 1)
+        self._reading_scroll = scroll
+        self._reading_holder = holder
 
         body.addWidget(stage, 1)
         body.addWidget(panel)
@@ -810,6 +853,7 @@ class ShortlistPage(QWidget):
                     Axis(label, text), index % rows, index // rows)
             for column in range(columns):
                 self.axes.setColumnStretch(column, 1)
+        self._fit_reading()
 
         mark = self._state().get("entries", {}).get(photo, {})
         self.interesting.setChecked(bool(mark.get("interesting")))
@@ -822,6 +866,26 @@ class ShortlistPage(QWidget):
             self.list.setCurrentRow(row)
             self.list.blockSignals(False)
         self._report("")
+
+    def _fit_reading(self) -> None:
+        """Let the band be as tall as the readings it holds.
+
+        A reading cut off at the fold is not a reading. The photograph
+        keeps whatever height is left, and only a window too short for
+        both falls back to scrolling.
+        """
+        holder = getattr(self, "_reading_holder", None)
+        scroll = getattr(self, "_reading_scroll", None)
+        if holder is None or scroll is None:
+            return
+        holder.adjustSize()
+        wanted = max(holder.sizeHint().height(), self.axes.sizeHint().height())
+        ceiling = max(180, int(self.height() * 0.45))
+        scroll.setMinimumHeight(min(wanted + 6, ceiling))
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        super().resizeEvent(event)
+        self._fit_reading()
 
     def _show_verdict(self) -> None:
         """What the assessment said, and what you said, in that order."""

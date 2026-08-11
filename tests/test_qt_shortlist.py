@@ -212,6 +212,21 @@ class ShortlistPageTests(unittest.TestCase):
              for row in range(page.list.count())],
             NAMES)
 
+    def test_the_band_grows_to_hold_every_reading(self):
+        """A reading cut off at the fold is not a reading."""
+        page = self.page()
+        page.resize(1250, 820)
+        QApplication.processEvents()
+        page.show_entry("A.JPG")
+        QApplication.processEvents()
+        page._fit_reading()
+        holder = page._reading_holder
+        self.assertGreaterEqual(
+            page._reading_scroll.minimumHeight(),
+            holder.sizeHint().height())
+        # Every axis the model wrote is laid out, none dropped.
+        self.assertEqual(page.axes.count(), len(ASSESSMENT_FIELDS))
+
     def test_the_whole_assessment_is_shown_not_just_the_score(self):
         page = self.page()
         shown = "\n".join(
