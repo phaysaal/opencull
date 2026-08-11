@@ -254,6 +254,34 @@ class StyleDialogTests(unittest.TestCase):
         ):
             dialog.add_examples()
 
+    def test_a_profile_is_named_for_the_folder_it_was_read_from(self):
+        from opencull_gui.style import StyleProfileStore
+
+        self.assertEqual(
+            StyleProfileStore.group_name(
+                ["/p/Alps Tour/a.jpg", "/p/Alps Tour/b.jpg"]), "Alps Tour")
+        # Gathered from several folders, it says so rather than choosing.
+        self.assertEqual(
+            StyleProfileStore.group_name(["/p/one/a.jpg", "/p/two/b.jpg"]),
+            "2 folders")
+        self.assertEqual(StyleProfileStore.group_name([]), "")
+
+    def test_an_old_profile_shows_the_photographs_behind_it(self):
+        dialog = self.dialog()
+        write_profile(self.results / "personal-style-1.json")
+        dialog.refresh()
+        self.assertTrue(dialog.available)
+
+        dialog.show_group(0)
+
+        # Its own group replaces whatever was staged, and the button
+        # offers to refine rather than to start again.
+        self.assertIn("PHOTOGRAPHS BEHIND", dialog.examples_title.text())
+        self.assertEqual(dialog.build_button.text(), "Refine this profile")
+        # Adding photographs of your own leaves that mode behind.
+        self.stage(dialog, [self.root / "a.jpg"])
+        self.assertEqual(dialog.build_button.text(), "Extract profile")
+
     def test_chosen_photographs_are_staged_and_shown_before_any_run(self):
         dialog = self.dialog()
         self.stage(dialog, [self.root / "a.jpg", self.root / "b.jpg"])

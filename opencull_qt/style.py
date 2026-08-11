@@ -224,6 +224,7 @@ class StylePanel(QWidget):
         self.examples_scroll.setWidget(examples_holder)
         layout.addWidget(self.examples_scroll, 1)
         self.examples: list[Path] = []
+        self.viewing = ""
         self.tiles: dict[str, ExampleTile] = {}
         self._pending_thumbnails: list[str] = []
 
@@ -381,11 +382,19 @@ class StylePanel(QWidget):
             confidence = (
                 f"   ·   {item['confidence']:.0%} confident"
                 if item.get("confidence") is not None else "")
+            group = str(item.get("group") or "")
+            source = (
+                f"   ·   from {group}"
+                if group and group != item["name"] else "")
             entry = QListWidgetItem(
                 f" {mark}  {item['name']}   ·   {item['examples']} "
-                f"photograph{'' if item['examples'] == 1 else 's'}{confidence}")
+                f"photograph{'' if item['examples'] == 1 else 's'}"
+                f"{source}{confidence}")
             entry.setData(Qt.ItemDataRole.UserRole, item["path"])
-            entry.setToolTip(short_path(item["path"]))
+            entry.setToolTip(
+                f"{item.get('model_name') or item['name']}\n"
+                f"{short_path(item['path'])}\n"
+                "Click to see the photographs it was read from.")
             entry.setSizeHint(QSize(0, PROFILE_ROW))
             self.profiles.addItem(entry)
         self.profiles.blockSignals(False)
@@ -444,7 +453,29 @@ class StylePanel(QWidget):
             self.body.addWidget(body)
         self.body.addStretch(1)
 
+    def show_group(self, row: int) -> None:
+        """The photographs an existing profile was read from."""
+        if not (0 <= row < len(self.available)):
+            return
+        item = self.available[row]
+        paths = [Path(value) for value in item.get("example_paths") or []]
+        missing = [path for path in paths if not path.is_file()]
+        self.viewing = item["path"]
+        self.examples = [path for path in paths if path.is_file()]
+        self.show_examples()
+        self.examples_title.setText(
+            f"PHOTOGRAPHS BEHIND {str(item['name']).upper()}")
+        self.examples_hint.setText(
+            f"{len(paths)} photograph{'' if len(paths) == 1 else 's'} read "
+            f"into this profile"
+            + (f", {len(missing)} no longer on disk" if missing else "")
+            + ". Add more to refine it, or Clear to start a set of your "
+            "own.")
+        self.build_button.setText("Refine this profile")
+        self.build_button.setEnabled(bool(self.examples))
+
     def _chose(self, row: int) -> None:
+        self.show_group(row)
         if not (0 <= row < len(self.available)):
             return
         try:
@@ -515,6 +546,8 @@ class StylePanel(QWidget):
             self.examples.append(path)
             known.add(str(path))
             added += 1
+        self.viewing = ""
+        self.build_button.setText("Extract profile")
         if capped:
             # Said where the cap bites, rather than after a run has
             # quietly read a subset of what was chosen.
@@ -528,6 +561,8 @@ class StylePanel(QWidget):
 
     def clear_examples(self) -> None:
         self.examples = []
+        self.viewing = ""
+        self.build_button.setText("Extract profile")
         self.show_examples()
 
     def drop_example(self, path: str) -> None:

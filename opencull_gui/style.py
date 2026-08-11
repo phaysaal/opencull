@@ -195,6 +195,30 @@ class StyleProfileStore:
 
     # --- discovery ------------------------------------------------------
 
+    @staticmethod
+    def examples_of(value: dict[str, Any]) -> list[str]:
+        """The photographs a profile was read from."""
+        return [
+            str(item.get("path"))
+            for item in value.get("examples") or []
+            if isinstance(item, dict) and item.get("path")
+        ]
+
+    @staticmethod
+    def group_name(examples: list[str]) -> str:
+        """What to call a group of photographs before anyone names it.
+
+        The folder they came from, because that is the name the
+        photographer already gave that body of work. Where they were
+        gathered from several folders, say so rather than picking one.
+        """
+        folders = {Path(item).parent for item in examples if item}
+        if not folders:
+            return ""
+        if len(folders) == 1:
+            return next(iter(folders)).name
+        return f"{len(folders)} folders"
+
     def available(self) -> list[dict[str, Any]]:
         """Every style profile Darkimiya has produced, newest first."""
         found: list[dict[str, Any]] = []
@@ -207,10 +231,21 @@ class StyleProfileStore:
                 continue
             summary = profile_summary(value)
             given = self.name_for(path)
+            examples = self.examples_of(value)
+            group = self.group_name(examples)
             found.append({
                 **summary,
-                # The photographer's own name for it wins over the file's.
-                **({"name": given} if given else {}),
+                # The photographer's own name wins; failing that the
+                # folder the photographs came from, which is a name they
+                # already chose, ahead of the one a model invented.
+                **({"name": given} if given
+                   else {"name": group} if group else {}),
+                "given_name": given,
+                "model_name": summary.get("name", ""),
+                # `examples` is the count the summary already reports;
+                # the paths are their own field rather than shadowing it.
+                "example_paths": examples,
+                "group": group,
                 "path": str(path),
                 "modified": path.stat().st_mtime_ns})
         found.sort(key=lambda item: item["modified"], reverse=True)
