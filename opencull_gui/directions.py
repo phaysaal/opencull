@@ -22,6 +22,7 @@ import os
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 DIRECTIONS_FORMAT = "opencull-edit-directions-v1"
 
@@ -30,6 +31,40 @@ PERSONAL_FIELDS = (
     "personal_title", "personal_intent", "personal_instructions",
     "personal_recipe",
 )
+
+
+# What a panel of independent judges said about one frame's directions.
+# Three of them read the treatments against the photograph and two must
+# agree; a set they refuse is kept and offered anyway, because a refused
+# judgement is evidence about the treatments rather than grounds for
+# hiding them. The photographer is told which is which and decides.
+VERIFIED = "verified"
+UNVERIFIED = "unverified"
+UNREADABLE = "unreadable"
+
+
+def verdict_of(entry: Any) -> str:
+    """Whether a frame's directions passed the quality panel.
+
+    An empty answer is not the same as a refused one: the first has
+    nothing to show and the second has treatments a photographer may
+    still want. Directions written before there was a panel say nothing,
+    and claiming either way about them would be an invention.
+    """
+    if not isinstance(entry, dict):
+        return ""
+    validation = entry.get("kimiya_validation")
+    if not isinstance(validation, dict):
+        return ""
+    status = str(validation.get("status") or "")
+    if status == "accepted":
+        return VERIFIED
+    if status != "rejected":
+        return ""
+    readable = any(
+        str(entry.get(f"{style}_recipe") or "").strip()
+        for style in ("standard", "signature", "creative", "personal"))
+    return UNVERIFIED if readable else UNREADABLE
 
 
 def _atomic_json(path: Path, value: dict) -> None:

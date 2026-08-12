@@ -508,3 +508,47 @@ class ProjectCard(QFrame):
 
         body.addStretch(1)
         layout.addLayout(body)
+
+
+class Stamp(QLabel):
+    """Whether a set of directions passed the panel that read them.
+
+    Three independent judges read the treatments against the photograph
+    and two must agree. A set they refused is still shown and still
+    renders -- it is a judgement about the treatments, not a reason to
+    hide them -- so the stamp says which it is rather than the interface
+    quietly dropping one and presenting the other as the only answer.
+    """
+
+    WORDS = {
+        "verified": ("✓  VERIFIED",
+                     "Kimiya's independent quality panel read these "
+                     "directions against the photograph and accepted them."),
+        "unverified": ("!  NOT VERIFIED",
+                       "Kimiya's independent quality panel read these "
+                       "directions against the photograph and refused them. "
+                       "They still render; ask again for this frame to "
+                       "replace them."),
+        "unreadable": ("✕  NO ANSWER",
+                       "The model's answer for this frame could not be read "
+                       "as editing directions. Nothing was written for it; "
+                       "ask again to buy another answer."),
+    }
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__("", parent)
+        self.setObjectName("stamp")
+        self.setFont(theme.display(7))
+        self.set_verdict("")
+
+    def set_verdict(self, verdict: str) -> None:
+        words = self.WORDS.get(str(verdict or ""))
+        # Directions written before there was a panel carry no verdict,
+        # and inventing one for them would be worse than saying nothing.
+        self.setVisible(bool(words))
+        self.setText(words[0] if words else "")
+        self.setToolTip(words[1] if words else "")
+        self.setProperty("state", str(verdict or ""))
+        self.style().unpolish(self)
+        self.style().polish(self)
+

@@ -216,6 +216,47 @@ class AskingTests(SuggestionsPageTests):
             sorted(plan[0]["photos"]), sorted([NAMES[0], NAMES[1]]))
         self.assertEqual(asked, [sorted([NAMES[0], NAMES[1]])])
 
+    def test_a_refused_set_is_shown_and_stamped_rather_than_hidden(self):
+        """The panel's verdict is information, not a reason to hide work."""
+        page = self.page(marked=(NAMES[0],))
+        entry = page.entry_for(NAMES[0])
+        self.assertTrue(entry, "the fixture frame should carry directions")
+
+        page.show_photo(NAMES[0])
+        self.assertEqual(page.stamp.text(), "")
+
+        for status, expected in (("accepted", "VERIFIED"),
+                                 ("rejected", "NOT VERIFIED")):
+            stamped = dict(entry, kimiya_validation={"status": status})
+            with mock.patch.object(page, "entry_for", return_value=stamped):
+                page.show_photo(NAMES[0])
+            self.assertIn(expected, page.stamp.text())
+            self.assertTrue(page.stamp.isVisibleTo(page))
+            # The treatments are on screen either way.
+            shown = self.text(page)
+            self.assertIn("Standard treatment", shown)
+
+    def test_an_unreadable_answer_says_so_rather_than_claiming_refusal(self):
+        page = self.page(marked=(NAMES[0],))
+        empty = {"photo": NAMES[0],
+                 "kimiya_validation": {"status": "rejected"}}
+        with mock.patch.object(page, "entry_for", return_value=empty):
+            page.show_photo(NAMES[0])
+        self.assertIn("NO ANSWER", page.stamp.text())
+
+    def test_the_rail_marks_a_refused_frame_so_it_can_be_found(self):
+        page = self.page(marked=(NAMES[0], NAMES[1]))
+        entry = page.entry_for(NAMES[0])
+        refused = dict(entry, kimiya_validation={"status": "rejected"})
+
+        with mock.patch.object(
+                page, "entry_for",
+                side_effect=lambda photo: refused if photo == NAMES[0] else {}):
+            page.refresh()
+        marks = [page.list.item(row).text().strip()[0]
+                 for row in range(page.list.count())]
+        self.assertIn("!", marks)
+
     def test_the_scene_grouping_is_shown_before_it_is_agreed_to(self):
         """A saving nobody can inspect is a treatment applied on trust."""
         from opencull_gui import scenes

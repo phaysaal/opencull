@@ -301,6 +301,17 @@ QLabel#paneHint {{ color: {FAINT}; }}
 /* Transparent, so the space a photograph does not fill reads as the frame
    around it rather than as a second empty box inside it. */
 QLabel#paneImage {{ background: transparent; color: {FAINT}; }}
+/* A stamp, not a sentence: it is read at a glance beside the frame it
+   is about, so it carries its own outline rather than borrowing the
+   panel's background. */
+QLabel#stamp {{
+    color: {MUTED}; border: 1px solid {EDGE};
+    border-radius: 6px; padding: 3px 8px;
+}}
+QLabel#stamp[state="verified"] {{ color: {FIXED}; border-color: #2E5C45; }}
+QLabel#stamp[state="unverified"] {{ color: {ALARM}; border-color: #6B3025; }}
+QLabel#stamp[state="unreadable"] {{ color: {FAINT}; border-color: {EDGE}; }}
+
 QLabel#verdict {{ color: {MUTED}; }}
 QLabel#verdict[tone="ok"] {{ color: {FIXED}; }}
 QLabel#verdict[tone="alarm"] {{ color: {ALARM}; }}

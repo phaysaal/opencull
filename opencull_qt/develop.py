@@ -46,10 +46,11 @@ from opencull_gui.development import (
     DevelopmentWorkspace,
     suggested_filename,
 )
+from opencull_gui.directions import verdict_of
 
 from . import theme
 from .previews import PreviewLoader, plain_icon, scaled
-from .widgets import short_path, workspace_title
+from .widgets import Stamp, short_path, workspace_title
 
 # A proof, not a delivery. Big enough to judge a treatment on a laptop
 # screen, small enough that a demosaic finishes while you are still looking
@@ -824,6 +825,12 @@ class DevelopPage(QWidget):
         head.addWidget(why)
         layout.addLayout(head)
 
+        # Whether a panel accepted these treatments belongs beside them,
+        # not in a report somewhere: it is the difference between an edit
+        # somebody vouched for and one nobody did.
+        self.stamp = Stamp()
+        layout.addWidget(self.stamp)
+
         self.treatments = QListWidget()
         self.treatments.setObjectName("treatmentList")
         self.treatments.setIconSize(QSize(112, 72))
@@ -1001,7 +1008,18 @@ class DevelopPage(QWidget):
 
     # --- treatments ------------------------------------------------------
 
+    def _directions_entry(self, photo: str) -> dict:
+        try:
+            payload = self.workspace.directions()
+        except Exception:                            # noqa: BLE001 - absent
+            return {}
+        entries = (payload.get("directions") or {}).get("entries", [])
+        return next(
+            (item for item in entries
+             if isinstance(item, dict) and item.get("photo") == photo), {})
+
     def _fill_treatments(self) -> None:
+        self.stamp.set_verdict(verdict_of(self._directions_entry(self.current)))
         try:
             available = self.workspace.treatments(self.current)
         except Exception as exc:

@@ -11,7 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from opencull_gui.directions import DirectionsIndex  # noqa: E402
+from opencull_gui.directions import DirectionsIndex, verdict_of  # noqa: E402
 
 PERSONAL = {
     "personal_title": "Personal", "personal_intent": "as you would",
@@ -198,3 +198,34 @@ class DirectionsTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class VerdictTests(unittest.TestCase):
+    """What a panel said about a frame, kept apart from what it wrote."""
+
+    def entry(self, status, recipes=True):
+        value = {"photo": "A.JPG"}
+        if recipes:
+            value["standard_recipe"] = json.dumps({"global_exposure": ["+0.2"]})
+        if status:
+            value["kimiya_validation"] = {"status": status, "system": "kimiya"}
+        return value
+
+    def test_an_accepted_set_is_verified(self):
+        self.assertEqual(verdict_of(self.entry("accepted")), "verified")
+
+    def test_a_refused_set_is_unverified_but_still_has_its_treatments(self):
+        # Refused is a judgement about the treatments, not their absence:
+        # they still render, so the page still shows them.
+        entry = self.entry("rejected")
+        self.assertEqual(verdict_of(entry), "unverified")
+        self.assertTrue(entry["standard_recipe"])
+
+    def test_an_answer_that_could_not_be_read_is_neither(self):
+        self.assertEqual(
+            verdict_of(self.entry("rejected", recipes=False)), "unreadable")
+
+    def test_directions_written_before_there_was_a_panel_claim_nothing(self):
+        self.assertEqual(verdict_of(self.entry("")), "")
+        self.assertEqual(verdict_of({}), "")
+        self.assertEqual(verdict_of(None), "")

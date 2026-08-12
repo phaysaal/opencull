@@ -43,12 +43,14 @@ from PySide6.QtWidgets import (
 )
 
 from opencull_gui.development import BUILTIN_STYLES
+from opencull_gui.directions import verdict_of
 from opencull_gui.scenes import capture_time, photos_root_of
 from opencull_gui.shortlist import settled_order, tier_rank
 
 from . import theme
 from .previews import scaled
 from .sheet import ContactSheet
+from .widgets import Stamp
 
 PHOTO_ROW = 30
 
@@ -210,6 +212,8 @@ class SuggestionsPage(QWidget):
         self.heading.setObjectName("clusterTitle")
         self.heading.setFont(theme.display(17))
         head.addWidget(self.heading)
+        self.stamp = Stamp()
+        head.addWidget(self.stamp)
         why = QPushButton("Why?")
         why.setObjectName("ghost")
         why.setFont(theme.body(9))
@@ -513,7 +517,10 @@ class SuggestionsPage(QWidget):
         self.list.blockSignals(True)
         self.list.clear()
         for photo in self.photos:
-            mark = "✓" if photo in answered else " "
+            verdict = verdict_of(self.entry_for(photo))
+            mark = ("!" if verdict == "unverified"
+                    else "✕" if verdict == "unreadable"
+                    else "✓" if photo in answered else " ")
             item = QListWidgetItem(f" {mark}  {photo}")
             item.setSizeHint(QSize(0, PHOTO_ROW))
             self.list.addItem(item)
@@ -542,6 +549,7 @@ class SuggestionsPage(QWidget):
         self.current = photo
         self.heading.setText(photo)
         entry = self.entry_for(photo)
+        self.stamp.set_verdict(verdict_of(entry))
         self._clear()
         if not entry:
             waiting = QLabel(
