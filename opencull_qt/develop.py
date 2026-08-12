@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QListWidget,
     QListWidgetItem,
+    QProgressBar,
     QPushButton,
     QSizePolicy,
     QVBoxLayout,
@@ -154,12 +155,14 @@ class Exporter(QObject):
 
     done = Signal(str, str, str)
     failed = Signal(str, str)
+    progressed = Signal(int, int)         # delivered, asked for
 
     def __init__(self, workspace: DevelopmentWorkspace,
                  parent: QObject | None = None):
         super().__init__(parent)
         self.workspace = workspace
         self.pending = 0
+        self.asked = 0
         self._signals = _ExportSignals()
         self._signals.done.connect(self._finished)
         self._signals.failed.connect(self._failed)
@@ -169,17 +172,25 @@ class Exporter(QObject):
     def export(self, photo: str, treatment: str, engine: str, demosaic: str,
                destination: str) -> None:
         self.pending += 1
+        self.asked += 1
+        self.progressed.emit(self.asked - self.pending, self.asked)
         self._pool.start(_ExportJob(
             self.workspace, photo, treatment, engine, demosaic, destination,
             self._signals))
 
     def _finished(self, photo: str, requested: str, written: str) -> None:
-        self.pending = max(0, self.pending - 1)
+        self._settle()
         self.done.emit(photo, requested, written)
 
     def _failed(self, photo: str, reason: str) -> None:
-        self.pending = max(0, self.pending - 1)
+        self._settle()
         self.failed.emit(photo, reason)
+
+    def _settle(self) -> None:
+        self.pending = max(0, self.pending - 1)
+        self.progressed.emit(self.asked - self.pending, self.asked)
+        if self.pending == 0:
+            self.asked = 0
 
     def shutdown(self) -> None:
         self._pool.clear()
@@ -676,6 +687,7 @@ class DevelopPage(QWidget):
         self.previews: dict[tuple[str, str], QPixmap] = {}
         self.exporter = Exporter(workspace, self)
         self.exporter.done.connect(self._exported)
+        self.exporter.progressed.connect(self._delivery_progress)
         self.exporter.failed.connect(self._export_failed)
         self.verifier = Verifier(workspace, self)
         self.verifier.ready.connect(self._verification_ready)
@@ -898,7 +910,40 @@ class DevelopPage(QWidget):
             "it would, without losing the subject.")
         self.verify_button.clicked.connect(self.verify_current)
         layout.addWidget(self.verify_button)
+
+        # A full-size render takes a minute and a half of somebody's
+        # evening. A disabled button says only that it is unavailable.
+        self.delivery_meter = QProgressBar()
+        self.delivery_meter.setRange(0, 100)
+        self.delivery_meter.setTextVisible(False)
+        self.delivery_meter.setFixedHeight(4)
+        self.delivery_meter.hide()
+        layout.addWidget(self.delivery_meter)
+        self.delivery_note = QLabel("")
+        self.delivery_note.setObjectName("hint")
+        self.delivery_note.setWordWrap(True)
+        self.delivery_note.setFont(theme.body(9))
+        self.delivery_note.hide()
+        layout.addWidget(self.delivery_note)
         return panel
+
+    def _delivery_progress(self, done: int, total: int) -> None:
+        """How far through the batch, while it is still being made."""
+        running = self.exporter.pending > 0
+        self.delivery_meter.setVisible(running)
+        self.delivery_note.setVisible(running)
+        if not running:
+            return
+        # The one being rendered now is the one after those finished.
+        self.delivery_meter.setRange(0, 0 if total <= 1 else 100)
+        if total > 1:
+            self.delivery_meter.setValue(round(100 * done / total))
+        self.delivery_note.setText(
+            f"Rendering {done + 1} of {total} at full size, then writing "
+            "it out. About a minute and a half each; you can keep looking "
+            "at other frames." if total > 1 else
+            "Rendering at full size, then writing it out. About a minute "
+            "and a half; you can keep looking at other frames.")
 
     # --- photographs -----------------------------------------------------
 

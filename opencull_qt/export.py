@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QListWidget,
     QListWidgetItem,
+    QProgressBar,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -87,6 +88,7 @@ class Deliverer(QObject):
     done = Signal(str, str, str)
     failed = Signal(str, str)
     finished = Signal()
+    progressed = Signal(int, int)         # delivered, asked for
 
     def __init__(self, workspace: DevelopmentWorkspace,
                  pool: QThreadPool | None = None,
@@ -95,6 +97,10 @@ class Deliverer(QObject):
         self.workspace = workspace
         self.pool = pool or QThreadPool()
         self.pending = 0
+        # What the whole batch was, so a photographer waiting on twenty
+        # deliveries is told how far through twenty they are rather than
+        # how many are left, which says nothing about how long.
+        self.asked = 0
 
     def deliver(self, photo: str, source: str, destination: str,
                 sequence: int | None = None) -> None:
@@ -103,7 +109,9 @@ class Deliverer(QObject):
         job.signals.done.connect(self._one_done)
         job.signals.failed.connect(self._one_failed)
         self.pending += 1
+        self.asked += 1
         self.pool.start(job)
+        self.progressed.emit(self.asked - self.pending, self.asked)
 
     def _one_done(self, photo: str, requested: str, written: str) -> None:
         self.done.emit(photo, requested, written)
@@ -115,7 +123,9 @@ class Deliverer(QObject):
 
     def _settle(self) -> None:
         self.pending = max(0, self.pending - 1)
+        self.progressed.emit(self.asked - self.pending, self.asked)
         if self.pending == 0:
+            self.asked = 0
             self.finished.emit()
 
     def shutdown(self) -> None:
@@ -136,6 +146,7 @@ class ExportPage(QWidget):
         self.renders: list[dict] = []
         self.destination: Path | None = None
         self.deliverer = Deliverer(workspace, pool, self)
+        self.deliverer.progressed.connect(self._progress)
         self.deliverer.done.connect(self._delivered)
         self.deliverer.failed.connect(self._failed)
         self.deliverer.finished.connect(self._all_done)
@@ -219,6 +230,16 @@ class ExportPage(QWidget):
         actions.addWidget(self.deliver_button)
         actions.addStretch(1)
         column.addLayout(actions)
+
+        # Delivering twenty photographs is twenty file copies of something
+        # already rendered, but a photographer watching a still button has
+        # no way to tell that from nothing happening.
+        self.meter = QProgressBar()
+        self.meter.setRange(0, 100)
+        self.meter.setTextVisible(False)
+        self.meter.setFixedHeight(4)
+        self.meter.hide()
+        column.addWidget(self.meter)
 
         self.status = QLabel("")
         self.status.setObjectName("status")
@@ -420,6 +441,13 @@ class ExportPage(QWidget):
                 message += f" The proof sheet could not be written: {exc}."
         self._report(message, "alarm" if self._refused else "ok")
         self.refresh()
+
+    def _progress(self, done: int, total: int) -> None:
+        running = self.deliverer.pending > 0
+        self.meter.setVisible(running)
+        if running and total:
+            self.meter.setValue(round(100 * done / total))
+            self._report(f"Delivering {done + 1} of {total}.")
 
     def _report(self, message: str, tone: str = "") -> None:
         self.status.setText(message)

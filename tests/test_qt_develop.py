@@ -547,6 +547,42 @@ class DevelopPageTests(unittest.TestCase):
         page.show_photo(NAMES[1])
         self.assertEqual(asked, [])
 
+    def test_an_export_says_how_far_through_the_batch_it_is(self):
+        """A full-size render is ninety seconds; a still button is not news."""
+        page = self.page()
+        self.assertFalse(page.delivery_meter.isVisibleTo(page))
+
+        page.exporter.pending = 2
+        page._delivery_progress(0, 2)
+        self.assertTrue(page.delivery_meter.isVisibleTo(page))
+        self.assertIn("1 of 2", page.delivery_note.text())
+        self.assertEqual(page.delivery_meter.value(), 0)
+
+        page.exporter.pending = 1
+        page._delivery_progress(1, 2)
+        self.assertIn("2 of 2", page.delivery_note.text())
+        self.assertEqual(page.delivery_meter.value(), 50)
+
+        page.exporter.pending = 0
+        page._delivery_progress(2, 2)
+        self.assertFalse(page.delivery_meter.isVisibleTo(page))
+
+    def test_the_exporter_counts_the_batch_not_the_backlog(self):
+        page = self.page()
+        seen = []
+        page.exporter.progressed.connect(lambda d, t: seen.append((d, t)))
+        page.exporter._pool.setMaxThreadCount(1)
+        for index in range(3):
+            page.exporter.asked += 1
+            page.exporter.pending += 1
+            page.exporter.progressed.emit(
+                page.exporter.asked - page.exporter.pending,
+                page.exporter.asked)
+        self.assertEqual([total for _done, total in seen], [1, 2, 3])
+        page.exporter.pending = 0
+        page.exporter._settle()
+        self.assertEqual(page.exporter.asked, 0, "the batch should reset")
+
     def test_a_culled_folder_offers_the_baseline_without_any_suggestion(self):
         # No shortlist, no edit directions, no provider call: the ordinary
         # state of a folder that has just been culled.
