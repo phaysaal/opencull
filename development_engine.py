@@ -23,7 +23,7 @@ ENGINE_FORMAT = "opencull-development-render-v1"
 # changes when the engine's own arithmetic does -- so without this, an
 # improvement to the renderer is invisible on every frame already looked
 # at, which is exactly the frames somebody is judging it by.
-RECIPE_ENGINE_REVISION = 5
+RECIPE_ENGINE_REVISION = 6
 
 
 class DevelopmentError(ValueError):
@@ -489,13 +489,61 @@ def _spatial_mask(rgb: np.ndarray, shape: str, value: dict[str, Any]) -> np.ndar
     return _hue_mask(rgb, anchor)
 
 
+def _inscribed(width: int, height: int, degrees: float) -> tuple[int, int]:
+    """The largest upright rectangle that fits inside a turned frame.
+
+    Straightening a horizon turns the picture, and the corners of the
+    original then hang outside the upright frame while the corners of the
+    upright frame hang outside the picture. A develop program crops back
+    to what is still photograph. Returning the whole turned canvas
+    instead leaves black wedges in the corners -- 5.7% of one frame at a
+    degree and a half, which is not a straighten, it is a mistake with a
+    border.
+    """
+    angle = math.radians(abs(float(degrees)) % 180.0)
+    if angle > math.pi / 2:
+        angle = math.pi - angle
+    sin_a, cos_a = abs(math.sin(angle)), abs(math.cos(angle))
+    if width <= 0 or height <= 0:
+        return width, height
+    long_side, short_side = max(width, height), min(width, height)
+    if short_side <= 2.0 * sin_a * cos_a * long_side or abs(sin_a - cos_a) < 1e-10:
+        half = 0.5 * short_side
+        if width <= height:
+            kept = (half / max(sin_a, 1e-9), half / max(cos_a, 1e-9))
+        else:
+            kept = (half / max(cos_a, 1e-9), half / max(sin_a, 1e-9))
+    else:
+        cos_2a = cos_a * cos_a - sin_a * sin_a
+        kept = ((width * cos_a - height * sin_a) / cos_2a,
+                (height * cos_a - width * sin_a) / cos_2a)
+    return max(int(kept[0]), 1), max(int(kept[1]), 1)
+
+
+def _straighten(image: Image.Image, degrees: float) -> Image.Image:
+    """Turn the photograph, and keep only what is still photograph."""
+    if not degrees:
+        return image
+    width, height = image.size
+    turned = image.rotate(float(degrees), resample=Image.Resampling.BICUBIC,
+                          expand=True, fillcolor=(0, 0, 0))
+    keep_width, keep_height = _inscribed(width, height, degrees)
+    left = max((turned.size[0] - keep_width) // 2, 0)
+    top = max((turned.size[1] - keep_height) // 2, 0)
+    return turned.crop((left, top, left + min(keep_width, turned.size[0]),
+                        top + min(keep_height, turned.size[1])))
+
+
 def _geometry(image: Image.Image, operations: list[dict[str, Any]]) -> Image.Image:
     result = image
+    # Straightening comes before framing, whatever order the recipe put
+    # them in: a crop chosen on a crooked picture is not the crop the
+    # photographer asked for.
     for item in operations:
         if item.get("op") == "geometry.rotation":
-            result = result.rotate(float(item["value"]), resample=Image.Resampling.BICUBIC,
-                                   expand=True, fillcolor=(0, 0, 0))
-        elif item.get("op") == "geometry.crop_aspect":
+            result = _straighten(result, float(item["value"]))
+    for item in operations:
+        if item.get("op") == "geometry.crop_aspect":
             ratio = item.get("value")
             if isinstance(ratio, list) and len(ratio) == 2 and ratio[1]:
                 target = float(ratio[0]) / float(ratio[1])

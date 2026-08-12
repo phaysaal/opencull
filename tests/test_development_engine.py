@@ -177,6 +177,39 @@ class DevelopmentEngineTests(unittest.TestCase):
         spread = sharper.max(axis=2) - sharper.min(axis=2)
         self.assertLess(float(spread.max()), 0.02)
 
+    def test_straightening_leaves_no_black_corners(self):
+        """A straighten that keeps the whole turned canvas is not one.
+
+        Rotating and keeping everything left 5.7% of a frame black at a
+        degree and a half -- wedges where the picture no longer reaches.
+        """
+        from development_engine import _geometry
+
+        frame = Image.new("RGB", (400, 300), (120, 150, 90))
+        for angle in (1.5, -3.0, 8.0):
+            turned = _geometry(frame, [
+                {"op": "geometry.rotation", "value": angle}])
+            pixels = np.asarray(turned, dtype=np.float32)
+            empty = float((pixels.max(axis=2) <= 2).mean())
+            self.assertEqual(empty, 0.0, f"{angle} degrees left empty corners")
+            self.assertLess(turned.size[0], frame.size[0])
+
+    def test_a_crop_is_taken_after_the_frame_is_straightened(self):
+        # A crop chosen on a crooked picture is not the crop that was
+        # asked for, whatever order the recipe lists them in.
+        from development_engine import _geometry
+
+        frame = Image.new("RGB", (400, 300), (120, 150, 90))
+        crop_first = _geometry(frame, [
+            {"op": "geometry.crop_aspect", "value": [5, 4]},
+            {"op": "geometry.rotation", "value": 2.0}])
+        rotate_first = _geometry(frame, [
+            {"op": "geometry.rotation", "value": 2.0},
+            {"op": "geometry.crop_aspect", "value": [5, 4]}])
+        self.assertEqual(crop_first.size, rotate_first.size)
+        self.assertAlmostEqual(
+            crop_first.size[0] / crop_first.size[1], 1.25, places=2)
+
     def test_linear_mask_blends_only_its_anchor_region(self):
         rgb = np.full((4, 1, 3), 0.5, dtype=np.float32)
         result = _apply_global(rgb, [{
