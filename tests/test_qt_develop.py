@@ -405,15 +405,16 @@ class DevelopPageTests(unittest.TestCase):
         page = self.page()
         self.assertEqual(page.treated_photos(), [])
         self.assertEqual(page.photos.count(), len(NAMES))
-        self.assertFalse(page.scope.isVisibleTo(page))
+        self.assertFalse(page.scope_row.isVisibleTo(page))
 
     def test_the_list_opens_on_the_frames_that_have_treatments(self):
         page = self.suggested_page(marked=(NAMES[0], NAMES[1]))
         listed = [page.photos.item(row).data(Qt.ItemDataRole.UserRole)
                   for row in range(page.photos.count())]
         self.assertEqual(listed, sorted([NAMES[0], NAMES[1]]))
-        self.assertTrue(page.scope.isVisibleTo(page))
-        self.assertEqual(page.scope.currentData(), "treated")
+        self.assertTrue(page.scope_row.isVisibleTo(page))
+        self.assertEqual(page.scope, "treated")
+        self.assertTrue(page.scope_buttons["treated"].isChecked())
         # And it opens on one of them rather than on a frame it is hiding.
         self.assertIn(page.current, listed)
         self.assertEqual(page.photos.currentRow(), 0)
@@ -421,7 +422,7 @@ class DevelopPageTests(unittest.TestCase):
 
     def test_every_frame_is_one_click_away_because_the_baseline_is_free(self):
         page = self.suggested_page(marked=(NAMES[0],))
-        page.scope.setCurrentIndex(page.scope.findData("all"))
+        page.scope_buttons["all"].click()
         listed = [page.photos.item(row).data(Qt.ItemDataRole.UserRole)
                   for row in range(page.photos.count())]
         self.assertEqual(listed, NAMES)
@@ -429,6 +430,46 @@ class DevelopPageTests(unittest.TestCase):
         self.assertEqual(page.current, NAMES[0])
         self.assertEqual(
             listed[page.photos.currentRow()], NAMES[0])
+
+    def test_each_frame_is_listed_as_its_picture_not_only_its_name(self):
+        page = self.page()
+        self.assertTrue(self.wait_for(
+            lambda: not page.photos.item(0).icon().isNull()))
+        for row in range(page.photos.count()):
+            item = page.photos.item(row)
+            self.assertIn(
+                item.data(Qt.ItemDataRole.UserRole), item.text())
+
+    def test_every_treatment_shows_what_it_does_to_this_frame(self):
+        page = self.suggested_page(marked=(NAMES[0],))
+        self.assertGreater(page.treatments.count(), 1)
+        self.assertTrue(
+            self.wait_for(lambda: all(
+                not page.treatments.item(row).icon().isNull()
+                for row in range(page.treatments.count()))),
+            "the treatments were never given their previews")
+        # Rendered once and kept: coming back to a frame costs nothing.
+        self.assertEqual(
+            len(page.previews), page.treatments.count())
+        before = dict(page.previews)
+        page._request_previews()
+        self.assertEqual(page.previews, before)
+
+    def test_clicking_a_preview_asks_for_it_at_proof_size(self):
+        page = self.suggested_page(marked=(NAMES[0],))
+        asked = []
+        page.develop_current = lambda: asked.append(page.treatment)
+        page.treatments.itemClicked.emit(page.treatments.item(1))
+        self.assertEqual(len(asked), 1)
+
+    def test_moving_between_frames_does_not_ask_for_a_proof(self):
+        # Only a click does. Selecting a frame must not spend a full
+        # render nobody asked for.
+        page = self.suggested_page(marked=(NAMES[0], NAMES[1]))
+        asked = []
+        page.renderer.render = lambda *a, **k: asked.append(a)
+        page.show_photo(NAMES[1])
+        self.assertEqual(asked, [])
 
     def test_a_culled_folder_offers_the_baseline_without_any_suggestion(self):
         # No shortlist, no edit directions, no provider call: the ordinary

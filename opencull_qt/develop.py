@@ -5,8 +5,12 @@ what was already there, so the two are always on screen together rather than
 one replacing the other.
 
 Rendering is slow enough to be felt -- a demosaic and a recipe over a whole
-frame -- so it happens on a worker thread and only when asked for. Nothing
-renders because a photograph was selected; the photographer says when.
+frame -- so it happens on a worker thread. A full proof is still only made
+when the photographer asks for one; what opening a frame buys is a set of
+small previews, one per treatment, because choosing between four written
+arguments about a photograph is not the same as choosing between four
+pictures of it. They are cached on disk at their own size, so a frame
+already looked at costs nothing to look at again.
 """
 
 from __future__ import annotations
@@ -14,9 +18,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QRunnable, QSize, Qt, QThreadPool, Signal
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
-    QComboBox,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -48,6 +51,15 @@ PROOF_EDGE = 1600
 # stylesheet, which sizeHintForRow does not know about, so asking it how tall
 # the list should be returns a box that clips its own contents.
 TREATMENT_ROW = 34
+
+# Room for a thumbnail and the name beside it, in both lists.
+PHOTO_ROW = 74
+TREATMENT_TILE = 84
+
+# Small enough that five of them for one frame is a wait somebody will
+# sit through, large enough to tell two treatments apart. Cached on disk
+# by the workspace under this exact size, so a frame revisited is instant.
+THUMB_EDGE = 320
 
 
 class _Signals(QObject):
@@ -261,9 +273,34 @@ class Renderer(QObject):
             self.workspace, photo, treatment, engine, demosaic,
             self._signals, self._generation, self.maximum, adjustments))
 
+    def render_many(self, photo: str, treatments: list[str], engine: str,
+                    demosaic: str) -> None:
+        """Every treatment of one frame, as one batch of work.
+
+        The single-render path treats each new request as the only one that
+        matters, which is right for a proof and wrong for a set of
+        thumbnails: they belong to the same frame and all of them are
+        wanted. One generation covers the batch, so moving to another frame
+        still abandons the lot.
+        """
+        self._generation += 1
+        for treatment in treatments:
+            self._pool.start(_RenderJob(
+                self.workspace, photo, treatment, engine, demosaic,
+                self._signals, self._generation, self.maximum))
+
     def abandon(self) -> None:
         """Stop caring about a render whose frame is no longer on screen."""
         self._generation += 1
+
+    def drop_queued(self) -> None:
+        """Give up the work not yet started, and the right to its results.
+
+        A render already running is left alone -- killing a decoder halfway
+        wastes what it has done and leaves its working files behind.
+        """
+        self._generation += 1
+        self._pool.clear()
 
     def _finished(self, generation: int, photo: str, treatment: str,
                   path: str) -> None:
@@ -440,14 +477,29 @@ class DevelopPage(QWidget):
         self.workspace = workspace
         self.loader = loader
         self.photo_names = list(report.photo_names)
+        # The list holds the frames there is something to decide about
+        # until asked to hold them all.
+        self.scope = "treated"
         self.current = self.photo_names[0] if self.photo_names else ""
         self.treatment = ""
         self.available: list[dict] = []
         self.rendered: dict[tuple[str, str], QPixmap] = {}
 
-        self.renderer = Renderer(workspace, parent=self)
+        # One pool for both renderers. A render saturates the machine on
+        # its own, and two writing previews into the same folder at once
+        # was a race: proofs and thumbnails queue rather than compete.
+        self._pool = QThreadPool(self)
+        self._pool.setMaxThreadCount(1)
+        self.renderer = Renderer(workspace, pool=self._pool, parent=self)
         self.renderer.done.connect(self._rendered)
         self.renderer.failed.connect(self._render_failed)
+        # The smaller renderer: what each treatment does to this frame,
+        # shown rather than described.
+        self.thumbs = Renderer(
+            workspace, maximum=THUMB_EDGE, pool=self._pool, parent=self)
+        self.thumbs.done.connect(self._thumb_ready)
+        self.thumbs.failed.connect(self._thumb_failed)
+        self.previews: dict[tuple[str, str], QPixmap] = {}
         self.exporter = Exporter(workspace, self)
         self.exporter.done.connect(self._exported)
         self.exporter.failed.connect(self._export_failed)
@@ -484,24 +536,42 @@ class DevelopPage(QWidget):
         # because the baseline is theirs to render whenever they want it.
         rail = QWidget()
         rail.setObjectName("page")
-        rail.setFixedWidth(238)
+        rail.setFixedWidth(258)
         rail_column = QVBoxLayout(rail)
         rail_column.setContentsMargins(0, 0, 0, 0)
         rail_column.setSpacing(0)
 
-        self.scope = QComboBox()
-        self.scope.setObjectName("sort")
-        self.scope.setFont(theme.body(9))
-        self.scope.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.scope.setToolTip(
-            "Which frames this list holds. Every frame can be rendered from "
-            "the calibrated baseline; only the ones you asked about have "
-            "treatments to choose between.")
-        self.scope.currentIndexChanged.connect(self._scope_changed)
-        rail_column.addWidget(self.scope)
+        # Two buttons rather than a dropdown: a choice between two things
+        # is not worth a menu, and a combo box is drawn by the platform
+        # rather than by this application, so it arrives wearing somebody
+        # else's colours.
+        self.scope_row = QWidget()
+        self.scope_row.setObjectName("chrome")
+        scope_layout = QHBoxLayout(self.scope_row)
+        scope_layout.setContentsMargins(10, 7, 10, 7)
+        scope_layout.setSpacing(6)
+        self.scope_buttons: dict[str, QPushButton] = {}
+        for key, tip in (
+            ("treated", "The frames a treatment was written for."),
+            ("all", "Every frame in the folder. All of them can be "
+                    "rendered from the calibrated baseline."),
+        ):
+            button = QPushButton("")
+            button.setObjectName("tier")
+            button.setCheckable(True)
+            button.setFont(theme.body(9))
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.setToolTip(tip)
+            button.clicked.connect(
+                lambda _=False, value=key: self.set_scope(value))
+            self.scope_buttons[key] = button
+            scope_layout.addWidget(button)
+        scope_layout.addStretch(1)
+        rail_column.addWidget(self.scope_row)
 
         self.photos = QListWidget()
         self.photos.setObjectName("clusterList")
+        self.photos.setIconSize(QSize(96, 64))
         self.photos.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.photos.currentRowChanged.connect(self._chose_row)
         rail_column.addWidget(self.photos, 1)
@@ -560,7 +630,7 @@ class DevelopPage(QWidget):
     def _panel(self) -> QWidget:
         panel = QFrame()
         panel.setObjectName("panel")
-        panel.setFixedWidth(272)
+        panel.setFixedWidth(344)
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(18, 18, 18, 18)
         layout.setSpacing(10)
@@ -583,10 +653,16 @@ class DevelopPage(QWidget):
 
         self.treatments = QListWidget()
         self.treatments.setObjectName("treatmentList")
+        self.treatments.setIconSize(QSize(112, 72))
         # Neither list takes focus: the space bar belongs to the comparison,
         # and a focused list would eat it to toggle its own selection.
         self.treatments.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.treatments.currentRowChanged.connect(self._chose_treatment)
+        # Choosing a treatment by hand is asking to see it at proof size.
+        # Moving between frames selects one too, and that must not spend a
+        # full render nobody asked for, so only the click renders.
+        self.treatments.itemClicked.connect(
+            lambda _item: self.develop_current())
         layout.addWidget(self.treatments)
 
         self.intent = QLabel("")
@@ -658,8 +734,7 @@ class DevelopPage(QWidget):
             # Nothing has been suggested yet, so "with treatments" would be
             # an empty page offering a filter to escape itself.
             return list(self.photo_names)
-        return (list(self.photo_names) if self.scope.currentData() == "all"
-                else treated)
+        return list(self.photo_names) if self.scope == "all" else treated
 
     def _sync_row(self) -> None:
         """Keep the list's highlight on the frame being shown, if it is here.
@@ -674,7 +749,8 @@ class DevelopPage(QWidget):
             self.photos.setCurrentRow(row)
             self.photos.blockSignals(False)
 
-    def _scope_changed(self, _index: int) -> None:
+    def set_scope(self, scope: str) -> None:
+        self.scope = scope if scope in {"treated", "all"} else "treated"
         self._fill_photos()
         shown = self.shown_photos()
         if shown and self.current not in shown:
@@ -685,23 +761,26 @@ class DevelopPage(QWidget):
     def _fill_photos(self) -> None:
         treated = self.treated_photos()
         total = len(self.photo_names)
-        self.scope.blockSignals(True)
-        chosen = self.scope.currentData() or ("treated" if treated else "all")
-        self.scope.clear()
-        if treated:
-            self.scope.addItem(f"With treatments · {len(treated)}", "treated")
-        self.scope.addItem(f"Every frame · {total}", "all")
-        index = self.scope.findData(chosen)
-        self.scope.setCurrentIndex(max(0, index))
-        self.scope.setVisible(bool(treated))
-        self.scope.blockSignals(False)
+        if not treated:
+            self.scope = "all"
+        self.scope_row.setVisible(bool(treated))
+        self.scope_buttons["treated"].setText(f"Treated · {len(treated)}")
+        self.scope_buttons["all"].setText(f"All · {total}")
+        for key, button in self.scope_buttons.items():
+            button.setChecked(key == self.scope)
 
         shown = self.shown_photos()
         self.photos.blockSignals(True)
         self.photos.clear()
         for name in shown:
+            # A photograph is recognised by its picture; the filename is
+            # what you read once you have found it.
             item = QListWidgetItem(f"  {name}")
             item.setData(Qt.ItemDataRole.UserRole, name)
+            item.setSizeHint(QSize(0, PHOTO_ROW))
+            pixmap = self.loader.request(name, "thumb")
+            if pixmap is not None:
+                item.setIcon(QIcon(pixmap))
             self.photos.addItem(item)
         self.photos.blockSignals(False)
         self.counter.setText(
@@ -731,6 +810,13 @@ class DevelopPage(QWidget):
     def _original_ready(self, name: str, size: str, pixmap) -> None:
         if name == self.current and size == "detail":
             self.stage.set_as_shot(pixmap)
+        if size != "thumb":
+            return
+        for row in range(self.photos.count()):
+            item = self.photos.item(row)
+            if item.data(Qt.ItemDataRole.UserRole) == name:
+                item.setIcon(QIcon(pixmap))
+                break
 
     # --- treatments ------------------------------------------------------
 
@@ -747,10 +833,15 @@ class DevelopPage(QWidget):
         for item in available:
             entry = QListWidgetItem(f"  {item['name']}")
             entry.setData(Qt.ItemDataRole.UserRole, item["id"])
-            entry.setToolTip(item.get("intent", ""))
-            entry.setSizeHint(QSize(0, TREATMENT_ROW))
+            entry.setToolTip(
+                f"{item['name']}\n{item.get('intent', '')}".strip())
+            entry.setSizeHint(QSize(0, TREATMENT_TILE))
+            preview = self.previews.get((self.current, str(item["id"])))
+            if preview is not None:
+                entry.setIcon(QIcon(preview))
             self.treatments.addItem(entry)
         self.treatments.blockSignals(False)
+        self._request_previews()
         self._size_treatments()
         ids = [item["id"] for item in available]
         row = ids.index(previous) if previous in ids else 0
@@ -771,7 +862,7 @@ class DevelopPage(QWidget):
         """
         rows = max(self.treatments.count(), 1)
         # The list's own 4px padding top and bottom, and its 1px border.
-        self.treatments.setFixedHeight(rows * TREATMENT_ROW + 10)
+        self.treatments.setFixedHeight(rows * TREATMENT_TILE + 10)
 
     def _chose_treatment(self, row: int) -> None:
         if not (0 <= row < len(self.available)):
@@ -824,9 +915,50 @@ class DevelopPage(QWidget):
             return
         self.develop_button.setEnabled(False)
         self._report(f"Developing {self.current}. This takes a moment.")
+        # Thumbnails still waiting are worth less than the proof that was
+        # just asked for, so they give up their place in the queue.
+        self.thumbs.drop_queued()
         self.renderer.render(
             self.current, self.treatment, self.engine_for(self.current),
             self._demosaic())
+
+    def _request_previews(self) -> None:
+        """Render what each treatment does to this frame, small and once.
+
+        The proof stays something the photographer asks for; these are the
+        pictures the asking is a choice between, so they are rendered as
+        soon as the frame is opened. Anything already rendered at this size
+        is read from the workspace's cache rather than decoded again.
+        """
+        if not self.current or not self.available:
+            return
+        wanted = [
+            str(item["id"]) for item in self.available
+            if (self.current, str(item["id"])) not in self.previews]
+        if not wanted:
+            return
+        self.thumbs.render_many(
+            self.current, wanted, self.engine_for(self.current),
+            self._demosaic())
+
+    def _thumb_ready(self, photo: str, treatment: str, pixmap) -> None:
+        self.previews[(photo, treatment)] = pixmap
+        if photo != self.current:
+            return
+        for row in range(self.treatments.count()):
+            entry = self.treatments.item(row)
+            if entry.data(Qt.ItemDataRole.UserRole) == treatment:
+                entry.setIcon(QIcon(pixmap))
+                break
+
+    def _thumb_failed(self, photo: str, reason: str) -> None:
+        # A thumbnail that cannot be rendered is not worth interrupting
+        # anybody over: the treatment is still listed, and asking for the
+        # full proof will report the same failure where it matters.
+        if photo == self.current:
+            self.engine_note.setText(
+                f"{self._engine_note()}\nA preview could not be rendered: "
+                f"{reason}")
 
     def _rendered(self, photo: str, treatment: str, pixmap) -> None:
         self.rendered[(photo, treatment)] = pixmap
@@ -1017,6 +1149,7 @@ class DevelopPage(QWidget):
         super().focusOutEvent(event)
 
     def shutdown(self) -> None:
+        self.thumbs.abandon()
         self.renderer.shutdown()
         self.exporter.shutdown()
         self.verifier.shutdown()
