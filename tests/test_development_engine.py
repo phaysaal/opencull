@@ -141,6 +141,42 @@ class DevelopmentEngineTests(unittest.TestCase):
         self.assertLess(clipped(result) - clipped(rgb), 0.02,
                         "the recipe clipped the highlights away")
 
+    def test_the_detail_controls_are_executed_rather_than_recorded(self):
+        """Six sharpening instructions across seven frames did nothing.
+
+        A recipe that names a control the renderer ignores is a treatment
+        the photographer was shown and did not receive.
+        """
+        rng = np.random.default_rng(7)
+        frame = (rng.random((48, 64, 3)).astype(np.float32) * 0.4 + 0.3)
+
+        def energy(image):
+            grey = (image * np.array([0.2126, 0.7152, 0.0722])).sum(axis=2)
+            return float(np.mean(np.abs(np.diff(grey, axis=0)))
+                         + np.mean(np.abs(np.diff(grey, axis=1))))
+
+        sharper = _apply_global(frame, [
+            {"op": "detail.sharpen_amount", "value": 150}])
+        self.assertGreater(energy(sharper), energy(frame))
+
+        softer = _apply_global(frame, [
+            {"op": "detail.denoise_luminance", "value": 40}])
+        self.assertLess(energy(softer), energy(frame))
+
+        for op, value in (("levels.midpoint", 0.8), ("finish.vignette", -20)):
+            changed = _apply_global(frame, [{"op": op, "value": value}])
+            self.assertFalse(np.allclose(changed, frame), f"{op} did nothing")
+
+    def test_sharpening_does_not_colour_the_edges_it_sharpens(self):
+        # Brightness only: sharpening the colour channels separately is
+        # how an edge picks up a fringe that was never photographed.
+        frame = np.zeros((8, 8, 3), dtype=np.float32)
+        frame[:, 4:] = 0.6
+        sharper = _apply_global(frame, [
+            {"op": "detail.sharpen_amount", "value": 200}])
+        spread = sharper.max(axis=2) - sharper.min(axis=2)
+        self.assertLess(float(spread.max()), 0.02)
+
     def test_linear_mask_blends_only_its_anchor_region(self):
         rgb = np.full((4, 1, 3), 0.5, dtype=np.float32)
         result = _apply_global(rgb, [{
@@ -166,8 +202,13 @@ class DevelopmentEngineTests(unittest.TestCase):
             result = render_recipe(
                 baseline, self.recipe(), root / "out",
                 reference_jpeg=reference)
-            self.assertEqual(result["calibration"]["method"],
-                             "per-channel-srgb-quantile-lut")
+            self.assertEqual(
+                result["calibration"]["method"],
+                "per-channel-srgb-quantile-lut-with-highlight-rolloff")
+            # The match is held in the tones and released in the
+            # highlights, and the record says where.
+            self.assertLess(result["calibration"]["rolloff"]["holds_below"],
+                            result["calibration"]["rolloff"]["released_above"])
 
     def test_distinct_standard_and_personal_operations_change_pixels(self):
         with tempfile.TemporaryDirectory() as temporary:

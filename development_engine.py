@@ -23,7 +23,7 @@ ENGINE_FORMAT = "opencull-development-render-v1"
 # changes when the engine's own arithmetic does -- so without this, an
 # improvement to the renderer is invisible on every frame already looked
 # at, which is exactly the frames somebody is judging it by.
-RECIPE_ENGINE_REVISION = 3
+RECIPE_ENGINE_REVISION = 5
 
 
 class DevelopmentError(ValueError):
@@ -132,9 +132,26 @@ def _calibrate_to_jpeg(linear: np.ndarray, reference: Path) -> tuple[np.ndarray,
         calibrated[..., channel] = np.interp(
             source_display[..., channel], source_knots, target_knots)
         knots.append({"source": source_knots.tolist(), "target": target_knots.tolist()})
+    # The match is what the photographer wanted from the camera: its tones
+    # and its colour. What they did not want is its clipping. A camera
+    # rendering has already spent the highlights the raw still holds, so
+    # matching it all the way to white throws that headroom away --
+    # measured at 12.9% of one frame blown rising to 21.2%. The match
+    # therefore holds through the shadows and midtones and fades out
+    # towards the top, leaving the brightest tones where the decode put
+    # them, with detail still in them to be worked on.
+    luminance = source_display @ _LUMA
+    weight = 1.0 - _ramp(
+        (luminance - CALIBRATION_HOLD) /
+        max(CALIBRATION_RELEASE - CALIBRATION_HOLD, 1e-6))
+    calibrated = source_display + (
+        calibrated - source_display) * weight[..., None]
     return _srgb_to_linear_rec2020(calibrated), {
         "reference_path": str(reference), "reference_sha256": _sha256(reference),
-        "method": "per-channel-srgb-quantile-lut", "knots": knots,
+        "method": "per-channel-srgb-quantile-lut-with-highlight-rolloff",
+        "rolloff": {"holds_below": CALIBRATION_HOLD,
+                    "released_above": CALIBRATION_RELEASE},
+        "knots": knots,
     }
 
 
@@ -172,6 +189,11 @@ def _load_linear(path: Path) -> np.ndarray:
 # means by them. Exposure and white balance stay in linear light, because
 # those two are physical and belong there.
 
+# Where the camera match gives way to the raw's own highlights: full
+# strength up to the first, gone by the second, smoothly in between.
+CALIBRATION_HOLD = 0.55
+CALIBRATION_RELEASE = 0.92
+
 _ENCODE_GAMMA = 2.2
 
 _LUMA = np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)
@@ -192,8 +214,21 @@ _DISPLAY_OPS = frozenset({
     "tone.contrast", "tone.brightness", "tone.highlight", "tone.shadow",
     "tone.white", "tone.black", "color.saturation", "color.hsl_range",
     "detail.clarity", "detail.structure", "detail.dehaze",
-    "levels.white_input", "levels.black_input",
+    "detail.sharpen_amount", "detail.denoise_luminance",
+    "detail.denoise_color", "levels.white_input", "levels.black_input",
+    "levels.midpoint", "finish.vignette",
 })
+
+# Detail work, at the scale a bounded proof is drawn at. A develop
+# program's sharpening amount runs to several hundred; taken literally as
+# a multiplier that would tear the frame apart, so it is read as a
+# proportion of a restrained unsharp mask.
+SHARPEN_RADIUS = 1.0
+SHARPEN_STRENGTH = 0.35
+DENOISE_RADIUS = 1.4
+DENOISE_STRENGTH = 0.5
+DENOISE_COLOR_STRENGTH = 0.9
+VIGNETTE_DEPTH = 0.35
 
 
 def _encoded(linear: np.ndarray) -> np.ndarray:
@@ -209,6 +244,26 @@ def _ramp(value: np.ndarray) -> np.ndarray:
     """A smooth 0..1 ramp, so a tonal move has no visible edge."""
     clipped = np.clip(value, 0.0, 1.0)
     return clipped * clipped * (3.0 - 2.0 * clipped)
+
+
+
+def _blur(image: np.ndarray, radius: float) -> np.ndarray:
+    """A separable Gaussian, wide enough for detail work and no wider."""
+    radius = max(float(radius), 0.1)
+    span = max(int(radius * 3), 1)
+    offsets = np.arange(-span, span + 1, dtype=np.float32)
+    kernel = np.exp(-(offsets ** 2) / (2.0 * radius * radius))
+    kernel /= kernel.sum()
+    padded = np.pad(image, ((span, span), (span, span), (0, 0)), mode="edge")
+    across = np.zeros_like(image)
+    for index, weight in enumerate(kernel):
+        across += padded[span:span + image.shape[0],
+                         index:index + image.shape[1]] * weight
+    padded = np.pad(across, ((span, span), (0, 0), (0, 0)), mode="edge")
+    down = np.zeros_like(image)
+    for index, weight in enumerate(kernel):
+        down += padded[index:index + image.shape[0]] * weight
+    return down
 
 
 def _apply_global(rgb: np.ndarray, operations: list[dict[str, Any]]) -> np.ndarray:
@@ -228,6 +283,10 @@ def _apply_global(rgb: np.ndarray, operations: list[dict[str, Any]]) -> np.ndarr
             continue
         if not isinstance(value, (int, float)):
             if op in {"lens.profile", "lens.chromatic_aberration"}:
+                # Not skipped work: the decoder applies the camera's lens
+                # profile and its chromatic-aberration correction while
+                # demosaicing, before this engine sees the frame. Doing it
+                # again here would correct an already corrected picture.
                 continue
             if op in {"geometry.crop_aspect", "output.color_space", "color.hsl_range"}:
                 continue
@@ -309,6 +368,35 @@ def _apply_global(rgb: np.ndarray, operations: list[dict[str, Any]]) -> np.ndarr
                         mask[..., None],
                         lum + (result - lum) * (1.0 + value / 100.0),
                         result)
+        elif op == "detail.sharpen_amount":
+            # An unsharp mask on brightness only: sharpening colour is how
+            # edges pick up fringes that were never in the photograph.
+            lum = (result * _LUMA).sum(axis=2, keepdims=True)
+            detail = lum - _blur(lum, SHARPEN_RADIUS)
+            result = result + detail * (value / 100.0) * SHARPEN_STRENGTH
+        elif op == "detail.denoise_luminance":
+            lum = (result * _LUMA).sum(axis=2, keepdims=True)
+            softened = _blur(lum, DENOISE_RADIUS)
+            weight = min(max(value / 100.0, 0.0), 1.0) * DENOISE_STRENGTH
+            result = result + (softened - lum) * weight
+        elif op == "detail.denoise_color":
+            # Chroma only: the colour speckle goes, the detail stays,
+            # which is the whole reason the two are separate controls.
+            lum = (result * _LUMA).sum(axis=2, keepdims=True)
+            chroma = result - lum
+            weight = min(max(value / 100.0, 0.0), 1.0) * DENOISE_COLOR_STRENGTH
+            result = lum + chroma + (_blur(chroma, DENOISE_RADIUS) - chroma) * weight
+        elif op == "levels.midpoint":
+            # The levels midpoint is a gamma about the middle of the scale.
+            if value > 0:
+                result = np.clip(result, 0.0, None) ** (1.0 / max(value, 0.1))
+        elif op == "finish.vignette":
+            yy, xx = np.indices(result.shape[:2], dtype=np.float32)
+            yy /= max(result.shape[0] - 1, 1)
+            xx /= max(result.shape[1] - 1, 1)
+            edge = np.minimum.reduce([xx, 1 - xx, yy, 1 - yy])
+            fall = np.clip(1.0 - edge * 4.0, 0.0, 1.0)[..., None]
+            result = result * (1.0 + (value / 100.0) * VIGNETTE_DEPTH * fall)
         elif op.startswith("mask."):
             if op == "mask.vignette":
                 yy, xx = np.indices(result.shape[:2], dtype=np.float32)
