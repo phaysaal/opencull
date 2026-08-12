@@ -31,7 +31,11 @@ import tifffile
 from PIL import Image, ImageOps
 
 from darktable_engine import render_darktable_default
-from development_engine import _srgb_to_linear_rec2020, render_recipe
+from development_engine import (
+    RECIPE_ENGINE_REVISION,
+    _srgb_to_linear_rec2020,
+    render_recipe,
+)
 from raw_developer import render_baseline
 from recipe_compiler import compile_recipe
 from scan import RAW_EXTENSIONS, open_preview
@@ -472,6 +476,7 @@ class DevelopmentWorkspace:
             "demosaic": demosaic, "maximum": maximum,
             "recipe": recipe, "source": str(source),
             "mtime": source_stat.st_mtime_ns, "size": source_stat.st_size,
+            "renderer": RECIPE_ENGINE_REVISION,
         }, sort_keys=True).encode()).hexdigest()[:24]
         destination = self.project_layout["Previews"] / "DevelopRecipes" / (
             f"{Path(photo).stem}.{style}.{engine}.{identity}.jpg")

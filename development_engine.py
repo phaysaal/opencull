@@ -18,6 +18,13 @@ from PIL import Image, ImageEnhance
 
 ENGINE_FORMAT = "opencull-development-render-v1"
 
+# Bumped whenever the operations render differently from before. A cached
+# proof is keyed by the recipe and the file it came from, neither of which
+# changes when the engine's own arithmetic does -- so without this, an
+# improvement to the renderer is invisible on every frame already looked
+# at, which is exactly the frames somebody is judging it by.
+RECIPE_ENGINE_REVISION = 3
+
 
 class DevelopmentError(ValueError):
     """A recipe or image cannot be safely rendered."""
@@ -148,6 +155,62 @@ def _load_linear(path: Path) -> np.ndarray:
     return np.clip(array / scale, 0.0, None)
 
 
+# --- where a slider means what it says -------------------------------------
+#
+# The recipes are written in the vocabulary of a develop program: Contrast
+# +17, Black -13, Saturation +5. Those sliders act on a display-referred
+# image. Applied instead to scene-linear light -- which is what this engine
+# holds -- the same numbers behave nothing like their names: a contrast
+# raise multiplies the distance between channels, so it inflates colour
+# rather than tone, and a small black offset lands where linear values are
+# tiny and crushes whole shadows to nothing. Measured on a Fujifilm frame,
+# a recipe that asked to *reduce* blue, yellow and orange saturation raised
+# all three (+18, +14, +32 points) and crushed 6% of the frame to black.
+#
+# So tonal and colour sliders are applied through a gamma encoding, where
+# midtones sit near the middle and the numbers mean what a photographer
+# means by them. Exposure and white balance stay in linear light, because
+# those two are physical and belong there.
+
+_ENCODE_GAMMA = 2.2
+
+_LUMA = np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)
+
+# Tonal moves act on brightness, not on colour. Applied to each channel
+# separately they pull the channels apart, so a contrast raise silently
+# undoes a colour instruction that asked for less saturation -- which is
+# how a recipe that said "reduce blue by 8" produced a bluer sky. These
+# are applied to luminance, and the channels follow it in proportion.
+_LUMA_OPS = frozenset({
+    "tone.contrast", "tone.brightness", "tone.highlight", "tone.shadow",
+    "tone.white", "tone.black", "levels.white_input", "levels.black_input",
+    "detail.clarity", "detail.structure", "detail.dehaze",
+})
+
+# The operations whose numbers come from display-referred sliders.
+_DISPLAY_OPS = frozenset({
+    "tone.contrast", "tone.brightness", "tone.highlight", "tone.shadow",
+    "tone.white", "tone.black", "color.saturation", "color.hsl_range",
+    "detail.clarity", "detail.structure", "detail.dehaze",
+    "levels.white_input", "levels.black_input",
+})
+
+
+def _encoded(linear: np.ndarray) -> np.ndarray:
+    """Scene-linear light as a display-referred image, same primaries."""
+    return np.clip(linear, 0.0, None) ** (1.0 / _ENCODE_GAMMA)
+
+
+def _decoded(display: np.ndarray) -> np.ndarray:
+    return np.clip(display, 0.0, None) ** _ENCODE_GAMMA
+
+
+def _ramp(value: np.ndarray) -> np.ndarray:
+    """A smooth 0..1 ramp, so a tonal move has no visible edge."""
+    clipped = np.clip(value, 0.0, 1.0)
+    return clipped * clipped * (3.0 - 2.0 * clipped)
+
+
 def _apply_global(rgb: np.ndarray, operations: list[dict[str, Any]]) -> np.ndarray:
     result = np.array(rgb, dtype=np.float32, copy=True)
     for item in operations:
@@ -170,29 +233,43 @@ def _apply_global(rgb: np.ndarray, operations: list[dict[str, Any]]) -> np.ndarr
                 continue
             continue
         value = float(value)
+        display = op in _DISPLAY_OPS
+        if display:
+            result = _encoded(result)
+        tonal = op in _LUMA_OPS
+        if tonal:
+            colour = result
+            result = (result * _LUMA).sum(axis=2, keepdims=True)
         if op == "tone.exposure":
             result *= 2.0 ** value
         elif op == "tone.contrast":
-            result = (result - 0.18) * (1.0 + value / 100.0) + 0.18
+            result = (result - 0.5) * (1.0 + value / 100.0) + 0.5
         elif op == "tone.brightness":
-            # Brightness sliders are a restrained midtone lift.  Adding the
-            # raw percentage in scene-linear light creates a raised black
-            # floor (and a milky veil) for even a small +5 adjustment.
-            result += value / 100.0 * 0.01
+            # A midtone lift that leaves the two ends where they are, which
+            # is what the slider does and why it is not exposure.
+            weight = 1.0 - np.abs(2.0 * np.clip(result, 0.0, 1.0) - 1.0)
+            result += weight * (value / 100.0) * 0.12
         elif op == "tone.highlight":
-            # A bounded highlight compression approximation in linear light.
             if value < 0:
-                threshold = 0.55
-                mask = np.maximum((result - threshold) / (1 - threshold), 0)
-                result -= mask * (-value / 100.0) * 0.35
+                mask = _ramp((result - 0.60) / 0.40)
+                result -= mask * (-value / 100.0) * 0.30
+            else:
+                mask = _ramp((result - 0.60) / 0.40)
+                result += mask * (value / 100.0) * 0.30
         elif op == "tone.shadow":
             if value != 0:
-                mask = np.maximum((0.5 - result) / 0.5, 0)
-                result += mask * (value / 100.0) * 0.06
+                mask = _ramp((0.45 - result) / 0.45)
+                result += mask * (value / 100.0) * 0.30
         elif op == "tone.white":
-            result += value / 100.0 * 0.04
+            # The white point moves; everything below it follows in
+            # proportion, so nothing is pushed through the ceiling.
+            result *= 1.0 + value / 100.0 * 0.15
         elif op == "tone.black":
-            result += value / 100.0 * 0.04
+            floor = -value / 100.0 * 0.06
+            if floor > 0:
+                result = (result - floor) / max(1.0 - floor, 1e-4)
+            elif floor < 0:
+                result = -floor + result * (1.0 + floor)
         elif op == "levels.white_input":
             result /= max(value / 255.0, 1e-4)
         elif op == "levels.black_input":
@@ -226,7 +303,7 @@ def _apply_global(rgb: np.ndarray, operations: list[dict[str, Any]]) -> np.ndarr
                 lum = (result * np.array([0.2126, 0.7152, 0.0722])).sum(
                     axis=2, keepdims=True)
                 if component == "lightness":
-                    result += mask[..., None] * (value / 100.0) * 0.12
+                    result += mask[..., None] * (value / 100.0) * 0.10
                 else:
                     result = np.where(
                         mask[..., None],
@@ -239,6 +316,13 @@ def _apply_global(rgb: np.ndarray, operations: list[dict[str, Any]]) -> np.ndarr
                 xx /= max(result.shape[1] - 1, 1)
                 edge = np.minimum.reduce([xx, 1 - xx, yy, 1 - yy])
                 result *= 1.0 + value / 100.0 * np.clip(1 - edge * 5, 0, 1)[..., None]
+        if tonal:
+            # The channels keep their ratios to one another; only their
+            # common brightness has moved.
+            before = (colour * _LUMA).sum(axis=2, keepdims=True)
+            result = colour * (result / np.maximum(before, 1e-5))
+        if display:
+            result = _decoded(result)
     return np.maximum(result, 0.0)
 
 

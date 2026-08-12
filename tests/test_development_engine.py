@@ -79,6 +79,68 @@ class DevelopmentEngineTests(unittest.TestCase):
                         rgb[0, 0, 0] - rgb[0, 0, 1])
         np.testing.assert_allclose(result[0, 1], rgb[0, 1], atol=1e-5)
 
+    def saturation(self, rgb):
+        top, bottom = rgb.max(axis=2), rgb.min(axis=2)
+        return float(np.mean(np.where(top > 0, (top - bottom) / np.maximum(top, 1e-6), 0)))
+
+    def test_a_tonal_move_changes_brightness_and_leaves_colour_alone(self):
+        """Contrast is a tone control, and was acting as a colour one.
+
+        Applied per channel it pulls them apart, so a recipe that asked for
+        less blue and more contrast got a bluer sky: measured on a real
+        frame, three colour families the model asked to quieten all rose,
+        one of them by 32 points.
+        """
+        rgb = np.zeros((1, 3, 3), dtype=np.float32)
+        rgb[0, 0] = (0.36, 0.09, 0.05)
+        rgb[0, 1] = (0.05, 0.14, 0.40)
+        rgb[0, 2] = (0.22, 0.24, 0.10)
+        raised = _apply_global(rgb, [{"op": "tone.contrast", "value": 20}])
+
+        luma = np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)
+        self.assertGreater(float((raised * luma).sum(axis=2).max()),
+                           float((rgb * luma).sum(axis=2).max()))
+        self.assertAlmostEqual(
+            self.saturation(raised), self.saturation(rgb), places=3)
+
+    def test_a_colour_instruction_survives_the_tone_instructions_after_it(self):
+        rgb = np.full((1, 1, 3), 0.1, dtype=np.float32)
+        rgb[0, 0] = (0.06, 0.16, 0.45)
+        quieter = _apply_global(rgb, [
+            {"op": "color.hsl_range", "channel": "blue/teal",
+             "component": "saturation", "value": -20},
+            {"op": "tone.contrast", "value": 18},
+            {"op": "tone.black", "value": -12},
+        ])
+        self.assertLess(self.saturation(quieter), self.saturation(rgb))
+
+    def test_a_dense_tonal_recipe_does_not_crush_or_clip_the_frame(self):
+        # The numbers from a real signature treatment. Rendered per channel
+        # in linear light they crushed 6% of the frame to black and clipped
+        # 5% to white.
+        gradient = np.linspace(0.002, 0.98, 256, dtype=np.float32)
+        rgb = np.repeat(np.repeat(gradient[None, :, None], 64, axis=0), 3, axis=2)
+        rgb[..., 2] *= 1.15
+        result = _apply_global(rgb, [
+            {"op": "tone.contrast", "value": 17},
+            {"op": "tone.highlight", "value": -35},
+            {"op": "tone.shadow", "value": 11.5},
+            {"op": "tone.white", "value": -14},
+            {"op": "tone.black", "value": -13},
+        ])
+        def crushed(image):
+            return float((image.max(axis=2) <= 0.004).mean())
+
+        def clipped(image):
+            return float((image.max(axis=2) >= 1.0).mean())
+
+        # Measured against what the frame arrived with, so the fixture's
+        # own blown corner is not counted against the recipe.
+        self.assertLess(crushed(result) - crushed(rgb), 0.02,
+                        "the recipe crushed the shadows away")
+        self.assertLess(clipped(result) - clipped(rgb), 0.02,
+                        "the recipe clipped the highlights away")
+
     def test_linear_mask_blends_only_its_anchor_region(self):
         rgb = np.full((4, 1, 3), 0.5, dtype=np.float32)
         result = _apply_global(rgb, [{

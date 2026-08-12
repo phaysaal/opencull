@@ -1,3 +1,4 @@
+import inspect
 import json
 import tempfile
 import unittest
@@ -95,6 +96,18 @@ class DevelopmentPipelineTests(unittest.TestCase):
             self.assertEqual(result["recipe"]["style"], "calibrated")
             renders = load_project(project)["artifacts"]["renders"]
             self.assertEqual([item["variant"] for item in renders], ["calibrated"])
+
+
+class RendererRevisionTests(unittest.TestCase):
+    """A better renderer must reach the frames already rendered."""
+
+    def test_a_proof_is_keyed_to_the_renderer_that_made_it(self):
+        from development_engine import RECIPE_ENGINE_REVISION
+        from opencull_gui import development
+
+        source = inspect.getsource(development.DevelopmentWorkspace.recipe_preview)
+        self.assertIn("RECIPE_ENGINE_REVISION", source)
+        self.assertIsInstance(RECIPE_ENGINE_REVISION, int)
 
 
 if __name__ == "__main__":
