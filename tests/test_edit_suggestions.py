@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from PIL import Image
 
@@ -10,10 +11,12 @@ from edit_suggestion_kernel import (
     build_edit_report,
     build_edit_request,
     chosen_style,
+    edit_candidate_path,
     edit_direction_json,
     edit_direction_needs_validation,
     edit_direction_prompt,
     edit_direction_repair_prompt,
+    inert_treatments,
     mark_edit_direction_validation,
     normalize_edit_direction,
     parse_edit_candidates,
@@ -21,6 +24,8 @@ from edit_suggestion_kernel import (
     valid_edit_direction,
     valid_edit_report,
     valid_style_choice,
+    validation_failures,
+    viewed_as,
 )
 
 
@@ -87,7 +92,7 @@ class EditSuggestionKernelTests(unittest.TestCase):
                 "confidence": 0.86,
             }
             recipe = json.dumps({
-                section: [f"Apply a restrained {section} adjustment."]
+                section: [f"Apply a restrained {section} adjustment: Exposure +0.10."]
                 for section in RECIPE_SECTIONS
             })
             value.update({
@@ -104,7 +109,7 @@ class EditSuggestionKernelTests(unittest.TestCase):
 
     def test_normalizer_repairs_missing_final_recipe_array_bracket(self):
         recipe = json.dumps({
-            section: [f"Apply a restrained {section} adjustment."]
+            section: [f"Apply a restrained {section} adjustment: Exposure +0.10."]
             for section in RECIPE_SECTIONS
         })
         truncated = recipe[:-2] + recipe[-1]
@@ -209,6 +214,134 @@ class EditSuggestionKernelTests(unittest.TestCase):
                 json.loads(request)["style_profile"]["sha256"])
 
 
+class WhatTheModelSeesTests(EditSuggestionKernelTests):
+    """The image judged and the image edited have to be the same image."""
+
+    def test_a_folder_with_no_decoder_falls_back_to_the_camera_rendering(self):
+        # The fixture folder has no project layout or report, so no
+        # workspace can be built: the honest answer is the camera's own
+        # rendering, said out loud on the entry rather than assumed.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            photos, shortlist, review = self.make_context(root)
+            request = build_edit_request(
+                str(shortlist), str(review), str(photos))
+            candidate = parse_edit_candidates(request)[0]
+            self.assertEqual(candidate["photos_root"], str(photos.resolve()))
+            shown = edit_candidate_path(request, candidate)
+            self.assertEqual(Path(shown).name, "A.JPG")
+            self.assertEqual(viewed_as(candidate), "camera rendering")
+            entry = edit_direction_json({}, candidate)
+            self.assertEqual(entry["viewed"], "camera rendering")
+
+    def test_the_prompt_says_which_rendering_is_on_the_table(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            photos, shortlist, review = self.make_context(root)
+            request = build_edit_request(
+                str(shortlist), str(review), str(photos))
+            candidate = parse_edit_candidates(request)[0]
+            self.assertIn(
+                "camera's own rendering",
+                edit_direction_prompt(candidate, "professional"))
+
+    def test_a_baseline_is_shown_and_named_when_one_can_be_rendered(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            photos, shortlist, review = self.make_context(root)
+            request = build_edit_request(
+                str(shortlist), str(review), str(photos))
+            candidate = parse_edit_candidates(request)[0]
+            baseline = root / "neutral.jpg"
+            Image.new("RGB", (32, 24), (90, 92, 88)).save(baseline)
+            with mock.patch(
+                    "edit_suggestion_kernel.baseline_view",
+                    return_value=baseline):
+                self.assertEqual(
+                    edit_candidate_path(request, candidate), str(baseline))
+                self.assertEqual(viewed_as(candidate), "calibrated baseline")
+                prompt = edit_direction_prompt(candidate, "professional")
+            self.assertIn("neutral rendering of the RAW", prompt)
+            self.assertIn("the exact image", prompt)
+
+
+class InertAnswerTests(EditSuggestionKernelTests):
+    """An answer that renders nothing is not a treatment."""
+
+    def recipe_of(self, step: str) -> str:
+        return json.dumps({section: [step] for section in RECIPE_SECTIONS})
+
+    def direction(self, step: str) -> dict:
+        value = {
+            "scene_reading": "A quiet blue-hour portrait.",
+            "standard_title": "Clean editorial",
+            "standard_intent": "Natural polish.",
+            "standard_instructions": "Balance exposure.",
+            "signature_title": "Indigo warmth",
+            "signature_intent": "Warm against cool.",
+            "signature_instructions": "Restrained split color.",
+            "creative_title": "Evening cinema",
+            "creative_intent": "Cinematic atmosphere.",
+            "creative_instructions": "Shape light.",
+            "guardrails": "Preserve expression.",
+            "confidence": 0.8,
+            "personal_style_choice": 0,
+        }
+        for style in ("standard", "signature", "creative"):
+            value[f"{style}_recipe"] = self.recipe_of(step)
+        return normalize_edit_direction(value)
+
+    def test_a_recipe_that_compiles_to_nothing_is_refused(self):
+        """The exact answer one live frame came back with."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            photos, shortlist, review = self.make_context(root)
+            request = build_edit_request(
+                str(shortlist), str(review), str(photos))
+            candidate = parse_edit_candidates(request)[0]
+            empty = self.direction(
+                "No source recommendation was provided; make no change.")
+            self.assertEqual(
+                inert_treatments(empty),
+                ["standard", "signature", "creative"])
+            self.assertFalse(valid_edit_direction(empty, candidate))
+            self.assertIn(
+                "would render the photograph unchanged",
+                " ".join(validation_failures(empty, candidate)))
+
+    def test_a_recipe_with_a_real_adjustment_is_accepted(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            photos, shortlist, review = self.make_context(root)
+            request = build_edit_request(
+                str(shortlist), str(review), str(photos))
+            candidate = parse_edit_candidates(request)[0]
+            real = self.direction("Set Exposure +0.15 and Contrast +12.")
+            self.assertEqual(inert_treatments(real), [])
+            self.assertTrue(valid_edit_direction(real, candidate))
+
+    def test_an_absent_personal_treatment_is_honest_not_inert(self):
+        # The personal treatment is optional. Leaving it out is fine;
+        # writing one that does nothing is not.
+        real = self.direction("Set Exposure +0.15.")
+        self.assertEqual(inert_treatments(real), [])
+        real["personal_recipe"] = self.recipe_of(
+            "No source recommendation was provided; make no change.")
+        self.assertEqual(inert_treatments(real), ["personal"])
+
+    def test_the_prompt_asks_for_an_empty_section_not_a_sentence(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            photos, shortlist, review = self.make_context(root)
+            request = build_edit_request(
+                str(shortlist), str(review), str(photos))
+            prompt = edit_direction_prompt(
+                parse_edit_candidates(request)[0], "professional")
+            self.assertIn("at least one concrete", prompt)
+            self.assertIn("empty list", prompt)
+            self.assertIn("never a sentence saying there is no", prompt)
+
+
 class PersonalStyleChoiceTests(EditSuggestionKernelTests):
     """A photographer has several tastes; each photograph asks for one."""
 
@@ -235,7 +368,7 @@ class PersonalStyleChoiceTests(EditSuggestionKernelTests):
 
     def direction(self, choice, reason="the light suits it"):
         recipe = json.dumps({
-            section: [f"Apply a restrained {section} adjustment."]
+            section: [f"Apply a restrained {section} adjustment: Exposure +0.10."]
             for section in RECIPE_SECTIONS})
         return normalize_edit_direction({
             "scene_reading": "A quiet blue-hour portrait.",

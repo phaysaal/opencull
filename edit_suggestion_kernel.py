@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from recipe_compiler import STYLES, compile_recipe
 from scan import visible_photograph
 
 FORMAT = "opencull-edit-directions-v1"
@@ -23,6 +24,9 @@ FIELDS = (
 REQUIRED_FIELDS = tuple(field for field in FIELDS if field not in {
     "personal_title", "personal_intent", "personal_instructions",
     "personal_recipe", "personal_style_choice", "personal_style_reason"})
+
+# The treatments an answer carries, in the order they are read.
+TREATMENTS = ("standard", "signature", "creative", "personal")
 
 RECIPE_SECTIONS = (
     "base_and_lens", "composition", "global_exposure", "hdr_levels_curves",
@@ -50,6 +54,78 @@ def _load_style_profile(path: str) -> dict[str, Any]:
     profile["path"] = str(profile_path)
     profile["sha256"] = hashlib.sha256(profile_path.read_bytes()).hexdigest()
     return profile
+
+
+# The model was being shown the camera's own rendering -- a Fujifilm frame
+# arrives with its film simulation already applied -- while the recipe it
+# wrote was applied to the neutral decode underneath. Measured on one
+# frame: the model looked at contrast 72 and saturation 31, and its
+# instructions landed on contrast 59 and saturation 19. It wrote restraint
+# because it saw a picture that had already been given the treatment, and
+# the photographer got neither look.
+#
+# So the model is shown the same neutral baseline the recipe will be
+# applied to. Rendering it costs a demosaic per frame, cached at the size
+# the develop page also proofs at, so the frame is decoded once for both.
+BASELINE_EDGE = 1600
+BASELINE_DEMOSAIC = "markesteijn-3-pass"
+
+_workspaces: dict[str, Any] = {}
+
+
+def _workspace(root: Path) -> Any:
+    """The development workspace for one folder, or None if there is none."""
+    key = str(root)
+    if key in _workspaces:
+        return _workspaces[key]
+    workspace = None
+    try:
+        from opencull_gui.development import (
+            DevelopmentWorkspace,
+            available_decoders,
+        )
+        from opencull_gui.project import (
+            ensure_project_layout,
+            load_or_create_folder_project,
+        )
+        from opencull_gui.raw_sources import RawSourceStore
+        from opencull_gui.report import load_report
+
+        layout = ensure_project_layout(root)
+        reports = sorted(layout["Reports"].glob("*-results.json"))
+        if reports:
+            report = load_report(reports[0])
+            project_path, _project = load_or_create_folder_project(
+                root, report.path.stem)
+            workspace = DevelopmentWorkspace(
+                project_path, layout,
+                RawSourceStore(layout["Operations"] / "raw-sources.json",
+                               report),
+                decoders=available_decoders())
+    except Exception:                                # noqa: BLE001 - optional
+        workspace = None
+    _workspaces[key] = workspace
+    return workspace
+
+
+def baseline_view(root: Path, photo: str) -> Path | None:
+    """The neutral rendering of one frame, or None if it cannot be made.
+
+    A folder with no decoder, or a photograph the workspace cannot resolve,
+    falls back to what the camera wrote. That is worse evidence, and saying
+    so on the entry is better than refusing to answer at all.
+    """
+    workspace = _workspace(Path(root))
+    if workspace is None:
+        return None
+    try:
+        engine = str(workspace.decoder_for(photo)["engine"])
+        rendered = workspace.recipe_preview(
+            photo, "calibrated", engine, BASELINE_DEMOSAIC, BASELINE_EDGE)
+    except Exception:                                # noqa: BLE001 - optional
+        return None
+    path = Path(rendered)
+    return path if path.is_file() else None
 
 
 def offered_styles(request: str) -> list[dict[str, Any]]:
@@ -180,6 +256,7 @@ def build_edit_request(
             "human_note": human.get("note", ""),
             "style_profile": personal_profile,
             "style_profiles": style_bank,
+            "photos_root": str(root),
         })
     candidates.sort(key=lambda item: (item.get("rank", 10**9), item["photo"]))
     if targets and {item["photo"] for item in candidates} != targets:
@@ -214,14 +291,40 @@ def parse_edit_candidates(request: str) -> list[dict[str, Any]]:
 
 
 def edit_candidate_path(request: str, candidate: dict[str, Any]) -> str:
+    """The image the model is shown: the neutral baseline where there is one."""
     value = json.loads(str(request))
-    return str(visible_photograph(
-        Path(value["photos_root"]), str(candidate["photo"])))
+    root = Path(value["photos_root"])
+    photo = str(candidate["photo"])
+    baseline = baseline_view(root, photo)
+    return str(baseline) if baseline else str(visible_photograph(root, photo))
+
+
+def viewed_as(candidate: dict[str, Any]) -> str:
+    """What the model was actually shown, in one phrase for the record."""
+    root = str(candidate.get("photos_root") or "")
+    if not root:
+        return "camera rendering"
+    return ("calibrated baseline"
+            if baseline_view(Path(root), str(candidate.get("photo") or ""))
+            else "camera rendering")
 
 
 def edit_direction_prompt(candidate: dict[str, Any], profile: str) -> str:
     raw = bool(candidate.get("raw_files"))
     bank = candidate.get("style_profiles") or []
+    neutral = viewed_as(candidate) == "calibrated baseline"
+    shown = (
+        """
+The photograph below is the neutral rendering of the RAW: demosaiced, no
+film simulation, no curve, nothing interpreted. It is deliberately flatter
+and less saturated than the camera's own JPEG, and it is the exact image
+your recipe will be applied to. Judge it as a starting point with headroom
+rather than as a finished photograph -- flatness here is material to work
+with, not a fault to leave alone."""
+        if neutral else
+        """
+The photograph below is the camera's own rendering, which already carries
+whatever the camera applied when the shutter closed.""")
     if bank:
         # The photographer's tastes are offered as a menu and the answer
         # names the number it used. A number cannot be a style that does
@@ -248,6 +351,7 @@ personal_style_choice to 0 and leave personal_style_reason empty."""
     return f"""You are a senior photographic editor and colorist. Inspect the
 actual supplied photograph, not merely its metadata. Propose three genuinely
 different, tasteful edit directions appropriate to this exact scene.
+{shown}
 
 Photo: {candidate.get('photo')}
 Existing assessment: {json.dumps(candidate.get('assessment', {}))}
@@ -287,8 +391,13 @@ heal or clone layers and whether each mask is brush, subject/background,
 linear/radial gradient, color range, or luma range, including opacity and
 feathering guidance. Include an evaluation order and histogram/clipping/skin
 checks. Use JSON only inside each recipe string. Return confidence strictly as
-a number from 0 through 1. Before responding, verify that every recipe string
-is complete JSON and that its final section closes both the list and object."""
+a number from 0 through 1. Every recipe must contain at least one concrete
+adjustment: a named control with a number or a range, such as "Exposure
++0.15" or "HDR Shadow +12". A section you have no recommendation for is an
+empty list -- never a sentence saying there is no recommendation, which
+reads as an edit and renders as nothing. Before responding, verify that
+every recipe string is complete JSON and that its final section closes both
+the list and object."""
 
 
 def edit_direction_repair_prompt(value: Any, candidate: Any = None) -> str:
@@ -310,7 +419,10 @@ parameter guidance, and guardrails. Do not summarize, omit, embellish, or
 replace its recommendations.
 
 Required top-level fields: {', '.join(FIELDS)}.
-Confidence must be a number from 0 through 1. {style_rule} Each of standard_recipe,
+Confidence must be a number from 0 through 1. {style_rule}
+Every recipe must keep at least one concrete named adjustment with a number
+or range. Where the malformed object has none, carry over the adjustment its
+own instructions describe rather than inventing one. Each of standard_recipe,
 signature_recipe, creative_recipe, and personal_recipe must be a JSON object
 encoded as text. Every encoded recipe must contain exactly these keys:
 {', '.join(RECIPE_SECTIONS)}. Every recipe value must be a non-empty ordered
@@ -378,6 +490,42 @@ def normalize_edit_direction(value: Any) -> dict[str, Any]:
     return clean
 
 
+def executable_steps(recipe: Any, style: str, photo: str = "frame") -> int:
+    """How many of a recipe's steps become an operation a renderer can run.
+
+    A treatment is a set of instructions to a develop program. One that
+    compiles to nothing is not a restrained treatment -- it is a treatment
+    that will render the photograph exactly as it arrived while claiming
+    to be an edit of it. A model that has no recommendation says so by
+    leaving the section empty, not by writing a sentence about having
+    none.
+    """
+    if not str(recipe or "").strip():
+        return 0
+    try:
+        compiled = compile_recipe(
+            photo, style if style in STYLES else "standard",
+            "", "", recipe, "", "raw")
+    except Exception:                                # noqa: BLE001 - unreadable
+        return 0
+    return int(compiled.get("coverage", {}).get("executable", 0))
+
+
+def inert_treatments(value: Any, photo: str = "frame") -> list[str]:
+    """The treatments in this answer that would change nothing."""
+    if not isinstance(value, dict):
+        return list(TREATMENTS)
+    inert = []
+    for style in TREATMENTS:
+        recipe = value.get(f"{style}_recipe")
+        if style == "personal" and not str(recipe or "").strip():
+            # A personal treatment is optional; an empty one is honest.
+            continue
+        if executable_steps(recipe, style, photo) < 1:
+            inert.append(style)
+    return inert
+
+
 def valid_style_choice(value: Any, candidate: Any = None) -> bool:
     """Whether the style it says it used is one it was actually offered.
 
@@ -399,6 +547,10 @@ def valid_style_choice(value: Any, candidate: Any = None) -> bool:
 
 def valid_edit_direction(value: Any, candidate: Any = None) -> bool:
     if not valid_style_choice(value, candidate):
+        return False
+    photo = str((candidate or {}).get("photo") or "frame") if isinstance(
+        candidate, dict) else "frame"
+    if inert_treatments(value, photo):
         return False
     recipes_valid = True
     for field in ("standard_recipe", "signature_recipe", "creative_recipe", "personal_recipe"):
@@ -469,6 +621,9 @@ def edit_direction_json(
     return {
         "photo": candidate["photo"],
         "format_repaired": bool(format_repaired),
+        # Which image this judgement was made from. A treatment read back
+        # in a year should say what its author was looking at.
+        "viewed": viewed_as(candidate),
         **direction,
         **({"personal_style": style} if style else {}),
     }
@@ -509,6 +664,10 @@ def validation_failures(value: Any, candidate: Any = None) -> list[str]:
     if not valid_style_choice(value, candidate):
         failures.append(
             "personal_style_choice does not name one of the styles offered")
+    for style in inert_treatments(value):
+        failures.append(
+            f"{style}_recipe compiles to no executable operation, so that "
+            "treatment would render the photograph unchanged")
     titles = {
         str(value.get(f"{kind}_title", "")).casefold()
         for kind in ("standard", "signature", "creative")
