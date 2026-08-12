@@ -15,7 +15,7 @@ import os
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, Signal
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QIcon, QPixmap
 
 from opencull_gui.photos import PhotoError, PhotoStore
 
@@ -151,6 +151,24 @@ class LibraryPreviewLoader(PreviewLoader):
             _Job(store, name, size, self._signals, self._generation,
                  lambda: self._generation, key=key))
         return None
+
+
+def plain_icon(pixmap: QPixmap) -> QIcon:
+    """An icon that looks the same selected as it does unselected.
+
+    Qt renders a selected item's icon in its own Selected mode, which
+    tints the picture with the palette's highlight colour. On a
+    photograph that is not a highlight, it is a colour cast: the frame
+    the photographer is judging is shown to them in a colour it is not.
+    Every mode is given the same pixmap, and the selection is said with
+    a border instead.
+    """
+    icon = QIcon()
+    for mode in (QIcon.Mode.Normal, QIcon.Mode.Selected,
+                 QIcon.Mode.Active, QIcon.Mode.Disabled):
+        for state in (QIcon.State.Off, QIcon.State.On):
+            icon.addPixmap(pixmap, mode, state)
+    return icon
 
 
 def scaled(

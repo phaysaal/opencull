@@ -13,7 +13,7 @@ culling report and its review already keep.
 from __future__ import annotations
 
 from PySide6.QtCore import QSize, Qt, Signal
-from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
+from PySide6.QtGui import QColor, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -48,7 +48,7 @@ from opencull_gui.shortlist_reviews import ShortlistReviewError
 
 from . import theme
 from .develop import PhotoLabel
-from .previews import PreviewLoader
+from .previews import PreviewLoader, plain_icon
 from .sheet import ContactSheet
 from .suggestions import ask_suggestion_scope, launch_suggestions
 
@@ -563,7 +563,7 @@ class ShortlistPage(QWidget):
             if odd:
                 item.setToolTip(
                     f"The model {self._disagreements[photo]}.")
-            item.setIcon(QIcon(self._entry_pixmap(photo, rated)))
+            item.setIcon(plain_icon(self._entry_pixmap(photo, rated)))
             item.setSizeHint(QSize(0, max(ROW, 64)))
             self.list.addItem(item)
         self.list.blockSignals(False)
@@ -932,7 +932,7 @@ class ShortlistPage(QWidget):
                     rated = str(
                         marks.get(photo, {}).get("tier")
                         or entry.get("tier", ""))
-                    item.setIcon(QIcon(self._entry_pixmap(photo, rated)))
+                    item.setIcon(plain_icon(self._entry_pixmap(photo, rated)))
                     break
 
     # --- decisions ------------------------------------------------------

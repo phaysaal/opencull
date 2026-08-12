@@ -27,7 +27,7 @@ from PySide6.QtCore import (
     QVariantAnimation,
     Signal,
 )
-from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
+from PySide6.QtGui import QColor, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
@@ -48,7 +48,7 @@ from opencull_gui.development import (
 )
 
 from . import theme
-from .previews import PreviewLoader, scaled
+from .previews import PreviewLoader, plain_icon, scaled
 from .widgets import short_path, workspace_title
 
 # A proof, not a delivery. Big enough to judge a treatment on a laptop
@@ -960,7 +960,7 @@ class DevelopPage(QWidget):
             item.setSizeHint(QSize(0, PHOTO_ROW))
             pixmap = self.loader.request(name, "thumb")
             if pixmap is not None:
-                item.setIcon(QIcon(pixmap))
+                item.setIcon(plain_icon(pixmap))
             self.photos.addItem(item)
         self.photos.blockSignals(False)
         self.counter.setText(
@@ -996,7 +996,7 @@ class DevelopPage(QWidget):
         for row in range(self.photos.count()):
             item = self.photos.item(row)
             if item.data(Qt.ItemDataRole.UserRole) == name:
-                item.setIcon(QIcon(pixmap))
+                item.setIcon(plain_icon(pixmap))
                 break
 
     # --- treatments ------------------------------------------------------
@@ -1019,7 +1019,7 @@ class DevelopPage(QWidget):
             entry.setSizeHint(QSize(0, TREATMENT_TILE))
             preview = self.previews.get((self.current, str(item["id"])))
             if preview is not None:
-                entry.setIcon(QIcon(preview))
+                entry.setIcon(plain_icon(preview))
             self.treatments.addItem(entry)
         self.treatments.blockSignals(False)
         self._request_previews()
@@ -1139,7 +1139,7 @@ class DevelopPage(QWidget):
         for row in range(self.treatments.count()):
             entry = self.treatments.item(row)
             if entry.data(Qt.ItemDataRole.UserRole) == treatment:
-                entry.setIcon(QIcon(pixmap))
+                entry.setIcon(plain_icon(pixmap))
                 break
 
     def _thumb_progress(self, done: int, total: int) -> None:

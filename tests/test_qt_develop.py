@@ -506,6 +506,29 @@ class DevelopPageTests(unittest.TestCase):
         stage.set_treated(treated, "Bold")
         self.assertIsNone(stage.image._sweep)
 
+    def test_selecting_a_preview_does_not_repaint_the_photograph(self):
+        """A highlight over a photograph is a colour the photograph is not."""
+        from PySide6.QtGui import QColor, QIcon, QPixmap
+
+        from opencull_qt.previews import plain_icon
+
+        picture = QPixmap(40, 30)
+        picture.fill(QColor(120, 160, 90))
+        icon = plain_icon(picture)
+        wash = QIcon(picture)
+
+        def hue(pixmap):
+            colour = pixmap.toImage().pixelColor(20, 15)
+            return (colour.red(), colour.green(), colour.blue())
+
+        plain = hue(icon.pixmap(40, 30, QIcon.Mode.Normal))
+        chosen = hue(icon.pixmap(40, 30, QIcon.Mode.Selected))
+        self.assertEqual(plain, chosen)
+        # And that this is worth guarding: Qt's own icon does tint.
+        self.assertNotEqual(
+            hue(wash.pixmap(40, 30, QIcon.Mode.Normal)),
+            hue(wash.pixmap(40, 30, QIcon.Mode.Selected)))
+
     def test_clicking_a_preview_asks_for_it_at_proof_size(self):
         page = self.suggested_page(marked=(NAMES[0],))
         asked = []

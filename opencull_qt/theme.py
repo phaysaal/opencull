@@ -226,11 +226,12 @@ QListWidget#clusterList {{
     padding: 6px 0;
 }}
 QListWidget#clusterList::item {{
-    padding: 9px 12px; color: {MUTED}; border: none;
+    padding: 9px 12px; color: {MUTED};
+    border: 2px solid transparent; border-radius: 6px;
 }}
 QListWidget#clusterList::item:selected {{
-    background: {RAISED}; color: {PAPER};
-    border-left: 2px solid {SAFELIGHT};
+    background: transparent; color: {PAPER};
+    border: 2px solid {SAFELIGHT};
 }}
 QListWidget#clusterList::item:hover {{ background: {RAISED}; }}
 
@@ -309,12 +310,16 @@ QListWidget#treatmentList {{
 }}
 /* No vertical padding: the row's height is set on the item, and the
    delegate centres the text within it. */
+/* The border is drawn on every row, transparent until the row is
+   chosen, so selecting one does not move the picture beside it by the
+   width of a border that just appeared. */
 QListWidget#treatmentList::item {{
-    padding: 0 10px; color: {MUTED}; border: none;
+    padding: 0 8px; color: {MUTED};
+    border: 2px solid transparent; border-radius: 6px;
 }}
 QListWidget#treatmentList::item:selected {{
-    background: {RAISED}; color: {PAPER};
-    border-left: 2px solid {SAFELIGHT};
+    background: transparent; color: {PAPER};
+    border: 2px solid {SAFELIGHT};
 }}
 QListWidget#treatmentList::item:hover {{ background: {RAISED}; }}
 

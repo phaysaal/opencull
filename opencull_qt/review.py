@@ -13,7 +13,6 @@ from pathlib import Path
 from PySide6.QtCore import QEvent, QSize, Qt, Signal
 from PySide6.QtGui import (
     QColor,
-    QIcon,
     QPainter,
     QPen,
     QPixmap,
@@ -44,7 +43,7 @@ from opencull_gui.report import ReportIndex
 from opencull_gui.reviews import ReviewError, ReviewStore, approve_remaining
 
 from . import theme
-from .previews import PreviewLoader, scaled
+from .previews import PreviewLoader, plain_icon, scaled
 from .widgets import Filmstrip, workspace_title
 
 THUMB = 200
@@ -689,7 +688,7 @@ class ReviewPage(QWidget):
             item = QListWidgetItem()
             item.setData(Qt.ItemDataRole.UserRole, cluster_id)
             item.setData(Qt.ItemDataRole.UserRole + 1, reviewed)
-            item.setIcon(QIcon(self._index_pixmap(cluster_id, reviewed)))
+            item.setIcon(plain_icon(self._index_pixmap(cluster_id, reviewed)))
             item.setSizeHint(QSize(220, 70))
             item.setToolTip(
                 "Reviewed." if reviewed
@@ -758,7 +757,7 @@ class ReviewPage(QWidget):
             return
         item = self.clusters.item(row)
         reviewed = bool(item.data(Qt.ItemDataRole.UserRole + 1))
-        item.setIcon(QIcon(self._index_pixmap(cluster_id, reviewed)))
+        item.setIcon(plain_icon(self._index_pixmap(cluster_id, reviewed)))
 
     def _row_of(self, cluster_id: str) -> int:
         for row in range(self.clusters.count()):
