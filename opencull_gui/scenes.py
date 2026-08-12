@@ -284,12 +284,17 @@ def derive_scene_entries(index: Any) -> Path | None:
         return None
 
     known: dict[str, dict[str, Any]] = {}
+    # Which report each answer came from, newest first, so a scene's
+    # siblings can tell whether the representative now speaks from a
+    # later answer than their own.
+    age: dict[str, int] = {}
     style_sha = ""
-    for _path, report in index.reports(sha):
+    for rank, (_path, report) in enumerate(index.reports(sha)):
         for entry in report.get("entries", []) or []:
             photo = entry.get("photo") if isinstance(entry, dict) else None
             if isinstance(photo, str) and photo not in known:
                 known[photo] = entry
+                age[photo] = rank
                 if not style_sha:
                     style_sha = str(report.get("style_profile_sha256", ""))
 
@@ -302,7 +307,13 @@ def derive_scene_entries(index: Any) -> Path | None:
         if answer is None:
             continue
         for photo in scene.get("photos", []) or []:
-            if photo == representative or photo in known:
+            # A sibling keeps its own answer, unless the frame that speaks
+            # for its scene has since been asked again. Re-asking a scene
+            # is meant to re-treat the scene; leaving the siblings on
+            # answers from an older run would share nothing.
+            stale = (photo in age and representative in age
+                     and age[representative] < age[photo])
+            if photo == representative or (photo in known and not stale):
                 continue
             derived.append({
                 **json.loads(json.dumps(answer)),
