@@ -16,6 +16,7 @@ from pathlib import Path
 from PySide6.QtCore import QObject, QRunnable, QSize, Qt, QThreadPool, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
+    QComboBox,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -28,7 +29,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from opencull_gui.development import DevelopmentWorkspace, suggested_filename
+from opencull_gui.development import (
+    BUILTIN_STYLES,
+    DevelopmentWorkspace,
+    suggested_filename,
+)
 
 from . import theme
 from .previews import PreviewLoader, scaled
@@ -453,8 +458,11 @@ class DevelopPage(QWidget):
 
         self._build()
         self._fill_photos()
-        if self.current:
-            self.show_photo(self.current)
+        # Open on a frame the list is actually holding: the first treated
+        # one, or the first of the folder when nothing has been suggested.
+        shown = self.shown_photos()
+        if shown:
+            self.show_photo(shown[0])
 
     # --- construction ---------------------------------------------------
 
@@ -469,12 +477,35 @@ class DevelopPage(QWidget):
         split.setContentsMargins(0, 0, 0, 0)
         split.setSpacing(0)
 
+        # A folder of two hundred frames, of which thirty-nine have
+        # treatments, is a list where the work is hidden among frames that
+        # only have the baseline. The frames with something to choose
+        # between come first and alone; the rest stay one click away,
+        # because the baseline is theirs to render whenever they want it.
+        rail = QWidget()
+        rail.setObjectName("page")
+        rail.setFixedWidth(238)
+        rail_column = QVBoxLayout(rail)
+        rail_column.setContentsMargins(0, 0, 0, 0)
+        rail_column.setSpacing(0)
+
+        self.scope = QComboBox()
+        self.scope.setObjectName("sort")
+        self.scope.setFont(theme.body(9))
+        self.scope.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.scope.setToolTip(
+            "Which frames this list holds. Every frame can be rendered from "
+            "the calibrated baseline; only the ones you asked about have "
+            "treatments to choose between.")
+        self.scope.currentIndexChanged.connect(self._scope_changed)
+        rail_column.addWidget(self.scope)
+
         self.photos = QListWidget()
         self.photos.setObjectName("clusterList")
         self.photos.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.photos.setFixedWidth(238)
         self.photos.currentRowChanged.connect(self._chose_row)
-        split.addWidget(self.photos)
+        rail_column.addWidget(self.photos, 1)
+        split.addWidget(rail)
 
         stage = QWidget()
         stage.setObjectName("page")
@@ -608,21 +639,79 @@ class DevelopPage(QWidget):
 
     # --- photographs -----------------------------------------------------
 
+    def treated_photos(self) -> list[str]:
+        """The frames a treatment was actually written for, in shot order."""
+        try:
+            candidates = self.workspace.payload().get("candidates", [])
+        except Exception:                            # noqa: BLE001 - absent
+            return []
+        named = {
+            str(item.get("photo")) for item in candidates
+            if isinstance(item, dict) and any(
+                str(item.get(f"{style}_recipe") or "").strip()
+                for style in BUILTIN_STYLES if style != "calibrated")}
+        return [name for name in self.photo_names if name in named]
+
+    def shown_photos(self) -> list[str]:
+        treated = self.treated_photos()
+        if not treated:
+            # Nothing has been suggested yet, so "with treatments" would be
+            # an empty page offering a filter to escape itself.
+            return list(self.photo_names)
+        return (list(self.photo_names) if self.scope.currentData() == "all"
+                else treated)
+
+    def _sync_row(self) -> None:
+        """Keep the list's highlight on the frame being shown, if it is here.
+
+        The frame stays open when the list stops holding it -- narrowing to
+        the treated frames should not throw away the one being looked at.
+        """
+        shown = self.shown_photos()
+        row = shown.index(self.current) if self.current in shown else -1
+        if self.photos.currentRow() != row:
+            self.photos.blockSignals(True)
+            self.photos.setCurrentRow(row)
+            self.photos.blockSignals(False)
+
+    def _scope_changed(self, _index: int) -> None:
+        self._fill_photos()
+        shown = self.shown_photos()
+        if shown and self.current not in shown:
+            self.show_photo(shown[0])
+        else:
+            self._sync_row()
+
     def _fill_photos(self) -> None:
+        treated = self.treated_photos()
+        total = len(self.photo_names)
+        self.scope.blockSignals(True)
+        chosen = self.scope.currentData() or ("treated" if treated else "all")
+        self.scope.clear()
+        if treated:
+            self.scope.addItem(f"With treatments · {len(treated)}", "treated")
+        self.scope.addItem(f"Every frame · {total}", "all")
+        index = self.scope.findData(chosen)
+        self.scope.setCurrentIndex(max(0, index))
+        self.scope.setVisible(bool(treated))
+        self.scope.blockSignals(False)
+
+        shown = self.shown_photos()
         self.photos.blockSignals(True)
         self.photos.clear()
-        for name in self.photo_names:
+        for name in shown:
             item = QListWidgetItem(f"  {name}")
             item.setData(Qt.ItemDataRole.UserRole, name)
             self.photos.addItem(item)
         self.photos.blockSignals(False)
         self.counter.setText(
-            f"{len(self.photo_names)} photograph"
-            f"{'' if len(self.photo_names) == 1 else 's'}")
+            f"{len(shown)} photograph{'' if len(shown) == 1 else 's'}"
+            + (f" of {total}" if len(shown) != total else ""))
 
     def _chose_row(self, row: int) -> None:
-        if 0 <= row < len(self.photo_names):
-            self.show_photo(self.photo_names[row])
+        shown = self.shown_photos()
+        if 0 <= row < len(shown):
+            self.show_photo(shown[row])
         self.setFocus()
 
     def show_photo(self, name: str) -> None:
@@ -635,11 +724,7 @@ class DevelopPage(QWidget):
         if pixmap is not None:
             self.stage.set_as_shot(pixmap)
 
-        row = self.photo_names.index(name)
-        if self.photos.currentRow() != row:
-            self.photos.blockSignals(True)
-            self.photos.setCurrentRow(row)
-            self.photos.blockSignals(False)
+        self._sync_row()
         self._fill_treatments()
         self._show_treated()
 

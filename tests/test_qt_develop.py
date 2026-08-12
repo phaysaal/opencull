@@ -364,6 +364,25 @@ class DevelopPageTests(unittest.TestCase):
         self.addCleanup(page.deleteLater)
         return page
 
+    def suggested_page(self, marked=(NAMES[0],)):
+        """A develop page over a folder that has been through suggestions."""
+        from opencull_qt.develop import DevelopPage, workspace_for
+        from opencull_qt.previews import PreviewLoader
+
+        assess_and_suggest(
+            Path(self._temporary.name), self.report_path, self.photos_path,
+            marked=marked)
+        loader = PreviewLoader(self.photos)
+        page = DevelopPage(
+            self.report, workspace_for(self.report, self.photos.root,
+                                       decoders=set()), loader)
+        page.resize(900, 600)
+        page.show()
+        self.addCleanup(page.shutdown)
+        self.addCleanup(loader.shutdown)
+        self.addCleanup(page.deleteLater)
+        return page
+
     def wait_for(self, condition, timeout=30.0):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
@@ -379,6 +398,37 @@ class DevelopPageTests(unittest.TestCase):
             [page.photos.item(row).data(Qt.ItemDataRole.UserRole)
              for row in range(page.photos.count())],
             NAMES)
+
+    def test_a_folder_with_no_suggestions_keeps_every_frame_listed(self):
+        # Nothing has been suggested, so narrowing to treated frames would
+        # be an empty page. The filter does not even appear.
+        page = self.page()
+        self.assertEqual(page.treated_photos(), [])
+        self.assertEqual(page.photos.count(), len(NAMES))
+        self.assertFalse(page.scope.isVisibleTo(page))
+
+    def test_the_list_opens_on_the_frames_that_have_treatments(self):
+        page = self.suggested_page(marked=(NAMES[0], NAMES[1]))
+        listed = [page.photos.item(row).data(Qt.ItemDataRole.UserRole)
+                  for row in range(page.photos.count())]
+        self.assertEqual(listed, sorted([NAMES[0], NAMES[1]]))
+        self.assertTrue(page.scope.isVisibleTo(page))
+        self.assertEqual(page.scope.currentData(), "treated")
+        # And it opens on one of them rather than on a frame it is hiding.
+        self.assertIn(page.current, listed)
+        self.assertEqual(page.photos.currentRow(), 0)
+        self.assertIn("of", page.counter.text())
+
+    def test_every_frame_is_one_click_away_because_the_baseline_is_free(self):
+        page = self.suggested_page(marked=(NAMES[0],))
+        page.scope.setCurrentIndex(page.scope.findData("all"))
+        listed = [page.photos.item(row).data(Qt.ItemDataRole.UserRole)
+                  for row in range(page.photos.count())]
+        self.assertEqual(listed, NAMES)
+        # The frame being looked at survives the widening.
+        self.assertEqual(page.current, NAMES[0])
+        self.assertEqual(
+            listed[page.photos.currentRow()], NAMES[0])
 
     def test_a_culled_folder_offers_the_baseline_without_any_suggestion(self):
         # No shortlist, no edit directions, no provider call: the ordinary
