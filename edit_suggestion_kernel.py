@@ -150,25 +150,44 @@ def _say(body: dict[str, Any], *keys: str, limit: int = 300) -> str:
     return ""
 
 
+# What each style says about itself, in the order it is read. A name is a
+# label; the look decides whether the style fits the scene; the rest is
+# how the treatment gets written. An earlier menu carried only the first
+# two, and the personal treatments came out generic -- the photographer's
+# own words about which colours to lead with, which to hold back, and how
+# narrowly to work were sitting in the profile and never reaching the
+# model that was supposed to be speaking in them.
+STYLE_VOICE = (
+    ("Look", ("visual_signature", "signature"), 320),
+    ("Suits", ("scene_adaptation",), 220),
+    ("Colour", ("color_preferences",), 260),
+    ("Saturation", ("saturation_preferences",), 260),
+    ("Contrast", ("contrast_preferences",), 220),
+    ("Tone", ("tonal_preferences",), 200),
+    ("Highlights and shadows", ("highlight_shadow_preferences",), 200),
+    ("Detail", ("texture_detail_preferences",), 220),
+    ("Never", ("avoid_or_guardrails",), 200),
+)
+
+
 def style_menu(profiles: list[dict[str, Any]]) -> str:
-    """The styles as a numbered menu, each said in its own words.
+    """The styles as a numbered menu, each in its own words.
 
     A name alone cannot be chosen between -- "Coastal Twilight" and
-    "Heritage Street" are labels, not evidence. Each entry carries what the
-    look actually is and what the profile itself says about adapting to a
-    scene, because that is the part that decides whether it fits.
+    "Heritage Street" are labels, not evidence. Each entry carries what
+    the look is, when it fits, and the working detail a treatment written
+    in that style needs: which colours lead, which are held back, how far
+    the saturation goes, and what the style will not do.
     """
     lines = []
     for number, profile in enumerate(profiles, start=1):
         body = profile.get("profile", {}) if isinstance(profile, dict) else {}
-        signature = _say(
-            body, "visual_signature", "signature", limit=STYLE_SIGNATURE)
-        adaptation = _say(
-            body, "scene_adaptation", limit=STYLE_ADAPTATION)
-        lines.append(
-            f"{number}. {body.get('profile_name', 'Untitled style')}\n"
-            f"   Look: {signature}"
-            + (f"\n   Suits: {adaptation}" if adaptation else ""))
+        said = [f"{number}. {body.get('profile_name', 'Untitled style')}"]
+        for label, keys, limit in STYLE_VOICE:
+            text = _say(body, *keys, limit=limit)
+            if text:
+                said.append(f"   {label}: {text}")
+        lines.append("\n".join(said))
     return "\n\n".join(lines)
 
 

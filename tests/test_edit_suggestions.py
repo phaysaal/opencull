@@ -371,7 +371,10 @@ class PersonalStyleChoiceTests(EditSuggestionKernelTests):
                 "profile": {
                     "profile_name": name,
                     "visual_signature": f"how {name} looks",
-                    "scene_adaptation": f"when {name} suits a scene"},
+                    "scene_adaptation": f"when {name} suits a scene",
+                    "color_preferences": f"which colours {name} leads with",
+                    "saturation_preferences": f"how far {name} pushes colour",
+                    "avoid_or_guardrails": f"what {name} never does"},
             }), encoding="utf-8")
             paths.append(str(path))
         return paths
@@ -428,6 +431,22 @@ class PersonalStyleChoiceTests(EditSuggestionKernelTests):
             # scene is the evidence a choice can rest on.
             self.assertIn("when Heritage street suits a scene", menu)
             self.assertIn("personal_style_choice", menu)
+
+    def test_a_style_arrives_with_the_detail_needed_to_write_in_it(self):
+        """A signature says which style; the rest says how to speak in it.
+
+        An earlier menu carried the signature alone, and the personal
+        treatments came out generic: the photographer's own words about
+        which colours to lead with and which to hold back were in the
+        profile and never reached the model meant to be using them.
+        """
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _request, candidate = self.request_with(root, "Heritage street")
+            menu = edit_direction_prompt(candidate, "professional")
+            self.assertIn("which colours Heritage street leads with", menu)
+            self.assertIn("how far Heritage street pushes colour", menu)
+            self.assertIn("what Heritage street never does", menu)
 
     def test_the_chosen_style_is_resolved_to_the_file_it_came_from(self):
         with tempfile.TemporaryDirectory() as temporary:
