@@ -578,7 +578,7 @@ class DevelopPageTests(unittest.TestCase):
 
         page._delivery_step("A.JPG", 5, 20, "tone.contrast")
         self.assertEqual(page.delivery_meter.value(), 25)
-        self.assertIn("adjustment 5 of 20", page.delivery_note.text())
+        self.assertIn("contrast", page.delivery_note.text())
 
         page._delivery_step("A.JPG", 19, 20, "writing the photograph")
         self.assertEqual(page.delivery_meter.value(), 95)
@@ -588,11 +588,24 @@ class DevelopPageTests(unittest.TestCase):
         page = self.page()
         page.exporter.pending = 2
         page.exporter.asked = 3
-        page._delivery_step("B.JPG", 4, 20, "color.saturation")
+        page._delivery_step("B.JPG", 4, 20, "color.hsl_range:blue/teal:saturation")
         said = page.delivery_note.text()
         self.assertIn("B.JPG", said)
         self.assertIn("2 of 3", said)
-        self.assertIn("adjustment 4 of 20", said)
+        # The colour family is the part worth reading, not the index.
+        self.assertIn("blue and teal saturation", said)
+        self.assertNotIn("adjustment 4", said)
+
+    def test_every_adjustment_has_a_name_a_photographer_would_use(self):
+        from opencull_qt.develop import ADJUSTMENT_NAMES, _adjustment_name
+        from recipe_compiler import RANGES
+
+        for op in RANGES:
+            said = _adjustment_name(op)
+            self.assertNotIn("_", said, f"{op} reads as code")
+            self.assertNotEqual(said, op, f"{op} has no plain name")
+        self.assertEqual(_adjustment_name("mask:luma"), "a luminance mask")
+        self.assertIn("detail.sharpen_amount", ADJUSTMENT_NAMES)
 
     def test_a_step_after_the_batch_is_finished_says_nothing(self):
         page = self.page()

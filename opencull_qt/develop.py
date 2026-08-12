@@ -111,6 +111,62 @@ class _RenderJob(QRunnable):
             self.generation, self.photo, self.treatment, str(path))
 
 
+# What each adjustment is called where a photographer can read it. The
+# operation's own name is the renderer's vocabulary, not theirs.
+ADJUSTMENT_NAMES = {
+    "tone.exposure": "exposure",
+    "tone.contrast": "contrast",
+    "tone.brightness": "brightness",
+    "tone.highlight": "highlight recovery",
+    "tone.shadow": "shadows",
+    "tone.white": "the white point",
+    "tone.black": "the black point",
+    "color.saturation": "saturation",
+    "color.temperature": "white balance",
+    "color.tint": "tint",
+    "detail.clarity": "clarity",
+    "detail.structure": "structure",
+    "detail.dehaze": "dehaze",
+    "detail.sharpen_amount": "sharpening",
+    "detail.denoise_luminance": "luminance noise",
+    "detail.denoise_color": "colour noise",
+    "levels.white_input": "levels, white",
+    "levels.black_input": "levels, black",
+    "levels.midpoint": "levels, midpoint",
+    "finish.vignette": "vignette",
+    "lens.profile": "the lens profile",
+    "lens.chromatic_aberration": "chromatic aberration",
+    "geometry.crop_aspect": "the crop",
+    "geometry.rotation": "straightening",
+}
+
+STAGE_NAMES = {
+    "developing the raw": "developing the raw",
+    "reading the frame": "reading the frame",
+    "matching the camera": "matching it to the camera",
+    "writing the photograph": "writing the photograph",
+}
+
+MASK_NAMES = {
+    "luma": "a luminance mask", "color": "a colour mask",
+    "linear": "a gradient", "radial": "a radial mask",
+    "vignette": "a vignette",
+}
+
+
+def _adjustment_name(what: str) -> str:
+    """One adjustment, said the way a photographer would say it."""
+    if what in STAGE_NAMES:
+        return STAGE_NAMES[what]
+    if what.startswith("mask:"):
+        return MASK_NAMES.get(what[5:], "a masked adjustment")
+    if what.startswith("color.hsl_range:"):
+        _op, channel, component = (what.split(":") + ["", ""])[:3]
+        family = channel.replace("/", " and ")
+        return f"{family} {component}".strip()
+    return ADJUSTMENT_NAMES.get(what, what.split(".")[-1].replace("_", " "))
+
+
 class _ExportSignals(QObject):
     done = Signal(str, str, str)          # photo, requested, written
     failed = Signal(str, str)             # photo, reason
@@ -949,12 +1005,7 @@ class DevelopPage(QWidget):
         self.delivery_meter.setValue(
             round(100 * done / total) if total else 0)
         self.delivery_meter.show()
-        said = {
-            "developing the raw": "developing the raw",
-            "reading the frame": "reading the frame",
-            "matching the camera": "matching it to the camera",
-            "writing the photograph": "writing the photograph",
-        }.get(what, f"adjustment {done} of {total}")
+        said = _adjustment_name(what)
         batch = ""
         if self.exporter.asked > 1:
             made = self.exporter.asked - self.exporter.pending + 1

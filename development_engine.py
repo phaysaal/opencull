@@ -266,6 +266,22 @@ def _blur(image: np.ndarray, radius: float) -> np.ndarray:
     return down
 
 
+def _named(item: dict[str, Any]) -> str:
+    """What an adjustment is, in enough detail to be worth reading.
+
+    "colour" says less than "blue saturation", and the colour family is
+    the part a photographer recognises as their own work.
+    """
+    op = str(item.get("op", ""))
+    if op == "color.hsl_range":
+        channel = str(item.get("channel", "")).strip()
+        component = str(item.get("component", "saturation")).strip()
+        return f"{op}:{channel}:{component}" if channel else op
+    if op.startswith("mask."):
+        return f"mask:{op[5:]}"
+    return op
+
+
 def _apply_global(rgb: np.ndarray, operations: list[dict[str, Any]],
                   progress: Any = None) -> np.ndarray:
     """Apply a recipe's adjustments in order.
@@ -290,11 +306,11 @@ def _apply_global(rgb: np.ndarray, operations: list[dict[str, Any]],
                 adjusted = _apply_global(result, [effect])
                 result = result * (1 - blend) + adjusted * blend
             if progress is not None:
-                progress(done, total, str(op))
+                progress(done, total, _named(item))
             continue
         if not isinstance(value, (int, float)):
             if progress is not None:
-                progress(done, total, str(op))
+                progress(done, total, _named(item))
             if op in {"lens.profile", "lens.chromatic_aberration"}:
                 # Not skipped work: the decoder applies the camera's lens
                 # profile and its chromatic-aberration correction while
@@ -425,7 +441,7 @@ def _apply_global(rgb: np.ndarray, operations: list[dict[str, Any]],
         if display:
             result = _decoded(result)
         if progress is not None:
-            progress(done, total, str(op))
+            progress(done, total, _named(item))
     return np.maximum(result, 0.0)
 
 
