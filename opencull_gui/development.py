@@ -30,7 +30,7 @@ import numpy as np
 import tifffile
 from PIL import Image, ImageOps
 
-from darktable_engine import render_darktable_default
+from darktable_engine import DARKTABLE_WORKFLOW, render_darktable_default
 from development_engine import (
     RECIPE_ENGINE_REVISION,
     _srgb_to_linear_rec2020,
@@ -478,9 +478,13 @@ class DevelopmentWorkspace:
         """
         folder = self.project_layout["Previews"] / "DevelopNative"
         folder.mkdir(parents=True, exist_ok=True)
+        # The tone mapping is part of what the decode *is*, so a change of
+        # workflow has to read as a different decode. Without it, switching
+        # from filmic to sigmoid would leave every frame already looked at
+        # showing the old rendering for ever.
         identity = hashlib.sha256(
             f"{source}|{source_stat.st_mtime_ns}|{source_stat.st_size}|"
-            f"{demosaic}".encode()).hexdigest()[:20]
+            f"{demosaic}|{DARKTABLE_WORKFLOW}".encode()).hexdigest()[:20]
         prefix = f"{source.stem}.{demosaic}.{identity}"
         lock = self._native_locks.setdefault(identity, threading.Lock())
         with lock:
@@ -556,6 +560,10 @@ class DevelopmentWorkspace:
             "recipe": recipe, "source": str(source),
             "mtime": source_stat.st_mtime_ns, "size": source_stat.st_size,
             "renderer": RECIPE_ENGINE_REVISION,
+            # The decode's tone mapping is part of what a proof is, not
+            # just part of the decode behind it. Keying only the decode by
+            # it left every proof already rendered showing the old base.
+            "workflow": DARKTABLE_WORKFLOW,
         }, sort_keys=True).encode()).hexdigest()[:24]
         destination = self.project_layout["Previews"] / "DevelopRecipes" / (
             f"{Path(photo).stem}.{style}.{engine}.{identity}.jpg")

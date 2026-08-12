@@ -8,6 +8,7 @@ from unittest.mock import patch
 from PIL import Image
 
 from darktable_engine import (
+    DARKTABLE_WORKFLOW,
     DarktableError,
     _demosaic_params,
     _xmp_with_demosaic,
@@ -48,8 +49,14 @@ class DarktableEngineTests(unittest.TestCase):
             self.assertEqual(result["engine"]["version"], "5.6.0")
             self.assertEqual(result["recipe_execution"]["mode"], "native-control")
             self.assertFalse(source.with_suffix(source.suffix + ".xmp").exists())
+            # darktable's own workflow defaults are wanted -- that is what
+            # puts a tone mapping on the raw at all -- and the config
+            # directory is thrown away per render, so nothing of the
+            # photographer's own is picked up with them.
             self.assertIn("--apply-custom-presets", commands[1])
-            self.assertIn("false", commands[1])
+            self.assertIn("true", commands[1])
+            self.assertIn(
+                f"plugins/darkroom/workflow={DARKTABLE_WORKFLOW}", commands[1])
             self.assertEqual(
                 result["engine"]["demosaic"]["requested"],
                 "markesteijn-1-pass")

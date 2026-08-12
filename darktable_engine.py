@@ -16,6 +16,15 @@ from pathlib import Path
 from typing import Any
 
 DARKTABLE_FORMAT = "opencull-darktable-render-v1"
+
+# Which of darktable's tone mappings develops the raw. Measured on a
+# Fujifilm frame against the camera's own rendering: filmic gave contrast
+# 65 and saturation 18.7, sigmoid gave 70.0 and 23.5 -- past the camera's
+# own 21.0 -- while clipping less. The workflow only takes effect when
+# darktable is allowed to apply its own defaults, which is what the
+# presets flag is for; the config directory is thrown away per render, so
+# there are no other presets for it to pick up.
+DARKTABLE_WORKFLOW = "scene-referred (sigmoid)"
 DARKTABLE_MACOS_CLI = Path(
     "/Applications/darktable.app/Contents/MacOS/darktable-cli")
 # Consulted after PATH. A packaged Linux darktable is normally on PATH
@@ -159,7 +168,7 @@ def render_darktable_default(
         cache.mkdir()
         command = [
             str(cli), str(input_link), str(default_output),
-            "--hq", "true", "--apply-custom-presets", "false",
+            "--hq", "true", "--apply-custom-presets", "true",
             "--icc-type", "sRGB",
         ]
         if max_dimension:
@@ -169,6 +178,7 @@ def render_darktable_default(
             "--core", "--configdir", str(config), "--cachedir", str(cache),
             "--library", str(work / "library.db"),
             "--conf", "plugins/imageio/format/jpeg/quality=95",
+            "--conf", f"plugins/darkroom/workflow={DARKTABLE_WORKFLOW}",
         ])
         try:
             result = runner(
@@ -202,7 +212,7 @@ def render_darktable_default(
                 selected_output = work / "selected.jpg"
                 selected_command = [
                     str(cli), str(input_link), str(selected_xmp), str(selected_output),
-                    "--hq", "true", "--apply-custom-presets", "false",
+                    "--hq", "true", "--apply-custom-presets", "true",
                     "--icc-type", "sRGB",
                 ]
                 if max_dimension:
@@ -212,6 +222,7 @@ def render_darktable_default(
                     "--core", "--configdir", str(config), "--cachedir", str(cache),
                     "--library", str(work / "library.db"),
                     "--conf", "plugins/imageio/format/jpeg/quality=95",
+                    "--conf", f"plugins/darkroom/workflow={DARKTABLE_WORKFLOW}",
                 ])
                 try:
                     selected_result = runner(
@@ -244,6 +255,7 @@ def render_darktable_default(
         "engine": {
             "name": "darktable", "version": version,
             "executable": str(cli), "mode": "isolated-default-export",
+            "workflow": DARKTABLE_WORKFLOW,
             "demosaic": {
                 "applicable": not is_jpeg,
                 # Preserve the configured global preference for provenance,
