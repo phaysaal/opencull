@@ -455,12 +455,65 @@ class DevelopPageTests(unittest.TestCase):
         page._request_previews()
         self.assertEqual(page.previews, before)
 
+    def test_previews_are_rendered_for_every_treated_frame_not_only_one(self):
+        """The twentieth frame should not be rendered while you look at it."""
+        page = self.suggested_page(marked=(NAMES[0], NAMES[1]))
+        listed = page.shown_photos()
+        self.assertEqual(len(listed), 2)
+        self.assertTrue(
+            self.wait_for(lambda: all(
+                (photo, "standard") in page.previews for photo in listed)),
+            "the frames behind the open one never got their previews")
+        # And the open frame is served first, whatever the list order.
+        self.assertIn((page.current, "standard"), page.previews)
+
+    def test_a_treatment_arrives_over_the_frame_it_was_made_from(self):
+        from PySide6.QtGui import QPixmap
+
+        from opencull_qt.develop import Stage
+
+        stage = Stage()
+        self.addCleanup(stage.deleteLater)
+        stage.resize(400, 300)
+        shot = QPixmap(200, 150)
+        shot.fill(Qt.GlobalColor.darkGreen)
+        treated = QPixmap(200, 150)
+        treated.fill(Qt.GlobalColor.darkBlue)
+        stage.set_as_shot(shot)
+
+        stage.set_treated(treated, "Bold", arriving=True)
+        self.assertIsNotNone(stage.image._sweep)
+        # Mid-wipe both pictures are on screen; the caption already reads
+        # as the treatment, because that is what is arriving.
+        stage.image._sweep_tick(0.5)
+        self.assertEqual(stage.caption.text(), "BOLD")
+        self.assertTrue(self.wait_for(lambda: stage.image._sweep is None))
+        self.assertIs(stage.image.source(), treated)
+
+    def test_a_treatment_restored_without_asking_does_not_animate(self):
+        from PySide6.QtGui import QPixmap
+
+        from opencull_qt.develop import Stage
+
+        stage = Stage()
+        self.addCleanup(stage.deleteLater)
+        stage.resize(400, 300)
+        shot = QPixmap(200, 150)
+        shot.fill(Qt.GlobalColor.darkGreen)
+        stage.set_as_shot(shot)
+        treated = QPixmap(200, 150)
+        treated.fill(Qt.GlobalColor.darkBlue)
+        stage.set_treated(treated, "Bold")
+        self.assertIsNone(stage.image._sweep)
+
     def test_clicking_a_preview_asks_for_it_at_proof_size(self):
         page = self.suggested_page(marked=(NAMES[0],))
         asked = []
-        page.develop_current = lambda: asked.append(page.treatment)
+        page.develop_current = lambda arriving=False: asked.append(arriving)
         page.treatments.itemClicked.emit(page.treatments.item(1))
-        self.assertEqual(len(asked), 1)
+        # And it arrives as an animation over the frame as shot, which is
+        # what makes it legible as an edit rather than a swap.
+        self.assertEqual(asked, [True])
 
     def test_moving_between_frames_does_not_ask_for_a_proof(self):
         # Only a click does. Selecting a frame must not spend a full

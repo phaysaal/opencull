@@ -17,8 +17,17 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QRunnable, QSize, Qt, QThreadPool, Signal
-from PySide6.QtGui import QIcon, QPixmap
+from PySide6.QtCore import (
+    QEasingCurve,
+    QObject,
+    QRunnable,
+    QSize,
+    Qt,
+    QThreadPool,
+    QVariantAnimation,
+    Signal,
+)
+from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
@@ -60,6 +69,10 @@ TREATMENT_TILE = 84
 # sit through, large enough to tell two treatments apart. Cached on disk
 # by the workspace under this exact size, so a frame revisited is instant.
 THUMB_EDGE = 320
+
+# Long enough to read as the edit being applied, short enough
+# that somebody comparing ten treatments is not waiting on it.
+SWEEP_MS = 620
 
 
 class _Signals(QObject):
@@ -322,6 +335,92 @@ class Renderer(QObject):
         self._pool.waitForDone(5000)
 
 
+class PreviewQueue(QObject):
+    """Every treatment of every frame, rendered quietly, one at a time.
+
+    A photographer picking a treatment for the twentieth frame should not
+    wait for it to be rendered while looking at it. The queue works ahead
+    through the whole selection, but only ever holds one job in the pool:
+    a proof asked for now must not queue behind a hundred thumbnails, and
+    a pool cleared of them would forget the work anyway.
+
+    Nothing here is abandoned. A thumbnail is worth having whenever it
+    arrives, whatever frame is on screen by then.
+    """
+
+    ready = Signal(str, str, QPixmap)     # photo, treatment, picture
+    progressed = Signal(int, int)         # done, total
+
+    def __init__(self, workspace: DevelopmentWorkspace, maximum: int,
+                 pool: QThreadPool, parent: QObject | None = None):
+        super().__init__(parent)
+        self.workspace = workspace
+        self.maximum = maximum
+        self._pool = pool
+        self._pending: list[tuple[str, str]] = []
+        self._asked: set[tuple[str, str]] = set()
+        self._running = False
+        self._done = 0
+        self._signals = _Signals()
+        self._signals.done.connect(self._finished)
+        self._signals.failed.connect(self._failed)
+        self._settings: dict[str, tuple[str, str]] = {}
+        self._stopped = False
+
+    def want(self, pairs, settings) -> None:
+        """Add work, skipping anything already asked for."""
+        self._settings.update(settings)
+        for pair in pairs:
+            if pair in self._asked:
+                continue
+            self._asked.add(pair)
+            self._pending.append(pair)
+        self._pump()
+
+    def prefer(self, photo: str) -> None:
+        """Put one frame's remaining previews at the front of the queue."""
+        self._pending.sort(key=lambda pair: pair[0] != photo)
+
+    def outstanding(self) -> int:
+        return len(self._pending)
+
+    def _pump(self) -> None:
+        if self._stopped or self._running or not self._pending:
+            return
+        photo, treatment = self._pending.pop(0)
+        engine, demosaic = self._settings.get(photo, ("", ""))
+        if not engine:
+            self._pump()
+            return
+        self._running = True
+        self._pool.start(_RenderJob(
+            self.workspace, photo, treatment, engine, demosaic,
+            self._signals, 0, self.maximum))
+
+    def _step(self) -> None:
+        self._running = False
+        self._done += 1
+        self.progressed.emit(self._done, self._done + len(self._pending))
+        self._pump()
+
+    def _finished(self, _generation: int, photo: str, treatment: str,
+                  path: str) -> None:
+        pixmap = QPixmap(path)
+        if not pixmap.isNull():
+            self.ready.emit(photo, treatment, pixmap)
+        self._step()
+
+    def _failed(self, _generation: int, _photo: str, _reason: str) -> None:
+        # A preview that will not render is not worth stopping the sweep
+        # for; asking for its proof will report the same failure where it
+        # can actually be acted on.
+        self._step()
+
+    def stop(self) -> None:
+        self._stopped = True
+        self._pending.clear()
+
+
 class PhotoLabel(QLabel):
     """A photograph that redraws itself at whatever size it is given.
 
@@ -339,6 +438,9 @@ class PhotoLabel(QLabel):
         self.setSizePolicy(
             QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
         self._source: QPixmap | None = None
+        self._sweep: QVariantAnimation | None = None
+        self._before: QPixmap | None = None
+        self._after: QPixmap | None = None
 
     def set_source(self, pixmap: QPixmap | None) -> None:
         self._source = pixmap
@@ -346,6 +448,65 @@ class PhotoLabel(QLabel):
             self.setPixmap(QPixmap())
             return
         self.setText("")
+        self._redraw()
+
+    def sweep_to(self, pixmap: QPixmap | None) -> None:
+        """Show the treatment arriving across the frame it was made from.
+
+        Not decoration: the two pictures in the wipe are the real ones, the
+        same before and after the animation ends, and the edge between them
+        is where a photographer looks to see what actually changed. A frame
+        with nothing to wipe from just appears.
+        """
+        previous = self._source
+        if pixmap is None or previous is None or self.width() < 2:
+            self.set_source(pixmap)
+            return
+        self._before = scaled(previous, max(self.width(), 1),
+                              max(self.height(), 1))
+        self._after = scaled(pixmap, max(self.width(), 1),
+                             max(self.height(), 1))
+        if self._before.size() != self._after.size():
+            # Different shapes cannot be wiped honestly between.
+            self.set_source(pixmap)
+            return
+        self._source = pixmap
+        self.setText("")
+        if self._sweep is not None:
+            self._sweep.stop()
+        self._sweep = QVariantAnimation(self)
+        self._sweep.setDuration(SWEEP_MS)
+        self._sweep.setStartValue(0.0)
+        self._sweep.setEndValue(1.0)
+        self._sweep.setEasingCurve(QEasingCurve.Type.InOutCubic)
+        self._sweep.valueChanged.connect(self._sweep_tick)
+        self._sweep.finished.connect(self._sweep_done)
+        self._sweep.start()
+
+    def _sweep_tick(self, value) -> None:
+        if self._before is None or self._after is None:
+            return
+        frame = QPixmap(self._after.size())
+        frame.setDevicePixelRatio(self._after.devicePixelRatio())
+        painter = QPainter(frame)
+        painter.drawPixmap(0, 0, self._before)
+        edge = int(frame.width() / frame.devicePixelRatio() * float(value))
+        painter.setClipRect(0, 0, edge, frame.height())
+        painter.drawPixmap(0, 0, self._after)
+        painter.setClipping(False)
+        if 0 < edge < frame.width() / frame.devicePixelRatio():
+            pen = QPen(QColor(theme.SAFELIGHT))
+            pen.setWidth(2)
+            painter.setPen(pen)
+            painter.drawLine(
+                edge, 0, edge, int(frame.height() / frame.devicePixelRatio()))
+        painter.end()
+        self.setPixmap(frame)
+
+    def _sweep_done(self) -> None:
+        self._sweep = None
+        self._before = None
+        self._after = None
         self._redraw()
 
     def set_message(self, text: str) -> None:
@@ -413,10 +574,18 @@ class Stage(QFrame):
         self._as_shot = pixmap
         self._paint()
 
-    def set_treated(self, pixmap: QPixmap | None, treatment: str = "") -> None:
+    def set_treated(self, pixmap: QPixmap | None, treatment: str = "",
+                    arriving: bool = False) -> None:
+        """Show a treatment. ``arriving`` wipes it over the frame as shot."""
+        was = self._treated
         self._treated = pixmap
         if treatment:
             self._treatment = treatment
+        if (arriving and pixmap is not None and not self._holding
+                and was is not pixmap):
+            self._caption()
+            self.image.sweep_to(pixmap)
+            return
         self._paint()
 
     def set_treatment(self, treatment: str) -> None:
@@ -452,6 +621,10 @@ class Stage(QFrame):
                 "Developing…" if self._holding else "Not developed yet.")
         else:
             self.image.set_source(pixmap)
+        self._caption()
+
+    def _caption(self) -> None:
+        treated = self._treated is not None and not self._holding
         self.caption.setText(
             (self._treatment or "Developed").upper() if treated else "AS SHOT")
         self.caption.setProperty("state", "treated" if treated else "shot")
@@ -493,12 +666,12 @@ class DevelopPage(QWidget):
         self.renderer = Renderer(workspace, pool=self._pool, parent=self)
         self.renderer.done.connect(self._rendered)
         self.renderer.failed.connect(self._render_failed)
-        # The smaller renderer: what each treatment does to this frame,
-        # shown rather than described.
-        self.thumbs = Renderer(
-            workspace, maximum=THUMB_EDGE, pool=self._pool, parent=self)
-        self.thumbs.done.connect(self._thumb_ready)
-        self.thumbs.failed.connect(self._thumb_failed)
+        # The smaller renderer: what each treatment does to each frame,
+        # shown rather than described, worked through in the background.
+        self.thumbs = PreviewQueue(
+            workspace, THUMB_EDGE, self._pool, parent=self)
+        self.thumbs.ready.connect(self._thumb_ready)
+        self.thumbs.progressed.connect(self._thumb_progress)
         self.previews: dict[tuple[str, str], QPixmap] = {}
         self.exporter = Exporter(workspace, self)
         self.exporter.done.connect(self._exported)
@@ -662,7 +835,7 @@ class DevelopPage(QWidget):
         # Moving between frames selects one too, and that must not spend a
         # full render nobody asked for, so only the click renders.
         self.treatments.itemClicked.connect(
-            lambda _item: self.develop_current())
+            lambda _item: self.develop_current(arriving=True))
         layout.addWidget(self.treatments)
 
         self.intent = QLabel("")
@@ -683,6 +856,13 @@ class DevelopPage(QWidget):
         self.engine_note.setWordWrap(True)
         self.engine_note.setFont(theme.body(9))
         layout.addWidget(self.engine_note)
+
+        self.sweep_note = QLabel("")
+        self.sweep_note.setObjectName("hint")
+        self.sweep_note.setWordWrap(True)
+        self.sweep_note.setFont(theme.body(9))
+        self.sweep_note.setVisible(False)
+        layout.addWidget(self.sweep_note)
         layout.addStretch(1)
 
         self.develop_button = QPushButton("Develop this frame")
@@ -805,6 +985,7 @@ class DevelopPage(QWidget):
 
         self._sync_row()
         self._fill_treatments()
+        self.thumbs.prefer(name)
         self._show_treated()
 
     def _original_ready(self, name: str, size: str, pixmap) -> None:
@@ -889,12 +1070,13 @@ class DevelopPage(QWidget):
 
     # --- rendering -------------------------------------------------------
 
-    def _show_treated(self) -> None:
+    def _show_treated(self, arriving: bool = False) -> None:
         if not self.current or not self.treatment:
             self.stage.set_treated(None)
             return
         cached = self.rendered.get((self.current, self.treatment))
-        self.stage.set_treated(cached, self._treatment_name())
+        self.stage.set_treated(
+            cached, self._treatment_name(), arriving=arriving)
         if cached is not None:
             self._report("")
 
@@ -907,39 +1089,48 @@ class DevelopPage(QWidget):
         return str((self.workspace.payload().get("rendering") or {}).get(
             "demosaic") or "markesteijn-3-pass")
 
-    def develop_current(self) -> None:
+    def develop_current(self, arriving: bool = False) -> None:
         if not self.current or not self.treatment:
             return
+        self._arriving = bool(arriving)
         if (self.current, self.treatment) in self.rendered:
-            self._show_treated()
+            self._show_treated(arriving=arriving)
             return
         self.develop_button.setEnabled(False)
         self._report(f"Developing {self.current}. This takes a moment.")
-        # Thumbnails still waiting are worth less than the proof that was
-        # just asked for, so they give up their place in the queue.
-        self.thumbs.drop_queued()
         self.renderer.render(
             self.current, self.treatment, self.engine_for(self.current),
             self._demosaic())
 
     def _request_previews(self) -> None:
-        """Render what each treatment does to this frame, small and once.
+        """Queue what each treatment does to every frame on the list.
 
         The proof stays something the photographer asks for; these are the
-        pictures the asking is a choice between, so they are rendered as
-        soon as the frame is opened. Anything already rendered at this size
-        is read from the workspace's cache rather than decoded again.
+        pictures the asking is a choice between, so the whole selection is
+        worked through rather than only the frame in front of you. The
+        frame in front of you goes first. Anything already rendered at
+        this size is read from the workspace's cache rather than decoded
+        again.
         """
-        if not self.current or not self.available:
-            return
-        wanted = [
-            str(item["id"]) for item in self.available
-            if (self.current, str(item["id"])) not in self.previews]
-        if not wanted:
-            return
-        self.thumbs.render_many(
-            self.current, wanted, self.engine_for(self.current),
-            self._demosaic())
+        demosaic = self._demosaic()
+        pairs: list[tuple[str, str]] = []
+        settings: dict[str, tuple[str, str]] = {}
+        for photo in self.shown_photos():
+            try:
+                treatments = self.workspace.treatments(photo)
+            except Exception:                        # noqa: BLE001 - skipped
+                continue
+            if len(treatments) < 2:
+                # Only the baseline: nothing to choose between, so nothing
+                # to render ahead of being asked.
+                continue
+            settings[photo] = (self.engine_for(photo), demosaic)
+            pairs.extend(
+                (photo, str(item["id"])) for item in treatments
+                if (photo, str(item["id"])) not in self.previews)
+        self.thumbs.want(pairs, settings)
+        if self.current:
+            self.thumbs.prefer(self.current)
 
     def _thumb_ready(self, photo: str, treatment: str, pixmap) -> None:
         self.previews[(photo, treatment)] = pixmap
@@ -951,20 +1142,20 @@ class DevelopPage(QWidget):
                 entry.setIcon(QIcon(pixmap))
                 break
 
-    def _thumb_failed(self, photo: str, reason: str) -> None:
-        # A thumbnail that cannot be rendered is not worth interrupting
-        # anybody over: the treatment is still listed, and asking for the
-        # full proof will report the same failure where it matters.
-        if photo == self.current:
-            self.engine_note.setText(
-                f"{self._engine_note()}\nA preview could not be rendered: "
-                f"{reason}")
+    def _thumb_progress(self, done: int, total: int) -> None:
+        outstanding = self.thumbs.outstanding()
+        self.sweep_note.setVisible(bool(outstanding))
+        self.sweep_note.setText(
+            f"Rendering previews · {done} of {total}. They are kept, so "
+            "this happens once." if outstanding else "")
 
     def _rendered(self, photo: str, treatment: str, pixmap) -> None:
         self.rendered[(photo, treatment)] = pixmap
         self.develop_button.setEnabled(True)
         if photo == self.current and treatment == self.treatment:
-            self.stage.set_treated(pixmap, self._treatment_name())
+            self.stage.set_treated(
+                pixmap, self._treatment_name(),
+                arriving=getattr(self, "_arriving", False))
             self._show_verdict()
             self._report(
                 "Developed. Hold space to see it as shot; the photograph "
@@ -1149,7 +1340,7 @@ class DevelopPage(QWidget):
         super().focusOutEvent(event)
 
     def shutdown(self) -> None:
-        self.thumbs.abandon()
+        self.thumbs.stop()
         self.renderer.shutdown()
         self.exporter.shutdown()
         self.verifier.shutdown()
