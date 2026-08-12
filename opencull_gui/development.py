@@ -123,6 +123,12 @@ def shrink_linear(tiff: Path, maximum: int, destination: Path) -> Path:
     return destination
 
 
+# A decode is filed at the size it was made at, and any request for that
+# size or smaller is served from it. The floor is high enough that one
+# decode covers a proof and every thumbnail beside it.
+NATIVE_DECODE_FLOOR = 2048
+
+
 class DevelopmentWorkspace:
     """The renders, recipes and candidates belonging to one project."""
 
@@ -449,6 +455,79 @@ class DevelopmentWorkspace:
         return {"recipe": recipe, "source": source, "reference": reference,
                 "source_kind": source_kind}
 
+
+    def _native_decode(
+        self, source: Path, source_stat, maximum: int, demosaic: str,
+        work: Path,
+    ) -> Path:
+        """The camera's own rendering of one frame, decoded once for any size.
+
+        The demosaic runs at the sensor's resolution however small the export
+        is, so a 320px thumbnail costs exactly what a 1600px proof costs --
+        minutes of it on an X-Trans frame. Keyed by the size asked for, that
+        bought the same minutes again for every size: one shoot here decoded
+        thirty-nine frames at 320 and then decoded all seven of its scene
+        representatives again at 1600 for the same picture.
+
+        So the decode is keyed by the frame and the demosaic alone, kept at
+        the largest size anyone has asked for, and a smaller request is
+        resampled from it. The last resampling step is then Lanczos rather
+        than darktable's own, which no proof will show; the demosaic
+        underneath -- the part that decides what the photograph looks like --
+        is the same decode either way.
+        """
+        folder = self.project_layout["Previews"] / "DevelopNative"
+        folder.mkdir(parents=True, exist_ok=True)
+        identity = hashlib.sha256(
+            f"{source}|{source_stat.st_mtime_ns}|{source_stat.st_size}|"
+            f"{demosaic}".encode()).hexdigest()[:20]
+        prefix = f"{source.stem}.{demosaic}.{identity}"
+        lock = self._native_locks.setdefault(identity, threading.Lock())
+        with lock:
+            held = self._decodes_held(folder, prefix)
+            usable = sorted(
+                (size, path) for size, path in held if size >= maximum)
+            if usable:
+                size, path = usable[0]
+                return path if size == maximum else self._resampled(
+                    path, maximum, work)
+            # Nothing large enough. Decode generously, so that the proof and
+            # the thumbnail after it are both already paid for.
+            decoded_at = max(maximum, NATIVE_DECODE_FLOOR)
+            native = render_darktable_default(
+                source, work / "darktable", max_dimension=decoded_at,
+                demosaic_mode=demosaic)
+            cache = folder / f"{prefix}.{decoded_at}.jpg"
+            staged = cache.with_name(
+                f".{cache.name}.{secrets.token_hex(4)}.tmp")
+            shutil.copy2(Path(native["output"]["path"]), staged)
+            os.replace(staged, cache)
+        return cache if decoded_at == maximum else self._resampled(
+            cache, maximum, work)
+
+    @staticmethod
+    def _decodes_held(folder: Path, prefix: str) -> list[tuple[int, Path]]:
+        """The decodes already on disk for one frame, with their sizes."""
+        held = []
+        for candidate in folder.glob(f"{prefix}.*.jpg"):
+            try:
+                held.append((int(candidate.stem.rsplit(".", 1)[1]), candidate))
+            except (IndexError, ValueError):
+                continue
+        return held
+
+    @staticmethod
+    def _resampled(image: Path, maximum: int, work: Path) -> Path:
+        """One decode, brought down to the size this render asked for."""
+        with Image.open(image) as opened:
+            frame = ImageOps.exif_transpose(opened).convert("RGB")
+            if max(frame.size) <= maximum:
+                return image
+            frame.thumbnail((maximum, maximum), Image.Resampling.LANCZOS)
+            smaller = work / f"native-{maximum}.jpg"
+            frame.save(smaller, "JPEG", quality=95)
+        return smaller
+
     def recipe_preview(
         self, photo: str, style: str, engine: str, demosaic: str,
         maximum: int, adjustments: dict | None = None,
@@ -496,23 +575,10 @@ class DevelopmentWorkspace:
             small_reference = work / "reference.jpg"
             small.save(small_reference, "JPEG", quality=94)
             if engine == "darktable":
-                native_identity = hashlib.sha256(
-                    f"{source}|{source_stat.st_mtime_ns}|{source_stat.st_size}|"
-                    f"{maximum}|{demosaic}".encode()).hexdigest()[:20]
-                native_cache = self.project_layout["Previews"] / "DevelopNative" / (
-                    f"{source.stem}.{maximum}.{demosaic}.{native_identity}.jpg")
-                native_cache.parent.mkdir(parents=True, exist_ok=True)
-                lock = self._native_locks.setdefault(native_identity, threading.Lock())
-                with lock:
-                    if not native_cache.is_file():
-                        native = render_darktable_default(
-                            source, work / "darktable", max_dimension=maximum,
-                            demosaic_mode=demosaic)
-                        staged_native = native_cache.with_name(
-                            f".{native_cache.name}.{secrets.token_hex(4)}.tmp")
-                        shutil.copy2(Path(native["output"]["path"]), staged_native)
-                        os.replace(staged_native, native_cache)
-                baseline = self._from_display(native_cache, work)
+                baseline = self._from_display(
+                    self._native_decode(
+                        source, source_stat, maximum, demosaic, work),
+                    work)
                 calibration_reference = None
             elif source_kind == "raw" and "libraw" in decoders:
                 # OpenCull's own renderer: the deterministic fallback the

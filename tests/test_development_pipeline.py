@@ -98,6 +98,111 @@ class DevelopmentPipelineTests(unittest.TestCase):
             self.assertEqual([item["variant"] for item in renders], ["calibrated"])
 
 
+class NativeDecodeCacheTests(unittest.TestCase):
+    """The demosaic is the expensive part, and it does not depend on size."""
+
+    def workspace(self, root: Path):
+        from opencull_gui.development import DevelopmentWorkspace
+        from opencull_gui.project import ensure_project_layout
+        from opencull_gui.raw_sources import RawSourceStore
+
+        photos = root / "photos"
+        photos.mkdir(parents=True, exist_ok=True)
+        (photos / "A.RAF").write_bytes(b"FUJIFILMCCD-RAW" + b"\x00" * 4096)
+        layout = ensure_project_layout(photos)
+        project_path = root / "project.json"
+        create_project(project_path, name="decodes", source_folder=photos)
+
+        class Report:
+            path = layout["Reports"] / "shoot-results.json"
+            photo_names = ("A.RAF",)
+
+        workspace = DevelopmentWorkspace(
+            project_path, layout,
+            RawSourceStore(layout["Operations"] / "raw-sources.json", Report()),
+            decoders={"darktable"})
+        return workspace, photos
+
+    def test_one_demosaic_serves_every_size_asked_for_after_it(self):
+        from unittest import mock
+
+        from opencull_gui import development
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workspace, photos = self.workspace(root)
+            source = photos / "A.RAF"
+            decoded = []
+
+            def fake_decode(src, output_dir, *, max_dimension=None, **kw):
+                decoded.append(max_dimension)
+                output_dir.mkdir(parents=True, exist_ok=True)
+                written = output_dir / "native.jpg"
+                edge = max_dimension or 4000
+                Image.new("RGB", (edge, edge * 2 // 3), (80, 100, 120)).save(
+                    written)
+                return {"output": {"path": str(written)}}
+
+            with mock.patch.object(
+                    development, "render_darktable_default", fake_decode):
+                first = workspace._native_decode(
+                    source, source.stat(), 320, "markesteijn-3-pass", root)
+                self.assertEqual(decoded, [development.NATIVE_DECODE_FLOOR],
+                                 "a thumbnail should decode generously, once")
+                for size in (320, 900, 1600, development.NATIVE_DECODE_FLOOR):
+                    workspace._native_decode(
+                        source, source.stat(), size, "markesteijn-3-pass", root)
+                self.assertEqual(
+                    len(decoded), 1,
+                    "every size at or below the decode must be resampled "
+                    f"from it, but it decoded again: {decoded}")
+
+                # Only something larger than anything held pays again.
+                workspace._native_decode(
+                    source, source.stat(), 4096, "markesteijn-3-pass", root)
+                self.assertEqual(decoded, [development.NATIVE_DECODE_FLOOR, 4096])
+
+            # What came back is the size that was asked for; what was kept
+            # is the generous decode the rest are taken from.
+            with Image.open(first) as returned:
+                self.assertEqual(max(returned.size), 320)
+            kept = sorted(
+                (workspace.project_layout["Previews"] / "DevelopNative").glob(
+                    "A.markesteijn-3-pass.*.jpg"))
+            self.assertEqual(len(kept), 2)
+            with Image.open(kept[0]) as held:
+                self.assertIn(
+                    max(held.size),
+                    {development.NATIVE_DECODE_FLOOR, 4096})
+
+    def test_a_smaller_ask_comes_back_at_the_size_it_asked_for(self):
+        from unittest import mock
+
+        from opencull_gui import development
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workspace, photos = self.workspace(root)
+            source = photos / "A.RAF"
+
+            def fake_decode(src, output_dir, *, max_dimension=None, **kw):
+                output_dir.mkdir(parents=True, exist_ok=True)
+                written = output_dir / "native.jpg"
+                edge = max_dimension or 4000
+                Image.new("RGB", (edge, edge * 2 // 3), (80, 100, 120)).save(
+                    written)
+                return {"output": {"path": str(written)}}
+
+            with mock.patch.object(
+                    development, "render_darktable_default", fake_decode):
+                workspace._native_decode(
+                    source, source.stat(), 2048, "markesteijn-3-pass", root)
+                smaller = workspace._native_decode(
+                    source, source.stat(), 640, "markesteijn-3-pass", root)
+            with Image.open(smaller) as image:
+                self.assertEqual(max(image.size), 640)
+
+
 class RendererRevisionTests(unittest.TestCase):
     """A better renderer must reach the frames already rendered."""
 
