@@ -567,6 +567,39 @@ class DevelopPageTests(unittest.TestCase):
         page._delivery_progress(2, 2)
         self.assertFalse(page.delivery_meter.isVisibleTo(page))
 
+    def test_the_bar_moves_through_the_adjustments_of_one_photograph(self):
+        """Twenty adjustments is twenty things to say, not one long wait."""
+        page = self.page()
+        page.exporter.pending = 1
+        page.exporter.asked = 1
+
+        page._delivery_step("A.JPG", 0, 1, "developing the raw")
+        self.assertIn("developing the raw", page.delivery_note.text())
+
+        page._delivery_step("A.JPG", 5, 20, "tone.contrast")
+        self.assertEqual(page.delivery_meter.value(), 25)
+        self.assertIn("adjustment 5 of 20", page.delivery_note.text())
+
+        page._delivery_step("A.JPG", 19, 20, "writing the photograph")
+        self.assertEqual(page.delivery_meter.value(), 95)
+        self.assertIn("writing the photograph", page.delivery_note.text())
+
+    def test_within_a_batch_the_step_says_which_photograph(self):
+        page = self.page()
+        page.exporter.pending = 2
+        page.exporter.asked = 3
+        page._delivery_step("B.JPG", 4, 20, "color.saturation")
+        said = page.delivery_note.text()
+        self.assertIn("B.JPG", said)
+        self.assertIn("2 of 3", said)
+        self.assertIn("adjustment 4 of 20", said)
+
+    def test_a_step_after_the_batch_is_finished_says_nothing(self):
+        page = self.page()
+        page.exporter.pending = 0
+        page._delivery_step("A.JPG", 5, 20, "tone.contrast")
+        self.assertFalse(page.delivery_meter.isVisibleTo(page))
+
     def test_the_exporter_counts_the_batch_not_the_backlog(self):
         page = self.page()
         seen = []

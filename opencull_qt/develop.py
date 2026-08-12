@@ -114,6 +114,7 @@ class _RenderJob(QRunnable):
 class _ExportSignals(QObject):
     done = Signal(str, str, str)          # photo, requested, written
     failed = Signal(str, str)             # photo, reason
+    stepped = Signal(str, int, int, str)  # photo, done, total, what
 
 
 class _ExportJob(QRunnable):
@@ -135,7 +136,9 @@ class _ExportJob(QRunnable):
             # Full size, and registered in the manifest before it leaves, so
             # what was delivered has a recorded provenance.
             result = self.workspace.render_full(
-                self.photo, self.treatment, self.engine, self.demosaic)
+                self.photo, self.treatment, self.engine, self.demosaic,
+                progress=lambda done, total, what: self.signals.stepped.emit(
+                    self.photo, done, total, what))
             record = self.workspace.export_render(
                 str(result["render"]["path"]), self.destination)
         except Exception as exc:
@@ -156,6 +159,7 @@ class Exporter(QObject):
     done = Signal(str, str, str)
     failed = Signal(str, str)
     progressed = Signal(int, int)         # delivered, asked for
+    stepped = Signal(str, int, int, str)  # photo, done, total, what
 
     def __init__(self, workspace: DevelopmentWorkspace,
                  parent: QObject | None = None):
@@ -166,6 +170,9 @@ class Exporter(QObject):
         self._signals = _ExportSignals()
         self._signals.done.connect(self._finished)
         self._signals.failed.connect(self._failed)
+        self._signals.stepped.connect(
+            lambda photo, done, total, what: self.stepped.emit(
+                photo, done, total, what))
         self._pool = QThreadPool(self)
         self._pool.setMaxThreadCount(1)
 
@@ -688,6 +695,7 @@ class DevelopPage(QWidget):
         self.exporter = Exporter(workspace, self)
         self.exporter.done.connect(self._exported)
         self.exporter.progressed.connect(self._delivery_progress)
+        self.exporter.stepped.connect(self._delivery_step)
         self.exporter.failed.connect(self._export_failed)
         self.verifier = Verifier(workspace, self)
         self.verifier.ready.connect(self._verification_ready)
@@ -926,6 +934,33 @@ class DevelopPage(QWidget):
         self.delivery_note.hide()
         layout.addWidget(self.delivery_note)
         return panel
+
+    def _delivery_step(self, photo: str, done: int, total: int,
+                       what: str) -> None:
+        """Where inside one photograph the render has got to.
+
+        A treatment is twenty-odd adjustments and a demosaic. Counting
+        them turns a bar that could only say "started" into one that says
+        how far, which is the difference between waiting and wondering.
+        """
+        if self.exporter.pending <= 0:
+            return
+        self.delivery_meter.setRange(0, 100)
+        self.delivery_meter.setValue(
+            round(100 * done / total) if total else 0)
+        self.delivery_meter.show()
+        said = {
+            "developing the raw": "developing the raw",
+            "reading the frame": "reading the frame",
+            "matching the camera": "matching it to the camera",
+            "writing the photograph": "writing the photograph",
+        }.get(what, f"adjustment {done} of {total}")
+        batch = ""
+        if self.exporter.asked > 1:
+            made = self.exporter.asked - self.exporter.pending + 1
+            batch = f"{photo}, {made} of {self.exporter.asked} — "
+        self.delivery_note.setText(f"{batch}{said}.")
+        self.delivery_note.show()
 
     def _delivery_progress(self, done: int, total: int) -> None:
         """How far through the batch, while it is still being made."""

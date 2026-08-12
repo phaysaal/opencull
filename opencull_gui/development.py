@@ -539,6 +539,7 @@ class DevelopmentWorkspace:
     def recipe_preview(
         self, photo: str, style: str, engine: str, demosaic: str,
         maximum: int, adjustments: dict | None = None,
+        progress: Any = None,
     ) -> Path:
         """Render one bounded local proof without registering an export artifact.
 
@@ -573,6 +574,10 @@ class DevelopmentWorkspace:
             f"{Path(photo).stem}.{style}.{engine}.{identity}.jpg")
         if destination.is_file():
             return destination
+        if progress is not None:
+            # The demosaic is minutes on a raw and says nothing while it
+            # runs, so it is named before it starts rather than after.
+            progress(0, 1, "developing the raw")
         destination.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(
             prefix=".develop-preview-", dir=destination.parent,
@@ -613,7 +618,7 @@ class DevelopmentWorkspace:
                 calibration_reference = small_reference
             result = render_recipe(
                 baseline, recipe, work / "render", allow_incomplete=True,
-                reference_jpeg=calibration_reference)
+                reference_jpeg=calibration_reference, progress=progress)
             temporary_output = destination.with_name(
                 f".{destination.name}.{secrets.token_hex(4)}.tmp")
             shutil.copy2(Path(result["output"]["path"]), temporary_output)
@@ -733,6 +738,7 @@ class DevelopmentWorkspace:
     def render_full(
         self, photo: str, style: str, engine: str, demosaic: str,
         provenance: str = "", adjustments: dict | None = None,
+        progress: Any = None,
     ) -> dict:
         """Render a treatment at the photograph's own dimensions, and record it.
 
@@ -751,7 +757,7 @@ class DevelopmentWorkspace:
             raise ValueError("reference photograph is unavailable")
         maximum = max(open_preview(reference).size)
         preview = self.recipe_preview(
-            photo, style, engine, demosaic, maximum, adjustments)
+            photo, style, engine, demosaic, maximum, adjustments, progress)
         digest = hashlib.sha256(preview.read_bytes()).hexdigest()
         destination = self.project_layout["Developments"] / (
             f"{Path(photo).stem}.{style}.{engine}.{digest[:12]}.jpg")

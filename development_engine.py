@@ -266,9 +266,18 @@ def _blur(image: np.ndarray, radius: float) -> np.ndarray:
     return down
 
 
-def _apply_global(rgb: np.ndarray, operations: list[dict[str, Any]]) -> np.ndarray:
+def _apply_global(rgb: np.ndarray, operations: list[dict[str, Any]],
+                  progress: Any = None) -> np.ndarray:
+    """Apply a recipe's adjustments in order.
+
+    ``progress`` is called with (done, total, what) after each one. A
+    treatment is twenty-odd named adjustments and the photographer is
+    entitled to watch them arrive rather than watch a bar that cannot say
+    anything until the whole thing is finished.
+    """
     result = np.array(rgb, dtype=np.float32, copy=True)
-    for item in operations:
+    total = len(operations)
+    for done, item in enumerate(operations, start=1):
         op = item.get("op")
         value = item.get("value")
         # Structured local operations must be handled before the scalar-value
@@ -280,8 +289,12 @@ def _apply_global(rgb: np.ndarray, operations: list[dict[str, Any]]) -> np.ndarr
             for effect in value.get("effects", []):
                 adjusted = _apply_global(result, [effect])
                 result = result * (1 - blend) + adjusted * blend
+            if progress is not None:
+                progress(done, total, str(op))
             continue
         if not isinstance(value, (int, float)):
+            if progress is not None:
+                progress(done, total, str(op))
             if op in {"lens.profile", "lens.chromatic_aberration"}:
                 # Not skipped work: the decoder applies the camera's lens
                 # profile and its chromatic-aberration correction while
@@ -411,6 +424,8 @@ def _apply_global(rgb: np.ndarray, operations: list[dict[str, Any]]) -> np.ndarr
             result = colour * (result / np.maximum(before, 1e-5))
         if display:
             result = _decoded(result)
+        if progress is not None:
+            progress(done, total, str(op))
     return np.maximum(result, 0.0)
 
 
@@ -563,6 +578,7 @@ def _geometry(image: Image.Image, operations: list[dict[str, Any]]) -> Image.Ima
 def render_recipe(
     baseline_tiff: Path, recipe: dict[str, Any], output_dir: Path,
     allow_incomplete: bool = False, reference_jpeg: Path | None = None,
+    progress: Any = None,
 ) -> dict[str, Any]:
     source = baseline_tiff.expanduser().resolve()
     if not source.is_file():
@@ -578,14 +594,28 @@ def render_recipe(
     operations = recipe.get("operations", [])
     if not isinstance(operations, list):
         raise DevelopmentError("recipe operations must be a list")
+    def stage(done: int, total: int, what: str) -> None:
+        if progress is not None:
+            progress(done, total, what)
+
+    # Two stages bracket the adjustments: reading the decode in, and
+    # matching it to the camera. Counted so the bar starts moving before
+    # the first adjustment and does not sit full while the file is
+    # written.
+    steps = len(operations) + 3
+    stage(0, steps, "reading the frame")
     rgb = _load_linear(source)
     calibration = None
     if reference_jpeg is not None:
         reference = reference_jpeg.expanduser().resolve()
         if not reference.is_file():
             raise DevelopmentError(f"calibration JPEG is unavailable: {reference}")
+        stage(1, steps, "matching the camera")
         rgb, calibration = _calibrate_to_jpeg(rgb, reference)
-    rgb = _apply_global(rgb, operations)
+    rgb = _apply_global(
+        rgb, operations,
+        progress=lambda done, _total, what: stage(done + 2, steps, what))
+    stage(len(operations) + 2, steps, "writing the photograph")
     display = _linear_rec2020_to_srgb(np.clip(rgb, 0, 1))
     image = Image.fromarray(np.uint8(np.clip(display * 255 + 0.5, 0, 255)), "RGB")
     image = _geometry(image, operations)
