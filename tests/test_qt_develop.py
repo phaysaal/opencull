@@ -733,7 +733,7 @@ class DevelopPageTests(unittest.TestCase):
     def test_the_caption_always_says_which_one_is_on_screen(self):
         page = self.page()
         self.develop(page)
-        self.assertEqual(page.stage.caption.text(), "CALIBRATED BASELINE")
+        self.assertEqual(page.stage.caption.text(), "CAMERA-MATCHED BASELINE")
         self.hold(page, True)
         self.assertEqual(page.stage.caption.text(), "AS SHOT")
 

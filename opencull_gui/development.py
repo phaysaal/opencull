@@ -260,14 +260,18 @@ class DevelopmentWorkspace:
         workspace = self.payload()
         entry = next((item for item in workspace.get("candidates", [])
                       if item.get("photo") == photo), None)
-        # The calibrated baseline is the photograph as the camera and the
-        # demosaic saw it, with no interpretation on top. It needs no recipe
-        # and no edit direction, so every photograph has it. This is what
-        # develop means for a folder that has only been culled: see the
-        # picture properly, before anything has been suggested about it.
+        # The baseline is the raw developed and then matched to the
+        # rendering the camera made of the same scene: the picture the
+        # photographer already has, with the raw's latitude under it. It
+        # needs no recipe and no edit direction, so every photograph has
+        # it. This is what develop means for a folder that has only been
+        # culled: see the picture properly, before anything has been
+        # suggested about it.
         available: list[dict] = [{
-            "id": "calibrated", "name": "Calibrated baseline",
-            "intent": "Neutral technical rendering, nothing interpreted.",
+            "id": "calibrated", "name": "Camera-matched baseline",
+            "intent": "The raw developed, then matched to the camera's own "
+                      "rendering of the scene. Nothing interpreted beyond "
+                      "that; the highlights stay where the raw put them.",
             "kind": "builtin"}]
         if entry is not None:
             for style in BUILTIN_STYLES:
@@ -587,7 +591,14 @@ class DevelopmentWorkspace:
                     self._native_decode(
                         source, source_stat, maximum, demosaic, work),
                     work)
-                calibration_reference = None
+                # The raw is developed for its latitude and then matched to
+                # the picture the camera itself made of the scene, because
+                # that is the picture the photographer already has and the
+                # one a different treatment is a departure from. The match
+                # is held in the tones and released in the highlights, so
+                # the headroom the raw still has is not spent on copying a
+                # rendering that already spent its own.
+                calibration_reference = small_reference
             elif source_kind == "raw" and "libraw" in decoders:
                 # OpenCull's own renderer: the deterministic fallback the
                 # renderer plan describes. It already produces the
