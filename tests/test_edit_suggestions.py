@@ -337,9 +337,26 @@ class InertAnswerTests(EditSuggestionKernelTests):
                 str(shortlist), str(review), str(photos))
             prompt = edit_direction_prompt(
                 parse_edit_candidates(request)[0], "professional")
-            self.assertIn("at least one concrete", prompt)
+            self.assertIn("a complete treatment, not", prompt)
             self.assertIn("empty list", prompt)
-            self.assertIn("never a sentence saying there is no", prompt)
+            self.assertIn("never a sentence saying", prompt)
+
+    def test_the_prompt_asks_a_treatment_to_account_for_its_own_effect(self):
+        """Highlight recovery and shadow lift both flatten a photograph.
+
+        Seven treatments written without this line all finished flatter
+        than the frames they started from -- every one of them.
+        """
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            photos, shortlist, review = self.make_context(root)
+            request = build_edit_request(
+                str(shortlist), str(review), str(photos))
+            prompt = edit_direction_prompt(
+                parse_edit_candidates(request)[0], "professional")
+            self.assertIn("finishes flatter and duller", prompt)
+            self.assertIn("put the contrast back deliberately", prompt)
+            self.assertIn("hold\nat least the contrast and colour", prompt)
 
 
 class PersonalStyleChoiceTests(EditSuggestionKernelTests):

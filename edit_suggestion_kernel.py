@@ -391,13 +391,24 @@ heal or clone layers and whether each mask is brush, subject/background,
 linear/radial gradient, color range, or luma range, including opacity and
 feathering guidance. Include an evaluation order and histogram/clipping/skin
 checks. Use JSON only inside each recipe string. Return confidence strictly as
-a number from 0 through 1. Every recipe must contain at least one concrete
-adjustment: a named control with a number or a range, such as "Exposure
-+0.15" or "HDR Shadow +12". A section you have no recommendation for is an
-empty list -- never a sentence saying there is no recommendation, which
-reads as an edit and renders as nothing. Before responding, verify that
-every recipe string is complete JSON and that its final section closes both
-the list and object."""
+a number from 0 through 1. Every recipe must be a complete treatment, not
+a minimum one: name every adjustment the look actually needs, with a
+number or a range, such as "Exposure +0.15" or "HDR Shadow +12". A section
+you have no recommendation for is an empty list -- never a sentence saying
+there is no recommendation, which reads as an edit and renders as nothing.
+
+Account for what your own instructions add up to. Recovering highlights
+and opening shadows each reduce contrast, so a treatment built from those
+alone finishes flatter and duller than the photograph it started from,
+which is the one result no photographer asked for. If you compress the
+highlights or lift the shadows, put the contrast back deliberately --
+through Contrast, the curve, local contrast, or colour separation -- and
+name the control that does it. Unless you are deliberately making a
+quieter picture and say so in the intent, the finished frame should hold
+at least the contrast and colour of the frame you were given.
+
+Before responding, verify that every recipe string is complete JSON and
+that its final section closes both the list and object."""
 
 
 def edit_direction_repair_prompt(value: Any, candidate: Any = None) -> str:

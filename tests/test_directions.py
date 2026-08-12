@@ -11,7 +11,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from opencull_gui.directions import DirectionsIndex, verdict_of  # noqa: E402
+from opencull_gui.directions import (
+    UNREADABLE,
+    UNVERIFIED,
+    VERIFIED,
+    DirectionsIndex,
+    verdict_of,
+)  # noqa: E402
 
 PERSONAL = {
     "personal_title": "Personal", "personal_intent": "as you would",
@@ -229,3 +235,46 @@ class VerdictTests(unittest.TestCase):
         self.assertEqual(verdict_of(self.entry("")), "")
         self.assertEqual(verdict_of({}), "")
         self.assertEqual(verdict_of(None), "")
+
+
+class SupersedingTests(unittest.TestCase):
+    """Asking again must not be able to lose a good answer."""
+
+    def entry(self, photo, status, title="Natural finish"):
+        return {
+            "photo": photo, "standard_title": title,
+            "standard_recipe": json.dumps({"global_exposure": ["Exposure +0.2"]}),
+            "kimiya_validation": {"status": status, "system": "kimiya"},
+        }
+
+    def overlay(self, reports):
+        """The rule payload() applies when several reports name a frame."""
+        held = {}
+        for report in reports:
+            for entry in report:
+                photo = entry["photo"]
+                have = held.get(photo)
+                if have is not None and not (
+                        verdict_of(have) in {UNVERIFIED, UNREADABLE}
+                        and verdict_of(entry) == VERIFIED):
+                    continue
+                held[photo] = entry
+        return held
+
+    def test_a_refused_answer_does_not_replace_an_accepted_one(self):
+        newest = [self.entry("A.JPG", "rejected", "the refused retry")]
+        older = [self.entry("A.JPG", "accepted", "the accepted answer")]
+        kept = self.overlay([newest, older])["A.JPG"]
+        self.assertEqual(kept["standard_title"], "the accepted answer")
+
+    def test_an_accepted_answer_replaces_an_older_accepted_one(self):
+        newest = [self.entry("A.JPG", "accepted", "the newer answer")]
+        older = [self.entry("A.JPG", "accepted", "the older answer")]
+        kept = self.overlay([newest, older])["A.JPG"]
+        self.assertEqual(kept["standard_title"], "the newer answer")
+
+    def test_a_refusal_still_shows_when_it_is_all_there_is(self):
+        kept = self.overlay([[self.entry("A.JPG", "rejected", "refused")]])
+        self.assertEqual(kept["A.JPG"]["standard_title"], "refused")
+        self.assertEqual(verdict_of(kept["A.JPG"]), UNVERIFIED)
+

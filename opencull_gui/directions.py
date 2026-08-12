@@ -200,26 +200,34 @@ class DirectionsIndex:
             report_style_sha = str(report.get("style_profile_sha256", ""))
             for entry in report.get("entries", []):
                 photo = entry.get("photo") if isinstance(entry, dict) else None
-                if (
-                    isinstance(photo, str)
-                    and photo not in entries_by_photo
-                    and (not selected or photo in selected)
-                ):
-                    entries_by_photo[photo] = entry
-                    has_personal = all(
-                        isinstance(entry.get(field), str)
-                        and bool(entry[field].strip())
-                        for field in PERSONAL_FIELDS
-                    )
-                    # Reports predating style provenance remain usable when
-                    # they visibly contain a complete personal treatment.
-                    style_matches = (
-                        not active_style_sha
-                        or report_style_sha == active_style_sha
-                        or not report_style_sha
-                    )
-                    if has_personal and style_matches:
-                        personal_style_photos.add(photo)
+                if not isinstance(photo, str) or (selected and photo not in selected):
+                    continue
+                held = entries_by_photo.get(photo)
+                # Newest first, except that an answer the panel accepted
+                # outranks one it refused. Asking again for a frame that
+                # already had a good answer should not be able to lose it:
+                # a refusal is a worse answer, not a later one.
+                if held is not None and not (
+                        verdict_of(held) in {UNVERIFIED, UNREADABLE}
+                        and verdict_of(entry) == VERIFIED):
+                    continue
+                entries_by_photo[photo] = entry
+                has_personal = all(
+                    isinstance(entry.get(field), str)
+                    and bool(entry[field].strip())
+                    for field in PERSONAL_FIELDS
+                )
+                # Reports predating style provenance remain usable when
+                # they visibly contain a complete personal treatment.
+                style_matches = (
+                    not active_style_sha
+                    or report_style_sha == active_style_sha
+                    or not report_style_sha
+                )
+                if has_personal and style_matches:
+                    personal_style_photos.add(photo)
+                else:
+                    personal_style_photos.discard(photo)
         available_entries = [
             entries_by_photo[photo] for photo in sorted(entries_by_photo)
         ]
