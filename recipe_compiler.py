@@ -148,17 +148,29 @@ def _compile_step(
         },
     }
     if section == "hdr_levels_curves":
-        level_matches = list(re.finditer(
-            r"(?i)(?:levels?\s*)?(?:input\s+)?(white|black)"
-            r"\s*:?\s*(\d+(?:\.\d+)?)", text))
+        # "Set Levels black input around 4, white input 98, midpoint 0.98,
+        # with output black near 1 and white 99." Three traps in one
+        # sentence: the input points are written after their name rather
+        # than before it, the output points look identical to the input
+        # ones, and the numbers are percentages of full scale. Read
+        # naively, that sentence set the input white point to level 99 of
+        # 255 -- an eight-fold multiply that blew a frame to white.
+        level_matches = [
+            item for item in re.finditer(
+                r"(?i)\b(?:(output|input)\s+)?(white|black)"
+                r"(?:\s+(input|output|point))?"
+                r"[\s:]*(?:around|near|about|approximately|~|at)?[\s:]*"
+                r"(\d+(?:\.\d+)?)\s*(%)?", text)
+            if _levels_scope(text, item) != "output"]
         midpoint = re.search(
             r"(?i)\bmidpoint\s*:?\s*(\d+(?:\.\d+)?)", text)
         if level_matches or midpoint:
             for item in level_matches:
                 _operation(
-                    operations, f"levels.{item.group(1).lower()}_input",
-                    _number(item.group(2)), "level-8bit", "absolute",
-                    text, section)
+                    operations, f"levels.{item.group(2).lower()}_input",
+                    _levels_value(item.group(4), item.group(5),
+                                  item.group(2).lower()),
+                    "level-8bit", "absolute", text, section)
             if midpoint:
                 _operation(
                     operations, "levels.midpoint", _number(midpoint.group(1)),
@@ -321,6 +333,47 @@ def _compile_step(
     if section == "evaluation_order":
         return "guardrail"
     return "unsupported"
+
+
+
+def _levels_scope(text: str, match: re.Match[str]) -> str:
+    """Whether a levels point is an input or an output one.
+
+    "with output black near 1 and white 99" means both of them are output
+    points, though only the first sits beside the word. The nearest of
+    the two words before the number decides, which is how the sentence
+    reads aloud.
+    """
+    for group in (1, 3):
+        word = (match.group(group) or "").lower()
+        if word in {"input", "output"}:
+            return word
+    before = text[:match.start()].lower()
+    at_input, at_output = before.rfind("input"), before.rfind("output")
+    if at_output > at_input:
+        return "output"
+    return "input"
+
+
+def _levels_value(number: str, percent: str | None, point: str) -> float:
+    """A levels point as an 8-bit level, whatever scale it was written in.
+
+    Develop programs show these as 0-255, but "white input 98" means 98
+    percent of full scale far more often than it means level 98 -- which
+    on any normally exposed frame clips a third of it to white, and did:
+    one frame came back at eight times its own brightness.
+
+    Only the white point is read that way. A black input of 12 is an
+    ordinary level and an unremarkable percentage both, so the reading
+    that changes the photograph least is the one taken; a white input of
+    12 has no sane reading as a level at all.
+    """
+    value = _number(number)
+    if value is None:
+        return 0.0
+    if percent or (point == "white" and value <= 100.0):
+        return round(min(value, 100.0) * 2.55, 2)
+    return value
 
 
 def compile_recipe(

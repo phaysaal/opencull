@@ -127,5 +127,49 @@ class RecipeCompilerTests(unittest.TestCase):
             )
 
 
+
 if __name__ == "__main__":
     unittest.main()
+
+
+class LevelsScaleTests(unittest.TestCase):
+    """One sentence from a live run, read three ways wrong."""
+
+    SENTENCE = ("Set Levels black input around 4, white input 98, "
+                "midpoint 0.98, with output black near 1 and white 99.")
+
+    def compile(self, sentence: str) -> dict:
+        result = compile_recipe(
+            "A.RAF", "signature", "", "",
+            json.dumps({"hdr_levels_curves": [sentence]}), "", "raw")
+        return {op["op"].split(".")[1]: op["value"]
+                for op in result["operations"]}
+
+    def test_a_white_point_in_percent_is_not_a_level(self):
+        # Read as level 98 of 255 this brightened a frame eight-fold and
+        # blew it to white. Ninety-eight per cent of full scale is what
+        # the sentence means and is very nearly no change at all.
+        self.assertAlmostEqual(
+            self.compile(self.SENTENCE)["white_input"], 249.9, places=1)
+
+    def test_an_output_point_is_not_an_input_point(self):
+        # "output black near 1 and white 99" is two output points; the
+        # word governs both, though it sits beside only the first.
+        values = self.compile(self.SENTENCE)
+        self.assertNotIn(99.0, values.values())
+        self.assertAlmostEqual(values["black_input"], 4.0, places=1)
+
+    def test_a_point_written_after_its_name_is_still_read(self):
+        # "white input 98" and "input white 98" are the same instruction.
+        self.assertEqual(
+            self.compile("Levels: input white 240, input black 12."),
+            self.compile("Levels: white input 240, black input 12."))
+
+    def test_a_level_above_the_percent_range_is_taken_as_a_level(self):
+        self.assertEqual(self.compile("Set white point 250.")["white_input"],
+                         250.0)
+
+    def test_an_explicit_percentage_is_honoured_on_either_point(self):
+        values = self.compile("Levels input black 5%, input white 96%.")
+        self.assertAlmostEqual(values["black_input"], 12.75, places=2)
+        self.assertAlmostEqual(values["white_input"], 244.8, places=1)
