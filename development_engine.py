@@ -292,6 +292,19 @@ def _named(item: dict[str, Any]) -> str:
     return op
 
 
+def active(operations: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The adjustments that are actually meant to happen.
+
+    The fine-tuning page lets a photographer switch one off, and that was
+    recorded on the operation and then ignored here -- the switch moved,
+    the label said the operation was off, and the renderer applied it
+    anyway. An operation nobody wants is not applied and is not counted,
+    so the progress bar does not name work that is not being done either.
+    """
+    return [item for item in operations
+            if isinstance(item, dict) and item.get("enabled", True) is not False]
+
+
 def _apply_global(rgb: np.ndarray, operations: list[dict[str, Any]],
                   progress: Any = None) -> np.ndarray:
     """Apply a recipe's adjustments in order.
@@ -303,6 +316,7 @@ def _apply_global(rgb: np.ndarray, operations: list[dict[str, Any]],
     """
     result = np.array(rgb, dtype=np.float32, copy=True)
     detail_scale = max(max(result.shape[:2]) / DETAIL_REFERENCE_EDGE, 0.25)
+    operations = active(operations)
     total = len(operations)
     for done, item in enumerate(operations, start=1):
         op = item.get("op")
@@ -579,6 +593,7 @@ def _straighten(image: Image.Image, degrees: float) -> Image.Image:
 
 def _geometry(image: Image.Image, operations: list[dict[str, Any]]) -> Image.Image:
     result = image
+    operations = active(operations)
     # Straightening comes before framing, whatever order the recipe put
     # them in: a crop chosen on a crooked picture is not the crop the
     # photographer asked for.
@@ -630,7 +645,8 @@ def render_recipe(
     # matching it to the camera. Counted so the bar starts moving before
     # the first adjustment and does not sit full while the file is
     # written.
-    steps = len(operations) + 3
+    wanted = active(operations)
+    steps = len(wanted) + 3
     stage(0, steps, "reading the frame")
     rgb = _load_linear(source)
     calibration = None
@@ -643,7 +659,7 @@ def render_recipe(
     rgb = _apply_global(
         rgb, operations,
         progress=lambda done, _total, what: stage(done + 2, steps, what))
-    stage(len(operations) + 2, steps, "writing the photograph")
+    stage(len(wanted) + 2, steps, "writing the photograph")
     display = _linear_rec2020_to_srgb(np.clip(rgb, 0, 1))
     image = Image.fromarray(np.uint8(np.clip(display * 255 + 0.5, 0, 255)), "RGB")
     image = _geometry(image, operations)

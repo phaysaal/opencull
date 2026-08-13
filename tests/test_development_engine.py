@@ -25,6 +25,72 @@ def write_baseline(path: Path, array: np.ndarray) -> Path:
     return path
 
 
+class SwitchedOffTests(unittest.TestCase):
+    """An operation the photographer switched off must not be applied.
+
+    The fine-tuning page writes the switch onto the operation, and the
+    renderer read past it: the control said the adjustment was off, the
+    label said so, and the frame came back with it applied anyway.
+    """
+
+    def render(self, operations, name):
+        root = Path(self._temporary.name)
+        baseline = root / "baseline.tiff"
+        write_baseline(baseline, np.full((16, 24, 3), 9000, dtype=np.uint16))
+        result = render_recipe(baseline, {
+            "format": "opencull-development-recipe-v1",
+            "source_photo": "A.RAF", "source_kind": "raw",
+            "style": "standard", "operations": operations,
+        }, root / name)
+        with Image.open(result["output"]["path"]) as image:
+            grey = np.asarray(image.convert("L"), dtype=np.float32)
+        return float(grey.mean()), result
+
+    def setUp(self):
+        self._temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self._temporary.cleanup)
+
+    def lift(self, **extra):
+        return [{"op": "tone.exposure", "value": 1.0, "unit": "EV",
+                 "mode": "delta", **extra}]
+
+    def test_a_switched_off_adjustment_changes_nothing(self):
+        untouched, _ = self.render([], "none")
+        applied, _ = self.render(self.lift(), "on")
+        switched_off, _ = self.render(self.lift(enabled=False), "off")
+        self.assertGreater(applied, untouched + 20)
+        self.assertAlmostEqual(switched_off, untouched, places=4)
+
+    def test_it_is_not_counted_or_named_while_it_is_not_happening(self):
+        root = Path(self._temporary.name)
+        baseline = root / "baseline.tiff"
+        write_baseline(baseline, np.full((16, 24, 3), 9000, dtype=np.uint16))
+        seen = []
+        render_recipe(baseline, {
+            "format": "opencull-development-recipe-v1",
+            "source_photo": "A.RAF", "source_kind": "raw",
+            "style": "standard",
+            "operations": [
+                *self.lift(enabled=False),
+                {"op": "tone.contrast", "value": 8.0, "unit": "percent",
+                 "mode": "delta"},
+            ],
+        }, root / "counted", progress=lambda done, total, what: seen.append(
+            (done, total, what)))
+        named = [what for _done, _total, what in seen]
+        self.assertNotIn("tone.exposure", named)
+        self.assertIn("tone.contrast", named)
+        # Three stages plus the one adjustment that is actually happening.
+        self.assertEqual({total for _done, total, _what in seen}, {4})
+
+    def test_a_switched_off_crop_leaves_the_frame_its_own_shape(self):
+        _brightness, kept = self.render([
+            {"op": "geometry.crop_aspect", "value": [1, 1], "unit": "ratio",
+             "mode": "absolute", "enabled": False}], "crop")
+        with Image.open(kept["output"]["path"]) as image:
+            self.assertEqual(image.size, (24, 16))
+
+
 class DevelopmentEngineTests(unittest.TestCase):
     def recipe(self, diagnostics=None):
         return {
