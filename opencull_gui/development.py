@@ -170,7 +170,18 @@ class DevelopmentWorkspace:
     def infrared(self) -> bool:
         return self.spectrum() == "infrared"
 
-    def set_spectrum(self, spectrum: str) -> dict[str, Any]:
+    def cutoff_nm(self) -> float:
+        """Which infrared filter was on the lens, in nanometres, or zero."""
+        if not self.infrared():
+            return 0.0
+        try:
+            return float((self.project.get("rendering") or {}).get(
+                "cutoff_nm") or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def set_spectrum(self, spectrum: str,
+                     cutoff_nm: float = 0) -> dict[str, Any]:
         """Record what the camera was looking at, for the whole album.
 
         Every proof already rendered was developed from the other base,
@@ -183,6 +194,7 @@ class DevelopmentWorkspace:
             raise ValueError("unsupported project spectrum")
         rendering = dict(self.payload().get("rendering") or {})
         rendering["spectrum"] = spectrum
+        rendering["cutoff_nm"] = float(cutoff_nm or 0)
         self.project = update_project(
             self.project_path, rendering=rendering)
         return self.payload()
@@ -239,6 +251,7 @@ class DevelopmentWorkspace:
                     "engine": "darktable",
                     "demosaic": "markesteijn-3-pass",
                     "spectrum": "visible",
+                    "cutoff_nm": 0.0,
                     **(self.project.get("rendering") or {}),
                 },
                 "project_sha256": project_sha256(self.project_path)}

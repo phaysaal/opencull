@@ -59,12 +59,22 @@ def managed_directory(root: Path) -> Path:
     return root / MANAGED_DIRECTORY_CANDIDATES[0]
 
 
-def preview_cache_name(relative: str, sha256_prefix: str) -> str:
-    """One flat, content-keyed name per source frame."""
-    return f"{relative.replace('/', '__')}.{sha256_prefix[:8]}.preview.jpg"
+def preview_cache_name(relative: str, sha256_prefix: str,
+                       spectrum: str = "visible") -> str:
+    """One flat, content-keyed name per source frame.
+
+    An infrared frame is materialised as its own file rather than over
+    the camera's own rendering. They are different pictures of the same
+    capture, and a shoot marked infrared by mistake and marked back would
+    otherwise be left looking at the wrong one.
+    """
+    mark = ".infrared" if str(spectrum) == "infrared" else ""
+    return (f"{relative.replace('/', '__')}."
+            f"{sha256_prefix[:8]}{mark}.preview.jpg")
 
 
-def visible_photograph(root: Path, relative: str) -> Path:
+def visible_photograph(root: Path, relative: str,
+                       spectrum: str = "visible") -> Path:
     """The file a model can actually be shown for one frame.
 
     Raw sensor bytes are not an image to an image reader. The scanner
@@ -76,10 +86,24 @@ def visible_photograph(root: Path, relative: str) -> Path:
     if original.suffix.lower() not in RAW_EXTENSIONS:
         return original
     flat = relative.replace("/", "__")
-    for managed in MANAGED_DIRECTORY_CANDIDATES:
-        previews = root / managed / "Previews"
-        if previews.is_dir():
-            matches = sorted(previews.glob(f"{flat}.*.preview.jpg"))
+    # An infrared album has its own rendering of every frame, and that is
+    # the one worth showing: the camera's is a guess about light its own
+    # filter removed. Where one has not been made, the camera's stands
+    # rather than nothing at all.
+    wanted = ([f"{flat}.*.infrared.preview.jpg"]
+              if str(spectrum) == "infrared" else [])
+    for pattern in [*wanted, f"{flat}.*.preview.jpg"]:
+        for managed in MANAGED_DIRECTORY_CANDIDATES:
+            previews = root / managed / "Previews"
+            if not previews.is_dir():
+                continue
+            matches = sorted(
+                path for path in previews.glob(pattern)
+                # The plain pattern also matches the infrared file, which
+                # must never be served to somebody who asked for the
+                # camera's own rendering.
+                if str(spectrum) == "infrared"
+                or not path.name.endswith(".infrared.preview.jpg"))
             if matches:
                 return matches[-1]
     return original
@@ -334,8 +358,45 @@ def file_sha256_prefix(path: Path) -> str:
     return digest.hexdigest()[:16]
 
 
-def measure(path: Path, root: Path) -> Measured:
+# How an infrared frame is made judgeable. The channels are brought into
+# agreement -- past the filter's cut-off they recorded nearly the same
+# light, so the cast is the filter and not the scene -- and the result is
+# scaled so its brightest real tone reaches near the top of the range. A
+# 760nm frame arrives at eighteen levels out of 255 with a heavy blue
+# cast, and nobody, model or person, can judge composition through that.
+INFRARED_HEADROOM = 0.92
+INFRARED_QUANTILE = 99.0
+_ENCODE_GAMMA = 2.2
+
+
+def neutralized(image: Image.Image) -> Image.Image:
+    """One infrared frame, shown as what the sensor recorded.
+
+    Done in linear light, because a per-channel gain applied to
+    gamma-encoded numbers scales the encoding rather than the light.
+    """
+    rgb = np.asarray(image.convert("RGB"), dtype=np.float32) / 255.0
+    linear = np.power(np.clip(rgb, 0.0, 1.0), _ENCODE_GAMMA)
+    averages = linear.reshape(-1, 3).mean(axis=0)
+    target = float(averages.mean())
+    if target > 1e-6:
+        linear = linear * np.where(
+            averages > 1e-6, target / np.maximum(averages, 1e-6), 1.0)
+    ceiling = float(np.percentile(linear, INFRARED_QUANTILE))
+    if ceiling > 1e-6:
+        linear = linear * (INFRARED_HEADROOM / ceiling)
+    encoded = np.power(np.clip(linear, 0.0, 1.0), 1.0 / _ENCODE_GAMMA)
+    return Image.fromarray(np.uint8(np.clip(encoded * 255 + 0.5, 0, 255)))
+
+
+def measure(path: Path, root: Path, spectrum: str = "visible") -> Measured:
     image = open_preview(path)
+    if str(spectrum) == "infrared":
+        # Measured on the frame as it will be shown and developed, not on
+        # the camera's guess. Exposure and clipping read from an
+        # unbalanced infrared capture describe the filter, not the
+        # photograph, and they are handed to the model as evidence.
+        image = neutralized(image)
     captured, timestamp = capture_time(image, path)
     width, height = image.size
     preview = ImageOps.contain(image, (768, 768), Image.Resampling.LANCZOS)
@@ -385,7 +446,7 @@ def measure(path: Path, root: Path) -> Measured:
         # into the project's own Previews area.
         managed = managed_directory(root)
         cache = managed / "Previews" / preview_cache_name(
-            relative, sha256_prefix)
+            relative, sha256_prefix, spectrum)
         if not cache.is_file():
             cache.parent.mkdir(parents=True, exist_ok=True)
             bounded = ImageOps.contain(

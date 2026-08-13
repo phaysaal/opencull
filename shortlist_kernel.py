@@ -110,6 +110,8 @@ def build_professional_candidates(
     review_path: str = "",
     policy: str = "effective",
     minimum_dimension: float = 640,
+    spectrum: str = "visible",
+    cutoff_nm: float = 0,
 ) -> str:
     """Select keepers, pair RAW assets, and conservatively screen locally."""
     policy = str(policy).strip().lower()
@@ -129,6 +131,9 @@ def build_professional_candidates(
             or review.get("report_sha256") != report_sha
         ):
             raise ValueError("review file does not match the culling report")
+    spectrum = str(spectrum).strip().lower() or "visible"
+    if spectrum not in {"visible", "infrared"}:
+        raise ValueError(f"unsupported spectrum: {spectrum}")
     root = Path(str(photos)).expanduser().resolve()
     assets = index_asset_families(root)
     chosen, revision = _chosen_names(report, review, policy)
@@ -161,7 +166,7 @@ def build_professional_candidates(
                 "photo": name, "reason": "selected source file is missing"})
             continue
         try:
-            measured = measure(source, root).manifest_record()
+            measured = measure(source, root, spectrum).manifest_record()
         except Exception as exc:
             excluded.append({
                 "photo": name,
@@ -186,6 +191,8 @@ def build_professional_candidates(
             **measured,
             "photo": name,
             "name": name,
+            "spectrum": spectrum,
+            "cutoff_nm": float(cutoff_nm) if spectrum == "infrared" else 0.0,
             "cluster_id": cluster_for[name],
             "asset_id": family.asset_id if family else "",
             "raw_files": raw_files,
@@ -202,6 +209,8 @@ def build_professional_candidates(
         "source_report_sha256": report_sha,
         "source_review_revision": revision,
         "candidate_policy": policy,
+        "spectrum": spectrum,
+        "cutoff_nm": float(cutoff_nm) if spectrum == "infrared" else 0.0,
         "photos_root": str(root),
         "candidate_ids": [
             (item["photo"], item["sha256_prefix"]) for item in candidates],
@@ -231,7 +240,40 @@ def professional_candidate_path(
 ) -> str:
     data = json.loads(str(bundle))
     return str(visible_photograph(
-        Path(data["photos_root"]), str(candidate["photo"])))
+        Path(data["photos_root"]), str(candidate["photo"]),
+        str(data.get("spectrum", "visible"))))
+
+
+def infrared_note(candidate: dict[str, Any]) -> str:
+    """What a model has to be told before it can judge an infrared frame.
+
+    Without this it is looking at a photograph whose colour is wrong, whose
+    white balance cannot be fixed by any camera profile, and whose foliage
+    is the wrong brightness -- and it will report all three as faults,
+    correctly, for a photograph nobody took. The filter did that, and the
+    filter was the point.
+    """
+    if str(candidate.get("spectrum", "visible")) != "infrared":
+        return ""
+    cutoff = float(candidate.get("cutoff_nm") or 0)
+    where = (f"a {cutoff:.0f}nm cut-off filter" if cutoff
+             else "an infrared cut-off filter")
+    return " ".join([
+        f"THIS IS AN INFRARED PHOTOGRAPH, taken through {where}.",
+        "It is shown to you neutralised and normalised from the capture,"
+        " because the camera's own rendering of an infrared frame is a"
+        " guess about light its filter removed.",
+        "Colour is not evidence here. Past the cut-off the sensor's three"
+        " colour channels record almost the same light, so an absent,"
+        " strange or monochrome palette is the medium and not a defect,"
+        " and no white balance can or should 'correct' it.",
+        "Foliage rendering bright and skies rendering dark is correct"
+        " infrared behaviour, not overexposure.",
+        "Judge this frame on composition, subject, moment, tonal"
+        " separation, and infrared's own way of describing a scene.",
+        "The local measurements below were taken on the neutralised"
+        " frame, so they describe the photograph rather than the filter.",
+    ])
 
 
 def professional_assessment_prompt(
@@ -243,9 +285,11 @@ def professional_assessment_prompt(
             "exposure", "contrast", "clipping", "composition_proxy",
             "local_warnings", "raw_files", "asset_warning")
     }
+    infrared = infrared_note(candidate)
     return "\n".join([
         "Act as a critical professional photo editor assessing one already-culled frame.",
         f"Editing profile: {str(profile).strip().lower() or 'family'}.",
+        *([infrared] if infrared else []),
         "Judge whether this frame deserves professional RAW editing. This is "
         "stricter than deciding whether a family memory should be kept.",
         "Prioritize photographic angle, composition, subject presentation, pose, "

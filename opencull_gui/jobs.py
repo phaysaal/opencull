@@ -450,6 +450,8 @@ class JobManager:
                 f"style_profiles={json.dumps(job.get('style_profiles', []))}",
                 f"only_photo={job.get('only_photo', '')}",
                 f"only_photos={json.dumps(job.get('only_photos', []))}",
+                f"spectrum={job.get('spectrum', 'visible')}",
+                f"cutoff_nm={job.get('cutoff_nm', 0)}",
                 "resume=true",
             ]
         if job.get("kind") == "professional_shortlist":
@@ -463,6 +465,8 @@ class JobManager:
                 f"output={job['output']}",
                 f"policy={job['policy']}",
                 f"profile={job['profile']}",
+                f"spectrum={job.get('spectrum', 'visible')}",
+                f"cutoff_nm={job.get('cutoff_nm', 0)}",
                 "resume=true",
             ]
         return [
@@ -741,6 +745,14 @@ class JobManager:
                 "log": str(log),
                 "policy": policy,
                 "profile": profile,
+                # Read from the project rather than asked for again: the
+                # filter was on the lens for the whole album, and the
+                # photographer already said so on the develop page.
+                "spectrum": str(
+                    (project.get("rendering") or {}).get("spectrum")
+                    or "visible"),
+                "cutoff_nm": float(
+                    (project.get("rendering") or {}).get("cutoff_nm") or 0),
                 "status": "queued",
                 "message": "Waiting for the professional-shortlist worker.",
                 "pid": None,
@@ -1007,6 +1019,11 @@ class JobManager:
                     str(item).strip() for item in (only_photos or [])
                     if str(item).strip()
                 ],
+                "spectrum": str(
+                    (project.get("rendering") or {}).get("spectrum")
+                    or "visible"),
+                "cutoff_nm": float(
+                    (project.get("rendering") or {}).get("cutoff_nm") or 0),
                 "status": "queued",
                 "message": "Waiting for the edit-direction worker.",
                 "pid": None, "created_at": _now(), "started_at": None,

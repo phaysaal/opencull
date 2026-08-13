@@ -194,6 +194,7 @@ def style_menu(profiles: list[dict[str, Any]]) -> str:
 def build_edit_request(
     shortlist_path: str, review_path: str, photos: str, style_profile: str = "",
     only_photo: str = "", only_photos: str = "[]", style_profiles: str = "[]",
+    spectrum: str = "visible", cutoff_nm: float = 0,
 ) -> str:
     shortlist_file, shortlist = _load(shortlist_path)
     review_file, review = _load(review_path)
@@ -208,6 +209,9 @@ def build_edit_request(
         != shortlist.get("candidate_signature")
     ):
         raise ValueError("professional review does not match shortlist")
+    spectrum = str(spectrum).strip().lower() or "visible"
+    if spectrum not in {"visible", "infrared"}:
+        raise ValueError(f"unsupported spectrum: {spectrum}")
     root = Path(str(photos)).expanduser().resolve()
     if not root.is_dir():
         raise ValueError(f"photo folder is unavailable: {root}")
@@ -276,6 +280,8 @@ def build_edit_request(
             "style_profile": personal_profile,
             "style_profiles": style_bank,
             "photos_root": str(root),
+            "spectrum": spectrum,
+            "cutoff_nm": float(cutoff_nm) if spectrum == "infrared" else 0.0,
         })
     candidates.sort(key=lambda item: (item.get("rank", 10**9), item["photo"]))
     if targets and {item["photo"] for item in candidates} != targets:
@@ -344,6 +350,23 @@ with, not a fault to leave alone."""
         """
 The photograph below is the camera's own rendering, which already carries
 whatever the camera applied when the shutter closed.""")
+    if str(candidate.get("spectrum", "visible")) == "infrared":
+        cutoff = float(candidate.get("cutoff_nm") or 0)
+        where = (f"a {cutoff:.0f}nm cut-off filter" if cutoff
+                 else "an infrared cut-off filter")
+        # Says what the frame is, not how it was developed: the paragraph
+        # above already states which rendering was attached, and two
+        # sentences disagreeing about that would be worse than silence.
+        shown += f"""
+
+THIS IS AN INFRARED PHOTOGRAPH, taken through {where}. Do not spend the
+recipe correcting its colour. Past roughly 760nm the sensor's three
+channels record almost the same light, so there is no white balance to
+find and no natural palette to restore; nearer 720nm enough separation
+survives for a deliberate false-colour treatment, and that is a choice
+rather than a correction. Bright foliage and dark skies are correct
+infrared behaviour. Spend the recipe on tonal separation, local contrast
+and structure, which is what infrared has instead of colour."""
     if bank:
         # The photographer's tastes are offered as a menu and the answer
         # names the number it used. A number cannot be a style that does

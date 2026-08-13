@@ -138,6 +138,7 @@ def create_project(path: Path, name: str, source_folder: Path) -> dict[str, Any]
             "engine": "darktable",
             "demosaic": "markesteijn-3-pass",
             "spectrum": "visible",
+            "cutoff_nm": 0.0,
         },
         "stage": "import", "artifacts": artifacts, "history": [],
     }
@@ -230,8 +231,20 @@ def update_project(path: Path, **changes: Any) -> dict[str, Any]:
         spectrum = str(rendering.get("spectrum", "visible")) or "visible"
         if spectrum not in {"visible", "infrared"}:
             raise ValueError("unsupported project spectrum")
-        value["rendering"] = {"engine": engine, "demosaic": demosaic,
-                              "spectrum": spectrum}
+        # Which filter was on the front. It separates one infrared shoot
+        # from another -- 720nm still has colour to work with, 850nm has
+        # none -- so it is worth recording rather than inferring.
+        try:
+            cutoff = float(rendering.get("cutoff_nm") or 0)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("filter cut-off must be a number") from exc
+        if cutoff and not 300 <= cutoff <= 1400:
+            raise ValueError(
+                "a filter cut-off is stated in nanometres, between 300 "
+                "and 1400")
+        value["rendering"] = {
+            "engine": engine, "demosaic": demosaic, "spectrum": spectrum,
+            "cutoff_nm": cutoff if spectrum == "infrared" else 0.0}
     value["updated_at"] = _now()
     value.setdefault("history", []).append({"updated_at": value["updated_at"],
                                              "changes": sorted(changes)})

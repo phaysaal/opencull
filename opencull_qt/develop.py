@@ -30,6 +30,7 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QColor, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -77,6 +78,16 @@ TILES_SHOWN = 5
 # What the heading row carries where a treatment carries its id. No
 # treatment can be called this, so the two can never be confused.
 PRESETS_ROW = "\u00b7presets\u00b7"
+
+# The filters a photographer actually puts on the front of a lens. Naming
+# them beats a free number: these are the three that exist as products,
+# and each one means a different amount of colour survives.
+CUTOFFS = (
+    ("filter not stated", 0.0),
+    ("720nm", 720.0),
+    ("760nm", 760.0),
+    ("850nm", 850.0),
+)
 
 # Small enough that five of them for one frame is a wait somebody will
 # sit through, large enough to tell two treatments apart. Cached on disk
@@ -979,7 +990,34 @@ class DevelopPage(QWidget):
             "that guess into every treatment."))
         self.infrared.setChecked(self.workspace.infrared())
         self.infrared.toggled.connect(self._chose_spectrum)
-        layout.addWidget(self.infrared)
+
+        spectrum_row = QHBoxLayout()
+        spectrum_row.setSpacing(8)
+        spectrum_row.addWidget(self.infrared)
+        # Which filter, in nanometres. It is the difference between a
+        # shoot with colour left in it and one without, so it is worth
+        # asking rather than guessing -- and it is what the assessing
+        # model is told.
+        self.cutoff = QComboBox()
+        self.cutoff.setFont(theme.body(9))
+        self.cutoff.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.cutoff.setToolTip(tooltip(
+            "The filter's cut-off. At 720nm there is still colour to work "
+            "with; by 850nm the three channels record the same light and "
+            "the photograph is monochrome whatever anyone does to it."))
+        for label, value in CUTOFFS:
+            self.cutoff.addItem(label, value)
+        self.cutoff.setCurrentIndex(
+            max(0, [value for _label, value in CUTOFFS].index(
+                self.workspace.cutoff_nm())
+                if self.workspace.cutoff_nm() in
+                [value for _label, value in CUTOFFS] else 0))
+        self.cutoff.setVisible(self.workspace.infrared())
+        self.cutoff.currentIndexChanged.connect(
+            lambda _index: self._chose_cutoff())
+        spectrum_row.addWidget(self.cutoff)
+        spectrum_row.addStretch(1)
+        layout.addLayout(spectrum_row)
 
         self.sweep_note = QLabel("")
         self.sweep_note.setObjectName("hint")
@@ -1322,6 +1360,17 @@ class DevelopPage(QWidget):
             {photo: (self.engine_for(photo), self._demosaic())})
         self.thumbs.prefer(photo)
 
+    def _chose_cutoff(self) -> None:
+        """Record which filter, without redeveloping anything.
+
+        The cut-off changes what the assessing model is told and which
+        preset suits the shoot. It does not change the decode, so the
+        proofs already made are still proofs of this photograph.
+        """
+        if not self.workspace.infrared():
+            return
+        self.workspace.set_spectrum("infrared", self.cutoff.currentData())
+
     def _chose_spectrum(self, infrared: bool) -> None:
         """Redevelop the album from the other base.
 
@@ -1330,8 +1379,11 @@ class DevelopPage(QWidget):
         ones. They stay on disk under their own identity; going back
         finds them again without rendering anything.
         """
+        self.cutoff.setVisible(infrared)
         try:
-            self.workspace.set_spectrum("infrared" if infrared else "visible")
+            self.workspace.set_spectrum(
+                "infrared" if infrared else "visible",
+                self.cutoff.currentData() if infrared else 0)
         except Exception as exc:                     # noqa: BLE001 - reported
             self._report(str(exc), "alarm")
             return

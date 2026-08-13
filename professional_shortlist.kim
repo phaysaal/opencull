@@ -12,6 +12,11 @@ param output: text = "opencull-professional-shortlist.json"
 param policy: text = "effective"
 param profile: text = "family"
 param minimum_dimension: num = 640
+-- What the camera was looking at. An infrared album is shown to the
+-- assessor neutralised, and told that it is infrared, because otherwise
+-- it reports the filter as three separate faults.
+param spectrum: text = "visible"
+param cutoff_nm: num = 0
 param resume: bool = true
 param checkpoint: text = ""
 
@@ -49,7 +54,7 @@ schema ProfessionalCalibration:
     rationale: text
     confidence: num
 
-bundle := build_professional_candidates(report, photos, review, policy, minimum_dimension)
+bundle := build_professional_candidates(report, photos, review, policy, minimum_dimension, spectrum, cutoff_nm)
 candidates := parse_professional_candidates(bundle)
 checkpoint_file := professional_checkpoint_path(output, checkpoint, profile)
 checkpoint_state := load_professional_checkpoint(checkpoint_file, bundle, candidates, profile, resume)
