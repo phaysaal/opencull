@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QPlainTextEdit,
     QPushButton,
     QStackedWidget,
     QVBoxLayout,
@@ -157,6 +158,7 @@ class Invitation(QWidget):
     def __init__(self, title: str, body: str, action: str, on_action,
                  note: str = "", shows: QWidget | None = None,
                  instead: tuple[str, object] | None = None,
+                 asks: tuple[str, str] | None = None,
                  parent: QWidget | None = None):
         super().__init__(parent)
         self.setObjectName("page")
@@ -208,6 +210,30 @@ class Invitation(QWidget):
             caution.setMaximumWidth(900)
             layout.addWidget(caution)
 
+        # Somewhere to say what a model cannot work out by looking. An
+        # assessment of a partial eclipse called the crescent a moon and
+        # the light nocturnal, and judged the photographs it thought it
+        # was looking at -- carefully, and about the wrong subject.
+        self.asks = None
+        if asks is not None:
+            placeholder, said = asks
+            prompt = QLabel("What is this shoot?")
+            prompt.setObjectName("eyebrow")
+            prompt.setFont(theme.display(8))
+            layout.addSpacing(4)
+            layout.addWidget(prompt)
+            self.asks = QPlainTextEdit(said)
+            self.asks.setObjectName("about")
+            self.asks.setFont(theme.body(10))
+            self.asks.setPlaceholderText(placeholder)
+            self.asks.setFixedHeight(62)
+            self.asks.setToolTip(tooltip(
+                "One or two sentences about the subject and the occasion. "
+                "It is given to the models that read these frames, which "
+                "can describe what is in front of them and cannot know "
+                "what it was."))
+            layout.addWidget(self.asks)
+
         layout.addSpacing(6)
         actions = QHBoxLayout()
         self.button = QPushButton(action)
@@ -236,6 +262,12 @@ class Invitation(QWidget):
 
         actions.addStretch(1)
         layout.addLayout(actions)
+
+    def said(self) -> str:
+        """What the photographer wrote about the shoot, if they were asked."""
+        if self.asks is None:
+            return ""
+        return " ".join(self.asks.toPlainText().split())
 
 
 class ProjectShell(QWidget):

@@ -134,6 +134,7 @@ def create_project(path: Path, name: str, source_folder: Path) -> dict[str, Any]
         "source_folder": str(source),
         "managed_directory": str(project_directory(source)),
         "active_style_profile": None,
+        "about": "",
         "rendering": {
             "engine": "darktable",
             "demosaic": "markesteijn-3-pass",
@@ -204,6 +205,12 @@ def load_or_create_folder_project(
 
 def update_project(path: Path, **changes: Any) -> dict[str, Any]:
     value = load_project(path)
+    if "about" in changes and changes["about"] is not None:
+        # What the photographer says this shoot is. Models cannot infer a
+        # subject they have never been told about: a solar eclipse read
+        # as a crescent moon is not a failure of looking, it is a
+        # question nobody answered.
+        value["about"] = " ".join(str(changes["about"]).split())[:600]
     for key in ("name", "source_folder", "active_style_profile", "stage",
                 "last_phase"):
         if key in changes and changes[key] is not None:

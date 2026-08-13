@@ -15,6 +15,7 @@ param only_photos: text = "[]"
 -- from a frame whose colour the filter removed.
 param spectrum: text = "visible"
 param cutoff_nm: num = 0
+param about: text = ""
 
 use "agents.kim"
 use python "edit_suggestion_kernel.py"
@@ -47,7 +48,7 @@ schema EditDirections:
     guardrails: text
     confidence: num
 
-request := build_edit_request(shortlist, review, photos, style_profile, only_photo, only_photos, style_profiles, spectrum, cutoff_nm)
+request := build_edit_request(shortlist, review, photos, style_profile, only_photo, only_photos, style_profiles, spectrum, cutoff_nm, about)
 candidates := parse_edit_candidates(request)
 checkpoint_file := edit_checkpoint_path(output, checkpoint)
 entries := load_edit_checkpoint(checkpoint_file, request, resume)

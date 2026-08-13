@@ -17,6 +17,9 @@ param minimum_dimension: num = 640
 -- it reports the filter as three separate faults.
 param spectrum: text = "visible"
 param cutoff_nm: num = 0
+-- One sentence from the photographer about what the shoot is. A model
+-- can see a crescent and cannot know it is an eclipse.
+param about: text = ""
 param resume: bool = true
 param checkpoint: text = ""
 
@@ -54,7 +57,7 @@ schema ProfessionalCalibration:
     rationale: text
     confidence: num
 
-bundle := build_professional_candidates(report, photos, review, policy, minimum_dimension, spectrum, cutoff_nm)
+bundle := build_professional_candidates(report, photos, review, policy, minimum_dimension, spectrum, cutoff_nm, about)
 candidates := parse_professional_candidates(bundle)
 checkpoint_file := professional_checkpoint_path(output, checkpoint, profile)
 checkpoint_state := load_professional_checkpoint(checkpoint_file, bundle, candidates, profile, resume)

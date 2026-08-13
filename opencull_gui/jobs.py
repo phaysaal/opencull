@@ -452,6 +452,7 @@ class JobManager:
                 f"only_photos={json.dumps(job.get('only_photos', []))}",
                 f"spectrum={job.get('spectrum', 'visible')}",
                 f"cutoff_nm={job.get('cutoff_nm', 0)}",
+                f"about={job.get('about', '')}",
                 "resume=true",
             ]
         if job.get("kind") == "professional_shortlist":
@@ -467,6 +468,7 @@ class JobManager:
                 f"profile={job['profile']}",
                 f"spectrum={job.get('spectrum', 'visible')}",
                 f"cutoff_nm={job.get('cutoff_nm', 0)}",
+                f"about={job.get('about', '')}",
                 "resume=true",
             ]
         return [
@@ -753,6 +755,7 @@ class JobManager:
                     or "visible"),
                 "cutoff_nm": float(
                     (project.get("rendering") or {}).get("cutoff_nm") or 0),
+                "about": str(project.get("about") or ""),
                 "status": "queued",
                 "message": "Waiting for the professional-shortlist worker.",
                 "pid": None,
@@ -1024,6 +1027,7 @@ class JobManager:
                     or "visible"),
                 "cutoff_nm": float(
                     (project.get("rendering") or {}).get("cutoff_nm") or 0),
+                "about": str(project.get("about") or ""),
                 "status": "queued",
                 "message": "Waiting for the edit-direction worker.",
                 "pid": None, "created_at": _now(), "started_at": None,

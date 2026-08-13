@@ -1661,7 +1661,8 @@ class Launcher(QMainWindow):
                 "frame to leave it out.",
                 f"Assess these {count}" if culled else
                 f"Assess all {count} frames",
-                lambda: self.assess_project(bench.project, sheet.chosen()),
+                lambda: self.assess_project(
+                    bench.project, sheet.chosen(), invitation.said()),
                 ((" ".join(
                     f"A previous run under the {item['bar'].split('(')[0].strip()}"
                     f" rated {item['rated']} of these frames; that work is "
@@ -1677,7 +1678,10 @@ class Launcher(QMainWindow):
                 "the choice can be reversed.",
                 shows=sheet,
                 instead=("Rate them myself",
-                         lambda: self.rate_by_hand(bench, sheet.chosen())))
+                         lambda: self.rate_by_hand(bench, sheet.chosen())),
+                asks=("A partial solar eclipse through a 760nm infrared "
+                      "filter; the crescent is the sun, not the moon.",
+                      str(bench.project.get("about") or "")))
             self._wire_selection(
                 invitation, sheet,
                 lambda chosen: (
@@ -1833,7 +1837,8 @@ class Launcher(QMainWindow):
         self.refresh()
 
     def assess_project(self, project: dict,
-                       chosen: list[str] | None = None) -> None:
+                       chosen: list[str] | None = None,
+                       about: str | None = None) -> None:
         """Queue the assessment of what stayed ticked.
 
         The prefilter is written only after the criteria dialog accepts, so
@@ -1898,6 +1903,17 @@ class Launcher(QMainWindow):
                 return
         photos = str(project.get("photos", ""))
         review = default_review_path(report_path)
+        if about is not None:
+            # Written to the project before the run reads it, so the
+            # editing suggestions later get the same sentence without
+            # anybody typing it twice.
+            try:
+                update_project(
+                    Path(str(project.get("project", ""))), about=about)
+                project = dict(project, about=about)
+            except Exception as exc:                 # noqa: BLE001 - reported
+                self._say(f"That note could not be saved: {exc}", "alarm")
+                return
         try:
             self.services.jobs.add_professional(
                 str(report_path), photos,

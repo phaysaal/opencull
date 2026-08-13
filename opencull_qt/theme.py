@@ -174,11 +174,13 @@ QFrame#notice[tone="alarm"] {{
     background: rgba(232, 115, 90, 20); border-color: #6B3025;
 }}
 
-QLineEdit, QComboBox, QSpinBox {{
+QLineEdit, QComboBox, QSpinBox, QPlainTextEdit {{
     background: {INK}; color: {PAPER};
     border: 1px solid {EDGE}; border-radius: 8px; padding: 8px 10px;
 }}
-QLineEdit:focus, QComboBox:focus, QSpinBox:focus {{ border-color: {SAFELIGHT}; }}
+QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QPlainTextEdit:focus {{
+    border-color: {SAFELIGHT};
+}}
 QLineEdit[stored="true"] {{ border-color: #2E5C45; color: {FIXED}; }}
 QComboBox QAbstractItemView {{
     background: {SURFACE}; border: 1px solid {EDGE};

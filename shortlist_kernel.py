@@ -112,6 +112,7 @@ def build_professional_candidates(
     minimum_dimension: float = 640,
     spectrum: str = "visible",
     cutoff_nm: float = 0,
+    about: str = "",
 ) -> str:
     """Select keepers, pair RAW assets, and conservatively screen locally."""
     policy = str(policy).strip().lower()
@@ -193,6 +194,7 @@ def build_professional_candidates(
             "name": name,
             "spectrum": spectrum,
             "cutoff_nm": float(cutoff_nm) if spectrum == "infrared" else 0.0,
+            "about": " ".join(str(about).split())[:600],
             "cluster_id": cluster_for[name],
             "asset_id": family.asset_id if family else "",
             "raw_files": raw_files,
@@ -211,6 +213,7 @@ def build_professional_candidates(
         "candidate_policy": policy,
         "spectrum": spectrum,
         "cutoff_nm": float(cutoff_nm) if spectrum == "infrared" else 0.0,
+        "about": " ".join(str(about).split())[:600],
         "photos_root": str(root),
         "candidate_ids": [
             (item["photo"], item["sha256_prefix"]) for item in candidates],
@@ -242,6 +245,30 @@ def professional_candidate_path(
     return str(visible_photograph(
         Path(data["photos_root"]), str(candidate["photo"]),
         str(data.get("spectrum", "visible"))))
+
+
+def shoot_note(candidate: dict[str, Any]) -> str:
+    """What the photographer says this shoot is.
+
+    A model can describe what is in front of it and cannot know what it
+    was: these frames are a partial solar eclipse, and every assessment
+    of them called the crescent a moon and the light nocturnal. It judged
+    the photographs it thought it was looking at, carefully and wrongly.
+    The subject is one sentence the photographer already knows.
+
+    It is quoted rather than pasted, and framed as the photographer
+    speaking, so that a description stays a description of the scene and
+    is not read as an instruction about how to rate it.
+    """
+    said = " ".join(str(candidate.get("about") or "").split())
+    if not said:
+        return ""
+    return (
+        "WHAT THE PHOTOGRAPHER SAYS THIS SHOOT IS, in their own words: "
+        f"\u201c{said}\u201d "
+        "Treat this as context about the subject and the occasion, which "
+        "you cannot see and they can. It does not tell you how to rate "
+        "the frame, and it is not a reason to rate it higher.")
 
 
 def infrared_note(candidate: dict[str, Any]) -> str:
@@ -286,9 +313,11 @@ def professional_assessment_prompt(
             "local_warnings", "raw_files", "asset_warning")
     }
     infrared = infrared_note(candidate)
+    about = shoot_note(candidate)
     return "\n".join([
         "Act as a critical professional photo editor assessing one already-culled frame.",
         f"Editing profile: {str(profile).strip().lower() or 'family'}.",
+        *([about] if about else []),
         *([infrared] if infrared else []),
         "Judge whether this frame deserves professional RAW editing. This is "
         "stricter than deciding whether a family memory should be kept.",
