@@ -240,6 +240,21 @@ def _compile_step(
             return None
 
     if section == "color_editor":
+        # A grey mix: how much each channel contributes to brightness,
+        # which is what darktable's colour calibration calls the gray tab.
+        # For infrared this is the whole conversion -- the channels differ
+        # by sensor response rather than by colour, so which of them
+        # carries the picture is a decision, not a default.
+        if re.search(r"(?i)\b(?:monochrome|grey|gray)\s+mix\b", text):
+            weights = [
+                _amount_for(text, token) for token in ("red", "green", "blue")]
+            if all(value is not None for value in weights):
+                total = sum(abs(float(value)) for value in weights) or 1.0
+                row = [float(value) / total for value in weights]
+                _operation(
+                    operations, "color.channel_mixer", [row, row, row],
+                    "matrix", "absolute", text, section)
+                return None
         if re.search(r"(?i)\bswap\b", text):
             for pattern, name in _SWAP_WORDS:
                 if re.search(rf"(?i){pattern}", text):

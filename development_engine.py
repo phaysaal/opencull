@@ -582,6 +582,16 @@ def _spatial_mask(rgb: np.ndarray, shape: str, value: dict[str, Any]) -> np.ndar
         return np.clip(1 - distance, 0, 1)
     if shape == "luma":
         lum = (rgb * np.array([0.2126, 0.7152, 0.0722])).sum(axis=2)
+        if "midtone" in anchor or "mid tone" in anchor or "middle" in anchor:
+            # A band that peaks where the eye reads middle grey and falls
+            # away at both ends -- one tone equalizer band, which is what
+            # a photograph asks for when the clouds need lifting and
+            # neither the silhouette below them nor the sun above them
+            # does. Measured perceptually rather than in linear light,
+            # because "the midtones" is a statement about how a scene
+            # looks and mid grey sits at 0.18 of the light.
+            shown = np.power(np.clip(lum, 0.0, 1.0), 1.0 / _ENCODE_GAMMA)
+            return np.clip(1.0 - np.abs(shown - 0.5) * 2.5, 0.0, 1.0)
         return np.clip((1 - lum * 2) if "shadow" in anchor else lum * 2, 0, 1)
     return _hue_mask(rgb, anchor)
 

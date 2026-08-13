@@ -244,6 +244,81 @@ BUILT_IN: tuple[dict[str, Any], ...] = (
         },
     },
     {
+        "slug": "infrared-760-atmospheric",
+        "name": "Infrared · 760nm atmospheric",
+        "intent": "The considered version of a 760nm frame, for a scene "
+                  "with sky in it: converted to grey by choosing which "
+                  "channel carries the picture rather than by discarding "
+                  "colour, the midtones lifted so cloud structure reads, "
+                  "the brightest area held back so a clipped sun keeps a "
+                  "clean edge, and the skyline left as silhouette.",
+        "instructions": {
+            "white_balance_and_color": ["Neutralise"],
+            # Grey by channel weighting, not by desaturation. At 760nm the
+            # three channels differ by sensor response rather than by
+            # colour, so which of them carries the picture is a choice --
+            # red leads because it is the cleanest at this wavelength, and
+            # blue is kept low because it brings the grain and the flare.
+            "color_editor": ["Monochrome mix: red 50, green 40, blue 10"],
+            # Down, not up. Lifting an infrared frame to a comfortable
+            # brightness is what destroys it: at +0.35 EV with the clouds
+            # lifted this frame came back at 76 mean with 0.4% of it left
+            # dark, which is a milky grey sky and no skyline at all. The
+            # silhouette is the photograph.
+            "global_exposure": ["Exposure -0.20", "Contrast +18"],
+            # One tone equalizer band each: the clouds up, the halo around
+            # the sun down, and nothing asked of the silhouette.
+            "layers_and_masks": [
+                "Luma mask on the midtones: exposure +0.35",
+                "Luma mask on the highlights: exposure -0.60",
+                # A cool tone in the darks only, after the monochrome
+                # structure is settled rather than instead of it.
+                "Luma mask on the shadows: temperature -400 kelvin",
+            ],
+            "hdr_levels_curves": ["Blacks -30", "Shadows -18",
+                                  "Highlights -20"],
+            "detail_and_noise": [
+                "Clarity +8", "Structure +5",
+                "Luminance noise reduction 35", "Color noise reduction 60",
+            ],
+        },
+    },
+    {
+        "slug": "infrared-760-blue-violet",
+        "name": "Infrared · 760nm blue-violet",
+        "intent": "The false-colour reading of the same frame, kept "
+                  "deliberately restrained: the cast that a 760nm capture "
+                  "arrives with is retained rather than corrected, but "
+                  "pulled back by about a third, with the brightest cloud "
+                  "and the crescent brought towards neutral so the colour "
+                  "sits in the middle tones instead of the extremes.",
+        "instructions": {
+            # No neutralising here: the cast is the subject. What it gets
+            # instead is restraint -- the colour is arbitrary in origin,
+            # so a lot of it is merely loud.
+            # No lift: the skyline is as much the photograph here as it
+            # is in the monochrome, and +0.3 EV thinned it from a fifth of
+            # the frame to a tenth.
+            "global_exposure": ["Saturation -32", "Contrast +10"],
+            "layers_and_masks": [
+                "Luma mask on the midtones: exposure +0.45",
+                # Towards neutral where the frame is brightest: an
+                # electric-blue sun is the giveaway of a false-colour
+                # frame nobody controlled.
+                "Luma mask on the highlights: saturation -45",
+                # And out of the shadows, which is where saturated blue
+                # stops reading as night and starts reading as a fault.
+                "Luma mask on the shadows: saturation -25",
+            ],
+            "hdr_levels_curves": ["Blacks -20", "Shadows -10",
+                                  "Highlights -6"],
+            "detail_and_noise": [
+                "Clarity +6", "Luminance noise reduction 30",
+                "Color noise reduction 70",
+            ],
+        },
+    },
+    {
         "slug": "portrait-skin",
         "name": "Portrait skin",
         "intent": "Restraint where it matters: skin kept believable and a "

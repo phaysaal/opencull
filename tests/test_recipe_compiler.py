@@ -219,3 +219,35 @@ class InfraredGrammarTests(unittest.TestCase):
     def test_an_ordinary_colour_instruction_is_not_read_as_a_swap(self):
         recipe = self.compile({"color_editor": ["Blue saturation +10"]})
         self.assertEqual(recipe["operations"][0]["op"], "color.hsl_range")
+
+
+class GreyMixGrammarTests(unittest.TestCase):
+    """Writing a channel mix in the same words the presets are written in."""
+
+    def compile(self, sections):
+        return compile_recipe("A.ARW", PRESET_STYLE, "IR", "for infrared",
+                              sections, "", "raw")
+
+    def test_a_monochrome_mix_normalises_to_one(self):
+        recipe = self.compile(
+            {"color_editor": ["Monochrome mix: red 50, green 40, blue 10"]})
+        matrix = recipe["operations"][0]["value"]
+        self.assertEqual(recipe["operations"][0]["op"], "color.channel_mixer")
+        self.assertEqual(matrix[0], [0.5, 0.4, 0.1])
+        self.assertEqual(matrix[0], matrix[1])
+        self.assertEqual(matrix[1], matrix[2])
+
+    def test_weights_that_do_not_add_to_a_hundred_still_normalise(self):
+        recipe = self.compile(
+            {"color_editor": ["Grey mix red 2, green 1, blue 1"]})
+        self.assertEqual(recipe["operations"][0]["value"][0], [0.5, 0.25, 0.25])
+
+    def test_it_does_not_swallow_an_ordinary_colour_instruction(self):
+        recipe = self.compile({"color_editor": ["Red saturation +10"]})
+        self.assertEqual(recipe["operations"][0]["op"], "color.hsl_range")
+
+    def test_a_mix_missing_a_channel_is_not_guessed_at(self):
+        recipe = self.compile({"color_editor": ["Monochrome mix: red 60"]})
+        self.assertNotEqual(
+            [item["op"] for item in recipe["operations"]],
+            ["color.channel_mixer"])

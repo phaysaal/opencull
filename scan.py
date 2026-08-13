@@ -316,6 +316,21 @@ def sips_preview(path: Path) -> Image.Image:
             return image.convert("RGB").copy()
 
 
+# Pillow registers its format plugins lazily, on the first open, by
+# importing them. Every decode in this application happens on a worker
+# thread, and PySide replaces the interpreter's import hook with its own
+# -- so two threads opening their first JPEG at the same moment import
+# through that hook concurrently, and a garbage collection landing in
+# between segfaults the process. Seen twice in a row under load, in two
+# preview threads, one of them collecting inside shibokensupport while
+# the other was in PIL's ImageFile.
+#
+# Twenty milliseconds here, once, on whichever thread imports this
+# module first -- which is the main one -- and no thread has a lazy
+# import left to race over.
+Image.init()
+
+
 def open_preview(path: Path) -> Image.Image:
     if path.suffix.lower() in RAW_EXTENSIONS:
         return raw_preview(path)

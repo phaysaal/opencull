@@ -189,6 +189,68 @@ class InfraredOperationTests(unittest.TestCase):
         self.assertLess(float(means.max() - means.min()), 1.5)
 
 
+class MidtoneBandTests(unittest.TestCase):
+    """One tone equalizer band: the clouds without the sky or the sun."""
+
+    def band(self, luminance: float) -> float:
+        from development_engine import _spatial_mask
+
+        frame = np.full((2, 2, 3), luminance, dtype=np.float32)
+        return float(_spatial_mask(
+            frame, "luma", {"anchor": "luma mask on the midtones"}).mean())
+
+    def test_it_peaks_in_the_middle_and_falls_away_at_both_ends(self):
+        middle = self.band(0.5 ** 2.2)
+        self.assertAlmostEqual(middle, 1.0, places=2)
+        self.assertLess(self.band(0.001), middle)
+        self.assertLess(self.band(0.99), middle)
+
+    def test_it_leaves_a_silhouette_and_a_blown_sun_alone(self):
+        """The two things this band exists not to touch."""
+        self.assertAlmostEqual(self.band(0.0), 0.0, places=3)
+        self.assertAlmostEqual(self.band(1.0), 0.0, places=3)
+
+    def test_shadows_and_highlights_are_unchanged_by_its_arrival(self):
+        from development_engine import _spatial_mask
+
+        dark = np.full((2, 2, 3), 0.05, dtype=np.float32)
+        self.assertGreater(
+            float(_spatial_mask(dark, "luma", {"anchor": "shadows"}).mean()),
+            0.8)
+        bright = np.full((2, 2, 3), 0.9, dtype=np.float32)
+        self.assertGreater(
+            float(_spatial_mask(bright, "luma", {"anchor": "highlights"}).mean()),
+            0.8)
+
+
+class GreyMixTests(unittest.TestCase):
+    """Monochrome by choosing which channel carries the picture."""
+
+    def test_a_grey_mix_leaves_no_colour_and_weights_the_channels(self):
+        frame = np.zeros((2, 2, 3), dtype=np.float32)
+        frame[..., 0], frame[..., 1], frame[..., 2] = 0.8, 0.4, 0.1
+        row = [0.5, 0.4, 0.1]
+        out = _apply_global(frame, [{
+            "op": "color.channel_mixer", "value": [row, row, row],
+            "unit": "matrix", "mode": "absolute"}])
+        expected = 0.8 * 0.5 + 0.4 * 0.4 + 0.1 * 0.1
+        self.assertAlmostEqual(float(out[..., 0].mean()), expected, places=5)
+        self.assertAlmostEqual(float(out[..., 0].mean()),
+                               float(out[..., 2].mean()), places=6)
+
+    def test_a_different_weighting_gives_a_different_grey(self):
+        """Which channel leads is the decision infrared work turns on."""
+        frame = np.zeros((2, 2, 3), dtype=np.float32)
+        frame[..., 0], frame[..., 1], frame[..., 2] = 0.8, 0.4, 0.1
+        greys = []
+        for row in ([1.0, 0.0, 0.0], [0.0, 0.0, 1.0]):
+            out = _apply_global(frame, [{
+                "op": "color.channel_mixer", "value": [row, row, row],
+                "unit": "matrix", "mode": "absolute"}])
+            greys.append(round(float(out[..., 0].mean()), 4))
+        self.assertEqual(greys, [0.8, 0.1])
+
+
 class DevelopmentEngineTests(unittest.TestCase):
     def recipe(self, diagnostics=None):
         return {
