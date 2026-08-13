@@ -269,13 +269,16 @@ BUILT_IN: tuple[dict[str, Any], ...] = (
             # One tone equalizer band each: the clouds up, the halo around
             # the sun down, and nothing asked of the silhouette.
             "layers_and_masks": [
-                "Luma mask on the midtones: exposure +0.35",
+                # A restrained lift. At +0.35 the sky came back closer to
+                # grey than to charcoal and held only 61% of the frame
+                # dark, against 90% in the camera's own rendering.
+                "Luma mask on the midtones: exposure +0.20",
                 "Luma mask on the highlights: exposure -0.60",
                 # A cool tone in the darks only, after the monochrome
                 # structure is settled rather than instead of it.
                 "Luma mask on the shadows: temperature -400 kelvin",
             ],
-            "hdr_levels_curves": ["Blacks -30", "Shadows -18",
+            "hdr_levels_curves": ["Blacks -40", "Shadows -24",
                                   "Highlights -20"],
             "detail_and_noise": [
                 "Clarity +8", "Structure +5",
