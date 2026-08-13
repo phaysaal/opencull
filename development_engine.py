@@ -23,7 +23,7 @@ ENGINE_FORMAT = "opencull-development-render-v1"
 # changes when the engine's own arithmetic does -- so without this, an
 # improvement to the renderer is invisible on every frame already looked
 # at, which is exactly the frames somebody is judging it by.
-RECIPE_ENGINE_REVISION = 6
+RECIPE_ENGINE_REVISION = 7
 
 
 class DevelopmentError(ValueError):
@@ -223,6 +223,14 @@ _DISPLAY_OPS = frozenset({
 # program's sharpening amount runs to several hundred; taken literally as
 # a multiplier that would tear the frame apart, so it is read as a
 # proportion of a restrained unsharp mask.
+# Detail radii are written for a proof-sized frame and scaled to whatever
+# is actually being rendered. A radius fixed in pixels is a different
+# adjustment at every size: one pixel of unsharp mask covers nearly three
+# times less of a full-size frame than of the proof it was approved on,
+# so the delivery came back softer than the picture the photographer
+# said yes to -- measured at 123.6 units of edge energy in the proof
+# against 105.6 in the render.
+DETAIL_REFERENCE_EDGE = 1600
 SHARPEN_RADIUS = 1.0
 SHARPEN_STRENGTH = 0.35
 DENOISE_RADIUS = 1.4
@@ -292,6 +300,7 @@ def _apply_global(rgb: np.ndarray, operations: list[dict[str, Any]],
     anything until the whole thing is finished.
     """
     result = np.array(rgb, dtype=np.float32, copy=True)
+    detail_scale = max(max(result.shape[:2]) / DETAIL_REFERENCE_EDGE, 0.25)
     total = len(operations)
     for done, item in enumerate(operations, start=1):
         op = item.get("op")
@@ -401,11 +410,11 @@ def _apply_global(rgb: np.ndarray, operations: list[dict[str, Any]],
             # An unsharp mask on brightness only: sharpening colour is how
             # edges pick up fringes that were never in the photograph.
             lum = (result * _LUMA).sum(axis=2, keepdims=True)
-            detail = lum - _blur(lum, SHARPEN_RADIUS)
+            detail = lum - _blur(lum, SHARPEN_RADIUS * detail_scale)
             result = result + detail * (value / 100.0) * SHARPEN_STRENGTH
         elif op == "detail.denoise_luminance":
             lum = (result * _LUMA).sum(axis=2, keepdims=True)
-            softened = _blur(lum, DENOISE_RADIUS)
+            softened = _blur(lum, DENOISE_RADIUS * detail_scale)
             weight = min(max(value / 100.0, 0.0), 1.0) * DENOISE_STRENGTH
             result = result + (softened - lum) * weight
         elif op == "detail.denoise_color":
@@ -414,7 +423,8 @@ def _apply_global(rgb: np.ndarray, operations: list[dict[str, Any]],
             lum = (result * _LUMA).sum(axis=2, keepdims=True)
             chroma = result - lum
             weight = min(max(value / 100.0, 0.0), 1.0) * DENOISE_COLOR_STRENGTH
-            result = lum + chroma + (_blur(chroma, DENOISE_RADIUS) - chroma) * weight
+            result = lum + chroma + (
+                _blur(chroma, DENOISE_RADIUS * detail_scale) - chroma) * weight
         elif op == "levels.midpoint":
             # The levels midpoint is a gamma about the middle of the scale.
             if value > 0:

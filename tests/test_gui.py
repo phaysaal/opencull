@@ -2410,7 +2410,7 @@ class GuiJobTests(unittest.TestCase):
             workspace = development_workspace(photos)
             self.assertEqual(
                 [item["id"] for item in workspace.treatments("A.JPG")],
-                ["calibrated"])
+                ["calibrated", "as-shot"])
 
     def test_the_baseline_renders_without_any_edit_direction(self):
         with tempfile.TemporaryDirectory() as temporary:

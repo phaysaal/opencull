@@ -142,14 +142,14 @@ class SuggestedTreatmentTests(unittest.TestCase):
     def test_without_an_assessment_only_the_baseline_is_offered(self):
         self.assertEqual(
             [item["id"] for item in self.workspace().treatments("A.JPG")],
-            ["calibrated"])
+            ["calibrated", "as-shot"])
 
     def test_suggested_treatments_reach_the_develop_page(self):
         assess_and_suggest(self.root, self.report_path, self.photos_path)
         offered = self.workspace().treatments("A.JPG")
         self.assertEqual(
             [item["id"] for item in offered],
-            ["calibrated", "standard", "signature"])
+            ["calibrated", "standard", "signature", "as-shot"])
         self.assertEqual(offered[1]["name"], "Standard treatment")
         self.assertEqual(offered[1]["intent"], "what standard is for")
 
@@ -158,7 +158,7 @@ class SuggestedTreatmentTests(unittest.TestCase):
             self.root, self.report_path, self.photos_path, marked=("A.JPG",))
         self.assertEqual(
             [item["id"] for item in self.workspace().treatments("B.JPG")],
-            ["calibrated"])
+            ["calibrated", "as-shot"])
 
     def test_a_shortlist_from_a_different_cull_is_treated_as_absent(self):
         assess_and_suggest(self.root, self.report_path, self.photos_path)
@@ -174,7 +174,7 @@ class SuggestedTreatmentTests(unittest.TestCase):
         # The develop page still opens; it simply has no suggestions.
         self.assertEqual(
             [item["id"] for item in self.workspace().treatments("A.JPG")],
-            ["calibrated"])
+            ["calibrated", "as-shot"])
 
     def test_a_suggested_treatment_renders(self):
         assess_and_suggest(self.root, self.report_path, self.photos_path)
@@ -629,12 +629,37 @@ class DevelopPageTests(unittest.TestCase):
         page.exporter._settle()
         self.assertEqual(page.exporter.asked, 0, "the batch should reset")
 
+    def test_the_camera_s_own_frame_can_be_delivered_unchanged(self):
+        """"As shot" has to be the camera's picture, not a thumbnail of it."""
+        page = self.page()
+        offered = [item["id"] for item in page.available]
+        self.assertIn("as-shot", offered)
+        self.assertEqual(offered[-1], "as-shot",
+                         "the reference belongs at the foot of the list")
+
+        # It renders as a proof like anything else, so the page can show it.
+        proof = page.workspace.recipe_preview(
+            NAMES[0], "as-shot", "default", "markesteijn-3-pass", 200)
+        self.assertTrue(Path(proof).is_file())
+
+    def test_a_delivered_as_shot_frame_claims_no_operation(self):
+        page = self.page()
+        result = page.workspace.render_full(
+            NAMES[0], "as-shot", "default", "markesteijn-3-pass")
+        render = result["render"]
+        self.assertEqual(render["variant"], "as-shot")
+        self.assertEqual(render["adjustments"], [])
+        self.assertEqual(render["recipe_revision"], 0)
+        self.assertIn("No", render["notice"])
+        # And it is registered, so what leaves can always be traced.
+        self.assertTrue(render["sha256"])
+
     def test_a_culled_folder_offers_the_baseline_without_any_suggestion(self):
         # No shortlist, no edit directions, no provider call: the ordinary
         # state of a folder that has just been culled.
         page = self.page()
         self.assertEqual(
-            [item["id"] for item in page.available], ["calibrated"])
+            [item["id"] for item in page.available], ["calibrated", "as-shot"])
         self.assertTrue(page.develop_button.isEnabled())
 
     def test_nothing_is_rendered_until_it_is_asked_for(self):

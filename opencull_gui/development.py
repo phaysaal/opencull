@@ -38,7 +38,7 @@ from development_engine import (
 )
 from raw_developer import render_baseline
 from recipe_compiler import compile_recipe
-from scan import RAW_EXTENSIONS, open_preview
+from scan import RAW_EXTENSIONS, open_preview, visible_photograph
 
 from . import dialogs
 from .adjustments import apply as apply_adjustments
@@ -294,6 +294,12 @@ class DevelopmentWorkspace:
                 "name": str(item.get("name") or "Imported recipe"),
                 "intent": f"Imported from {Path(str(item.get('source_path', ''))).name}",
                 "kind": "imported"})
+        available.append({
+            "id": "as-shot", "name": "As shot",
+            "intent": "The camera's own rendering of this frame, delivered "
+                      "exactly as the camera wrote it. Nothing decoded, "
+                      "nothing matched, no operation applied.",
+            "kind": "builtin"})
         return available
 
     # --- what was asked for, and whether it was done --------------------
@@ -550,6 +556,10 @@ class DevelopmentWorkspace:
         """
         if demosaic not in set(DEMOSAIC_MODES):
             raise ValueError("unsupported development preview demosaic mode")
+        if style == "as-shot":
+            # There is nothing to render: the camera made this picture.
+            # A proof of it is the same picture, smaller.
+            return self._as_shot_preview(photo, maximum)
         prepared = self._prepare(photo, style, engine)
         recipe = prepared["recipe"]
         source = prepared["source"]
@@ -755,6 +765,12 @@ class DevelopmentWorkspace:
         reference = (Path(str(workspace["source_folder"])) / photo).resolve()
         if not reference.is_file():
             raise ValueError("reference photograph is unavailable")
+        if style == "as-shot":
+            # Not a render: the camera already made this picture. It is
+            # copied out and registered like any other so a delivery can
+            # always be traced, but nothing is decoded or interpreted and
+            # no recipe is claimed for it.
+            return self._register_as_shot(photo, reference, provenance)
         maximum = max(open_preview(reference).size)
         preview = self.recipe_preview(
             photo, style, engine, demosaic, maximum, adjustments, progress)
@@ -830,6 +846,100 @@ class DevelopmentWorkspace:
                 "hidden_render_revisions": len(render_history) - len(renders),
                 "default_export_directory": str(self.project_layout["Exports"]),
                 "project_sha256": project_sha256(self.project_path)}
+
+    def _register_as_shot(self, photo: str, reference: Path,
+                          provenance: str = "") -> dict:
+        """Keep the camera's own rendering, exactly as the camera wrote it.
+
+        Not a render: the camera made this picture and nothing here
+        interprets it. It is copied and registered like any other
+        delivery so that what leaves always has a recorded provenance,
+        and the record says plainly that no operation was applied.
+        """
+        original = (self.photos_root() / photo)
+        destination = self.project_layout["Developments"] / (
+            f"{Path(photo).stem}.as-shot.jpg")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if not destination.is_file():
+            written = self._camera_rendering(original, destination)
+            if not written:
+                # Nothing embedded to deliver, and the bounded preview is
+                # not "as shot" at any size worth handing over.
+                raise ValueError(
+                    f"{photo} carries no camera rendering to deliver")
+        digest = hashlib.sha256(destination.read_bytes()).hexdigest()
+        artifact = {
+            "variant": "as-shot",
+            "source_photo": photo,
+            "path": str(destination),
+            "provenance": provenance or str(original),
+            "recipe_revision": 0,
+            "adjustments": [],
+            "sha256": digest,
+            "created_at": datetime.now(UTC).isoformat(),
+            "notice": "The camera's own rendering, copied unchanged. No "
+                      "OpenCull operation was applied to it.",
+        }
+        renders = list(
+            self.project.get("artifacts", {}).get("renders", []) or [])
+        if not any(
+            isinstance(item, dict)
+            and item.get("source_photo") == photo
+            and item.get("variant") == "as-shot"
+            and item.get("sha256") == digest
+            for item in renders
+        ):
+            renders.append(artifact)
+        self.project = update_project(
+            self.project_path, stage="develop", artifacts={"renders": renders})
+        return {"render": artifact, "development": self.payload()}
+
+    def _as_shot_preview(self, photo: str, maximum: int) -> Path:
+        """The camera's own rendering, brought down to proof size."""
+        folder = self.project_layout["Previews"] / "DevelopRecipes"
+        folder.mkdir(parents=True, exist_ok=True)
+        destination = folder / f"{Path(photo).stem}.as-shot.{maximum}.jpg"
+        if destination.is_file():
+            return destination
+        with open_preview(self.photos_root() / photo) as frame:
+            small = ImageOps.exif_transpose(frame).convert("RGB")
+        small.thumbnail((maximum, maximum), Image.Resampling.LANCZOS)
+        staged = destination.with_name(
+            f".{destination.name}.{secrets.token_hex(4)}.tmp")
+        small.save(staged, "JPEG", quality=94)
+        os.replace(staged, destination)
+        return destination
+
+    @staticmethod
+    def _camera_rendering(original: Path, destination: Path) -> bool:
+        """The camera's own JPEG, at the size the camera wrote it.
+
+        A raw carries a full-resolution rendering for the camera's own
+        screen -- 4416 by 2944 on these files, where the preview this
+        application extracts for its thumbnails is bounded at 2048. What
+        is delivered as "as shot" has to be the former; the latter is a
+        thumbnail with ambitions.
+        """
+        if original.suffix.lower() not in RAW_EXTENSIONS:
+            shutil.copy2(original, destination)
+            return True
+        try:
+            import rawpy
+
+            with rawpy.imread(str(original)) as raw:
+                thumb = raw.extract_thumb()
+            if getattr(thumb, "format", None) is None:
+                return False
+            data = bytes(thumb.data)
+        except Exception:                            # noqa: BLE001 - reported
+            return False
+        if not data.startswith(b"\xff\xd8"):
+            return False
+        destination.write_bytes(data)
+        return True
+
+    def photos_root(self) -> Path:
+        return Path(str(self.payload().get("source_folder") or ""))
 
     def export_render(self, source: str, destination: str,
                       sequence: int | None = None) -> dict:
