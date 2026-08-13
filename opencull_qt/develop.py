@@ -71,10 +71,11 @@ PHOTO_ROW = 74
 TREATMENT_TILE = 84
 # The presets heading is a row of text, not a row with a picture in it.
 PRESETS_HEADING = 30
-# With the presets open the list is thirteen tiles long, which is taller
-# than the window it lives in -- and the panel below it holds the button
-# that develops the thing being chosen. Past this many it scrolls.
-TILES_SHOWN = 5
+# The fewest tiles the list is allowed to shrink to, whatever the window
+# is doing. Past whatever the panel can spare it scrolls, because the
+# button that develops the chosen treatment lives below it and must not
+# be pushed off the bottom.
+TILES_SHOWN_LEAST = 4
 # What the heading row carries where a treatment carries its id. No
 # treatment can be called this, so the two can never be confused.
 PRESETS_ROW = "\u00b7presets\u00b7"
@@ -919,7 +920,9 @@ class DevelopPage(QWidget):
         panel = QFrame()
         panel.setObjectName("panel")
         panel.setFixedWidth(344)
+        self.panel = panel
         layout = QVBoxLayout(panel)
+        self.panel_layout = layout
         layout.setContentsMargins(18, 18, 18, 18)
         layout.setSpacing(10)
 
@@ -1326,8 +1329,33 @@ class DevelopPage(QWidget):
                 for row in range(self.treatments.count())]
         # The list's own 4px padding top and bottom, and its 1px border.
         wanted = (sum(rows) or TREATMENT_TILE) + 10
-        self.treatments.setFixedHeight(
-            min(wanted, TILES_SHOWN * TREATMENT_TILE + PRESETS_HEADING + 10))
+        self.treatments.setFixedHeight(min(wanted, self._treatment_ceiling()))
+
+    def _treatment_ceiling(self) -> int:
+        """How tall the list may grow: whatever the panel can spare.
+
+        A fixed ceiling was the wrong shape. Five tiles is most of a
+        laptop panel and a third of a tall one, so the same list either
+        crowded the frame or scrolled with half the panel empty beneath
+        it. What it may have is what is left after everything else the
+        panel must show -- the intent, the notes, and the buttons, which
+        are not negotiable.
+        """
+        panel = getattr(self, "panel", None)
+        layout = getattr(self, "panel_layout", None)
+        floor = TILES_SHOWN_LEAST * TREATMENT_TILE + PRESETS_HEADING + 10
+        if panel is None or layout is None or panel.height() <= 0:
+            return floor
+        # The layout's own idea of what it needs, less what this list is
+        # currently taking, is what everything else needs.
+        others = layout.sizeHint().height() - self.treatments.height()
+        return max(floor, panel.height() - others)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        """A taller window is more room for treatments, not more empty panel."""
+        super().resizeEvent(event)
+        if self.treatments.count():
+            self._size_treatments()
 
     def _clicked_treatment(self, item: QListWidgetItem) -> None:
         """A click on a treatment asks to see it; a click on the heading folds."""

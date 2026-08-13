@@ -593,6 +593,45 @@ class DevelopPageTests(unittest.TestCase):
         page.toggle_presets()
         self.assertEqual(page.treatments.height(), shut)
 
+    def test_a_taller_window_shows_more_treatments(self):
+        """The panel's spare room belongs to the list, not to nothing.
+
+        A fixed ceiling of five tiles is most of a laptop panel and a
+        third of a tall one: the same list either crowded the frame or
+        scrolled with half the panel empty beneath it.
+        """
+        page = self.page()
+        page.show()
+        page.toggle_presets()
+        heights = []
+        for height in (700, 1000, 1400):
+            page.resize(1280, height)
+            self.application.processEvents()
+            heights.append(page.treatments.height())
+        self.assertEqual(heights, sorted(heights))
+        self.assertGreater(heights[-1], heights[0] + 200)
+
+    def test_it_never_grows_past_what_it_has_to_show(self):
+        """Room to spare is not a reason to draw an empty list."""
+        page = self.page()          # baseline and as-shot, presets folded
+        page.resize(1280, 1400)
+        page.show()
+        self.application.processEvents()
+        rows = sum(page.treatments.item(row).sizeHint().height()
+                   for row in range(page.treatments.count()))
+        self.assertLessEqual(page.treatments.height(), rows + 10)
+
+    def test_a_short_window_still_leaves_the_develop_button_reachable(self):
+        page = self.page()
+        page.resize(1280, 620)
+        page.show()
+        page.toggle_presets()
+        self.application.processEvents()
+        self.assertLess(page.treatments.height(), page.height())
+        self.assertGreater(
+            page.develop_button.visibleRegion().boundingRect().height(), 0,
+            "the develop button was pushed out of a short window")
+
     def test_opening_the_presets_does_not_push_the_page_off_the_window(self):
         """Thirteen tiles is taller than the window they are shown in.
 
