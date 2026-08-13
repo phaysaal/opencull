@@ -39,6 +39,76 @@ TERMINAL = {"completed", "failed", "cancelled"}
 PROFILES = {"family", "professional", "balanced"}
 
 
+def kimiya_arguments(job: dict[str, Any]) -> tuple[str, list[str]]:
+    """Which program a job runs, and what it is told.
+
+    Two callers build this command: the manager here, which runs the
+    interpreter directly, and the packaged desktop application, which
+    re-enters its own executable as a worker. They differ only in how
+    they start Python, so only that stays separate -- the arguments are
+    settled once. They had drifted, and the drift was silent: an album
+    marked infrared with a photographer's note about a solar eclipse
+    passed both to the job record and neither to the program, because
+    the desktop's copy of this list had never heard of them.
+    """
+    kind = job.get("kind")
+    if kind == "style_profile":
+        return "style_profile.kim", [
+            f"photos={job['photos']}", f"output={job['output']}",
+            f"existing={job.get('existing', '')}",
+            f"mode={job.get('mode', 'update')}",
+            f"limit={job.get('limit', 64)}",
+        ]
+    if kind == "semantic_verification":
+        return "semantic_verification.kim", [
+            f"original={job['original']}",
+            f"developed={job['developed']}",
+            f"thumbnail={job.get('thumbnail', '')}",
+            f"suggestion={job['suggestion']}",
+            f"consensus={'true' if job.get('consensus') else 'false'}",
+            f"output={job['output']}",
+        ]
+    if kind == "edit_suggestions":
+        return "edit_suggestions.kim", [
+            f"shortlist={job['shortlist']}",
+            f"review={job['review']}",
+            f"photos={job['photos']}",
+            f"output={job['output']}",
+            f"profile={job['profile']}",
+            f"style_profile={job.get('style_profile', '')}",
+            f"style_profiles={json.dumps(job.get('style_profiles', []))}",
+            f"only_photo={job.get('only_photo', '')}",
+            f"only_photos={json.dumps(job.get('only_photos', []))}",
+            f"spectrum={job.get('spectrum', 'visible')}",
+            f"cutoff_nm={job.get('cutoff_nm', 0)}",
+            f"about={job.get('about', '')}",
+            "resume=true",
+        ]
+    if kind == "professional_shortlist":
+        return "professional_shortlist.kim", [
+            f"report={job['report']}",
+            f"photos={job['photos']}",
+            f"review={job.get('review', '')}",
+            f"output={job['output']}",
+            f"policy={job['policy']}",
+            f"profile={job['profile']}",
+            f"spectrum={job.get('spectrum', 'visible')}",
+            f"cutoff_nm={job.get('cutoff_nm', 0)}",
+            f"about={job.get('about', '')}",
+            "resume=true",
+        ]
+    if kind not in {None, "culling"}:
+        raise ValueError(f"unsupported kimiya job kind: {kind}")
+    return "opencull.kim", [
+        f"photos={job['photos']}", f"output={job['output']}",
+        f"keep_per_group={job['keep_per_group']}",
+        f"recursive={'true' if job['recursive'] else 'false'}",
+        f"profile={job['profile']}",
+        f"only_photos={json.dumps(job.get('only_photos') or [])}",
+        "resume=true",
+    ]
+
+
 class JobError(ValueError):
     """A requested queue transition or path is invalid."""
 
@@ -428,69 +498,11 @@ class JobManager:
             if job.get("allow_incomplete"):
                 command.append("--allow-incomplete")
             return command
-        if job.get("kind") == "style_profile":
-            return [self.python, "-m", "kimiya", "run",
-                    job.get("program_path") or str(self.project_root / "style_profile.kim"),
-                    f"photos={job['photos']}", f"output={job['output']}",
-                    f"existing={job.get('existing', '')}", f"mode={job.get('mode', 'update')}",
-                    f"limit={job.get('limit', 64)}"]
-        if job.get("kind") == "semantic_verification":
-            return [
-                self.python, "-m", "kimiya", "run",
-                job.get("program_path") or str(
-                    self.project_root / "semantic_verification.kim"),
-                f"original={job['original']}",
-                f"developed={job['developed']}",
-                f"thumbnail={job.get('thumbnail', '')}",
-                f"suggestion={job['suggestion']}",
-                f"consensus={'true' if job.get('consensus') else 'false'}",
-                f"output={job['output']}",
-            ]
-        if job.get("kind") == "edit_suggestions":
-            return [
-                self.python, "-m", "kimiya", "run",
-                job.get("program_path") or str(
-                    self.project_root / "edit_suggestions.kim"),
-                f"shortlist={job['shortlist']}",
-                f"review={job['review']}",
-                f"photos={job['photos']}",
-                f"output={job['output']}",
-                f"profile={job['profile']}",
-                f"style_profile={job.get('style_profile', '')}",
-                f"style_profiles={json.dumps(job.get('style_profiles', []))}",
-                f"only_photo={job.get('only_photo', '')}",
-                f"only_photos={json.dumps(job.get('only_photos', []))}",
-                f"spectrum={job.get('spectrum', 'visible')}",
-                f"cutoff_nm={job.get('cutoff_nm', 0)}",
-                f"about={job.get('about', '')}",
-                "resume=true",
-            ]
-        if job.get("kind") == "professional_shortlist":
-            return [
-                self.python, "-m", "kimiya", "run",
-                job.get("program_path") or str(
-                    self.project_root / "professional_shortlist.kim"),
-                f"report={job['report']}",
-                f"photos={job['photos']}",
-                f"review={job.get('review', '')}",
-                f"output={job['output']}",
-                f"policy={job['policy']}",
-                f"profile={job['profile']}",
-                f"spectrum={job.get('spectrum', 'visible')}",
-                f"cutoff_nm={job.get('cutoff_nm', 0)}",
-                f"about={job.get('about', '')}",
-                "resume=true",
-            ]
+        program, arguments = kimiya_arguments(job)
         return [
             self.python, "-m", "kimiya", "run",
-            job.get("program_path") or str(self.project_root / "opencull.kim"),
-            f"photos={job['photos']}",
-            f"output={job['output']}",
-            f"keep_per_group={job['keep_per_group']}",
-            f"recursive={'true' if job['recursive'] else 'false'}",
-            f"profile={job['profile']}",
-            f"only_photos={json.dumps(job.get('only_photos') or [])}",
-            "resume=true",
+            job.get("program_path") or str(self.project_root / program),
+            *arguments,
         ]
 
     def _job(self, job_id: str) -> dict[str, Any]:

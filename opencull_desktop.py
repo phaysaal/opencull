@@ -19,7 +19,7 @@ from pathlib import Path
 
 from opencull_gui import dialogs
 from opencull_gui.faces import FaceStore, default_face_db
-from opencull_gui.jobs import JobManager
+from opencull_gui.jobs import JobManager, kimiya_arguments
 from opencull_gui.macos import InstanceLock, MacOSPaths, resource_root
 from opencull_gui.measurements import load_measurements
 from opencull_gui.photos import PhotoStore
@@ -336,56 +336,16 @@ def build_desktop_services(paths: MacOSPaths) -> DesktopServices:
                 "--directions", job["directions"], "--photo", job["photo"],
                 "--style", job["style"], "--output-dir", job["output_dir"],
                 "--project", job["project"])
-        if job.get("kind") == "style_profile":
-            return executable_command(
-                "--kimiya-worker", "run",
-                job.get("program_path")
-                or str(resource_root() / "style_profile.kim"),
-                f"photos={job['photos']}", f"output={job['output']}",
-                f"existing={job.get('existing', '')}",
-                f"mode={job.get('mode', 'update')}",
-                f"limit={job.get('limit', 64)}")
-        if job.get("kind") == "semantic_verification":
-            return executable_command(
-                "--kimiya-worker", "run",
-                job.get("program_path")
-                or str(resource_root() / "semantic_verification.kim"),
-                f"original={job['original']}",
-                f"developed={job['developed']}",
-                f"thumbnail={job.get('thumbnail', '')}",
-                f"suggestion={job['suggestion']}",
-                f"consensus={'true' if job.get('consensus') else 'false'}",
-                f"output={job['output']}")
-        if job.get("kind") == "edit_suggestions":
-            return executable_command(
-                "--kimiya-worker", "run",
-                job.get("program_path")
-                or str(resource_root() / "edit_suggestions.kim"),
-                f"shortlist={job['shortlist']}", f"review={job['review']}",
-                f"photos={job['photos']}", f"output={job['output']}",
-                f"profile={job['profile']}",
-                f"style_profile={job.get('style_profile', '')}",
-                f"only_photo={job.get('only_photo', '')}",
-                f"only_photos={json.dumps(job.get('only_photos', []))}",
-                "resume=true")
-        if job.get("kind") == "professional_shortlist":
-            return executable_command(
-                "--kimiya-worker", "run",
-                job.get("program_path")
-                or str(resource_root() / "professional_shortlist.kim"),
-                f"report={job['report']}", f"photos={job['photos']}",
-                f"review={job.get('review', '')}", f"output={job['output']}",
-                f"policy={job['policy']}", f"profile={job['profile']}",
-                "resume=true")
-        if job.get("kind") not in {None, "culling"}:
-            raise ValueError(f"unsupported native job kind: {job.get('kind')}")
+        # Everything below is a kimiya program, and what each one is
+        # told is settled in one place -- this differs only in how the
+        # interpreter is started, and keeping a second copy of the
+        # argument lists here is how an infrared album's context reached
+        # the job record and never reached the program.
+        program, arguments = kimiya_arguments(job)
         return executable_command(
             "--kimiya-worker", "run",
-            job.get("program_path") or str(resource_root() / "opencull.kim"),
-            f"photos={job['photos']}", f"output={job['output']}",
-            f"keep_per_group={job['keep_per_group']}",
-            f"recursive={'true' if job['recursive'] else 'false'}",
-            f"profile={job['profile']}", "resume=true")
+            job.get("program_path") or str(resource_root() / program),
+            *arguments)
 
     jobs = JobManager(
         paths.jobs, resource_root(), providers=providers,

@@ -9,7 +9,11 @@ from pathlib import Path
 from PIL import Image
 
 from opencull_gui.assets import AssetError, index_asset_families
-from opencull_gui.jobs import QUEUE_FORMAT, JobManager
+from opencull_gui.jobs import (
+    QUEUE_FORMAT,
+    JobManager,
+    kimiya_arguments,
+)
 from opencull_gui.photos import PhotoStore
 from opencull_gui.report import load_report
 from opencull_gui.reviews import ReviewStore
@@ -560,6 +564,60 @@ class ShortlistSchemaTests(unittest.TestCase):
                     self.write_shortlist(
                         root, report, entry={"score": 101}),
                     report, photos)
+
+
+class OneCommandBuilderTests(unittest.TestCase):
+    """Both callers must tell a program the same things.
+
+    The manager runs the interpreter; the packaged application re-enters
+    its own executable as a worker. They kept separate copies of the
+    argument lists, and the copies drifted: an album marked infrared,
+    with the photographer's note that the crescent is the sun, put both
+    onto the job record and neither onto the command line.
+    """
+
+    def job(self, kind: str) -> dict:
+        return {
+            "kind": kind, "photos": "/p", "output": "o.json",
+            "shortlist": "s.json", "review": "r.json", "report": "c.json",
+            "profile": "bar", "policy": "effective",
+            "keep_per_group": 1, "recursive": False,
+            "spectrum": "infrared", "cutoff_nm": 760.0,
+            "about": "A partial solar eclipse, not the moon.",
+        }
+
+    def spoken(self, kind: str) -> dict:
+        _program, arguments = kimiya_arguments(self.job(kind))
+        return dict(
+            item.split("=", 1) for item in arguments if "=" in item)
+
+    def test_the_reading_passes_are_told_the_spectrum_and_the_subject(self):
+        for kind in ("edit_suggestions", "professional_shortlist"):
+            with self.subTest(kind):
+                said = self.spoken(kind)
+                self.assertEqual(said["spectrum"], "infrared")
+                self.assertEqual(said["cutoff_nm"], "760.0")
+                self.assertIn("not the moon", said["about"])
+
+    def test_the_desktop_builder_says_exactly_what_the_manager_says(self):
+        """The one property that stops them drifting again."""
+        import opencull_desktop
+
+        source = Path(opencull_desktop.__file__).read_text(encoding="utf-8")
+        builder = source.split("def build_job_command")[1].split("\n    jobs")[0]
+        self.assertIn("kimiya_arguments(job)", builder)
+        # And no second copy of the argument lists hiding beside it.
+        for spelling in ("shortlist=", "policy=", "keep_per_group="):
+            self.assertNotIn(spelling, builder)
+
+    def test_a_kind_nobody_recognises_is_refused(self):
+        with self.assertRaises(ValueError):
+            kimiya_arguments({"kind": "telepathy"})
+
+    def test_a_cull_still_carries_its_own_arguments(self):
+        program, arguments = kimiya_arguments(self.job("culling"))
+        self.assertEqual(program, "opencull.kim")
+        self.assertIn("keep_per_group=1", arguments)
 
 
 class UnwatchedCompletionTests(unittest.TestCase):
