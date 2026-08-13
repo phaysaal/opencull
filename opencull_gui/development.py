@@ -38,7 +38,7 @@ from development_engine import (
 )
 from raw_developer import render_baseline
 from recipe_compiler import compile_recipe
-from scan import RAW_EXTENSIONS, open_preview, visible_photograph
+from scan import RAW_EXTENSIONS, open_preview
 
 from . import dialogs
 from .adjustments import apply as apply_adjustments
