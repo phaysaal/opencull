@@ -14,12 +14,18 @@ from opencull_gui.photos import PhotoStore
 from opencull_gui.report import load_report
 from opencull_gui.reviews import ReviewStore
 from opencull_gui.server import ReviewServer
-from opencull_gui.shortlist import ASSESSMENT_FIELDS, ShortlistError, load_shortlist
+from opencull_gui.shortlist import (
+    ASSESSMENT_FIELDS,
+    ShortlistError,
+    load_shortlist,
+    settled_order,
+)
 from opencull_gui.shortlist_reviews import (
     ShortlistReviewError,
     ShortlistReviewStore,
 )
 from shortlist_kernel import (
+    CONFIDENCE_FLOOR,
     assessments_for_candidates,
     build_professional_candidates,
     build_professional_checkpoint,
@@ -31,6 +37,7 @@ from shortlist_kernel import (
     professional_calibration_json,
     professional_report_valid,
     remaining_professional_candidates,
+    settled_tier,
     valid_professional_assessment,
     valid_professional_calibration,
 )
@@ -553,6 +560,92 @@ class ShortlistSchemaTests(unittest.TestCase):
                     self.write_shortlist(
                         root, report, entry={"score": 101}),
                     report, photos)
+
+
+class ConfidenceTests(unittest.TestCase):
+    """A frame nobody could judge must not lead the shortlist.
+
+    A live shoot of eight eclipse frames: one came back at confidence
+    0.0, the comparison pass promoted it from promising to strong, it
+    landed at rank one above a frame assessed at 0.91, and a five-judge
+    panel refused to certify the shortlist. It was right to. Confidence
+    was carried everywhere and used nowhere.
+    """
+
+    def rows(self):
+        return [
+            {"photo": "A.ARW", "tier": "promising", "score": 50.0,
+             "confidence": 0.0},
+            {"photo": "B.ARW", "tier": "promising", "score": 50.0,
+             "confidence": 0.9},
+            {"photo": "C.ARW", "tier": "promising", "score": 50.0,
+             "confidence": 0.5},
+        ]
+
+    def test_equal_standing_is_settled_by_who_was_surer(self):
+        self.assertEqual(
+            settled_order(self.rows()), ["B.ARW", "C.ARW", "A.ARW"])
+
+    def test_a_higher_standing_still_wins_over_confidence(self):
+        """Confidence breaks ties; it does not overturn a verdict."""
+        rows = self.rows()
+        rows[0]["tier"] = "strong"
+        self.assertEqual(settled_order(rows)[0], "A.ARW")
+
+    def test_confidence_that_cannot_be_read_counts_as_none(self):
+        rows = self.rows()
+        rows[1]["confidence"] = "very"
+        self.assertEqual(settled_order(rows)[0], "C.ARW")
+
+    def test_the_comparison_pass_may_not_promote_what_nobody_was_sure_of(self):
+        self.assertEqual(
+            settled_tier({"tier": "promising", "confidence": 0.0}, "strong"),
+            "promising")
+
+    def test_it_may_still_promote_a_frame_somebody_committed_to(self):
+        self.assertEqual(
+            settled_tier({"tier": "promising", "confidence": 0.9}, "strong"),
+            "strong")
+
+    def test_it_may_always_lower_a_verdict(self):
+        """Seeing the batch is a reason to think less of a frame."""
+        for confidence in (0.0, 0.9):
+            with self.subTest(confidence=confidence):
+                self.assertEqual(
+                    settled_tier(
+                        {"tier": "promising", "confidence": confidence},
+                        "reject"),
+                    "reject")
+
+    def test_saying_nothing_leaves_the_verdict_alone(self):
+        self.assertEqual(
+            settled_tier({"tier": "strong", "confidence": 0.0}, None),
+            "strong")
+
+    def test_the_floor_is_the_boundary_it_says_it_is(self):
+        just_under = settled_tier(
+            {"tier": "promising", "confidence": CONFIDENCE_FLOOR - 0.01},
+            "strong")
+        exactly = settled_tier(
+            {"tier": "promising", "confidence": CONFIDENCE_FLOOR}, "strong")
+        self.assertEqual((just_under, exactly), ("promising", "strong"))
+
+    def test_the_shoot_that_was_refused_now_ranks_the_confident_frame_first(self):
+        """The real numbers from the run the panel turned down."""
+        assessed = [
+            {"photo": "DSC00704.ARW", "tier": "promising", "score": 50.0,
+             "confidence": 0.0},
+            {"photo": "DSC00703.ARW", "tier": "reject", "score": 38.0,
+             "confidence": 0.91},
+            {"photo": "DSC00700.ARW", "tier": "reject", "score": 50.0,
+             "confidence": 0.0},
+        ]
+        proposed = {"DSC00704.ARW": "strong", "DSC00703.ARW": "strong",
+                    "DSC00700.ARW": "reject"}
+        tiers = {item["photo"]: settled_tier(item, proposed[item["photo"]])
+                 for item in assessed}
+        self.assertEqual(settled_order(assessed, tiers)[0], "DSC00703.ARW")
+        self.assertEqual(tiers["DSC00704.ARW"], "promising")
 
 
 class ProfessionalPipelineKernelTests(unittest.TestCase):

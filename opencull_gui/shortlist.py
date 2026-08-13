@@ -260,11 +260,23 @@ def standing(tier, score) -> float:
         ((rank - 1) * 100 + max(0.0, min(100.0, value))) / 5, 1)
 
 
+def confidence_of(entry) -> float:
+    """How sure the model said it was, or nothing where it did not say."""
+    try:
+        return max(0.0, min(1.0, float(entry.get("confidence", 0))))
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def settled_order(entries, tiers=None) -> list[str]:
     """The order to show frames in: by standing, best first.
 
-    One figure, one order. Frames of equal standing keep the sequence
-    they were shot in.
+    One figure, one order. Where two frames stand equal, the one the
+    model was surer about goes first -- a shoot came back with three
+    frames scored exactly 50 at confidence 0.0, which is the shape of an
+    answer that could not commit, and leaving them to be ordered by
+    filename put one of them above frames assessed at 0.9. Frames equal
+    in both keep the sequence they were shot in.
     """
     tiers = tiers or {}
     rows = []
@@ -273,8 +285,9 @@ def settled_order(entries, tiers=None) -> list[str]:
         if not photo:
             continue
         tier = tiers.get(photo) or entry.get("tier")
-        rows.append((photo, standing(tier, entry.get("score", 0)), index))
-    return [row[0] for row in sorted(rows, key=lambda r: (-r[1], r[2]))]
+        rows.append((photo, standing(tier, entry.get("score", 0)),
+                     confidence_of(entry), index))
+    return [row[0] for row in sorted(rows, key=lambda r: (-r[1], -r[2], r[3]))]
 
 
 def tier_stars(tier) -> str:

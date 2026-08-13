@@ -13,6 +13,7 @@ from opencull_gui.shortlist import (
     bar_checkpoint_path,
     settled_order,
     standing,
+    tier_rank,
 )
 from scan import (  # noqa: F401
     BITMAP_EXTENSIONS,
@@ -29,6 +30,14 @@ ASSESSMENT_FIELDS = (
     "distinctiveness",
 )
 TIERS = ("exceptional", "strong", "promising", "ordinary", "reject")
+
+# Below this, the model has told you it could not judge the frame. A
+# comparison pass that then raises such a frame's verdict is not
+# comparing anything -- it is filling a gap with a guess and presenting
+# the result as a ranking. On a shoot of eight eclipse frames one came
+# back at confidence 0.0, was promoted from promising to strong, landed
+# at rank one, and a live panel refused the whole shortlist over it.
+CONFIDENCE_FLOOR = 0.3
 
 
 def _load_json(path: str) -> dict[str, Any]:
@@ -644,6 +653,28 @@ def remaining_professional_candidates(
     return candidates[min(len(candidates), len(assessments)):]
 
 
+def settled_tier(assessment: dict[str, Any], proposed: Any) -> str:
+    """The verdict a frame keeps after the comparison pass.
+
+    Calibration sees the whole batch and the individual assessments did
+    not, so it is allowed to change its mind about a frame -- downwards
+    freely, and upwards only where somebody was confident enough for
+    there to be a judgement to raise. A frame the assessor could not
+    commit to keeps the verdict it was given.
+    """
+    given = str(assessment.get("tier") or "")
+    wanted = str(proposed or "") or given
+    if wanted == given:
+        return given
+    try:
+        confidence = float(assessment.get("confidence", 0))
+    except (TypeError, ValueError):
+        confidence = 0.0
+    if confidence >= CONFIDENCE_FLOOR:
+        return wanted
+    return wanted if tier_rank(wanted) <= tier_rank(given) else given
+
+
 def build_professional_shortlist(
     bundle: str,
     assessments: list[str],
@@ -691,18 +722,20 @@ def build_professional_shortlist(
             item["photo"].casefold(),
         ),
     )
+    settled_tiers = {
+        item["photo"]: settled_tier(item, tier_by_photo.get(item["photo"]))
+        for item in settled
+    }
     placement = {
-        photo: index for index, photo in enumerate(settled_order(
-            settled,
-            {item["photo"]: tier_by_photo.get(
-                item["photo"], item.get("tier")) for item in settled}))
+        photo: index
+        for index, photo in enumerate(settled_order(settled, settled_tiers))
     }
     ordered = sorted(
         settled, key=lambda item: placement.get(item["photo"], 0))
     entries = []
     for rank, assessment in enumerate(ordered, start=1):
         photo = assessment["photo"]
-        tier = tier_by_photo.get(photo, assessment["tier"])
+        tier = settled_tiers.get(photo, assessment["tier"])
         warnings = list(assessment.get("local_warnings", []))
         if assessment.get("asset_warning"):
             warnings.append(assessment["asset_warning"])
