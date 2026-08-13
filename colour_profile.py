@@ -22,11 +22,23 @@ from pathlib import Path
 
 from PIL import ImageCms
 
+# An ICC header carries the moment the profile was created, so asking
+# littleCMS for sRGB twice gives two different byte strings for the same
+# colour space. That would make two exports of one photograph differ in
+# their headers, and it makes "does this file already carry our profile"
+# unanswerable by comparison. The field is zeroed: the specification
+# allows it, every reader ignores it, and the bytes become the same bytes
+# every time.
+_CREATED_AT = slice(24, 36)
+
 
 @lru_cache(maxsize=1)
 def srgb_profile() -> bytes:
     """The sRGB profile, as the bytes to embed in a written file."""
-    return ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
+    built = bytearray(
+        ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes())
+    built[_CREATED_AT] = bytes(12)
+    return bytes(built)
 
 
 # A JPEG carries its profile in an APP2 segment introduced by this string,
@@ -38,6 +50,35 @@ _JPEG_START = b"\xff\xd8"
 # Segments that belong before the profile: the JFIF header and the EXIF
 # block. Anything else, the profile goes in front of.
 _PRECEDING = {b"\xff\xe0", b"\xff\xe1"}
+# Where the header ends and the compressed picture begins. Nothing past
+# this point is a segment, and nothing past it may be touched.
+_SCAN_START = b"\xff\xda"
+
+
+def segments(data: bytes) -> list[tuple[int, bytes, bytes]]:
+    """Walk a JPEG's header segments: where each is, what it is, what it says.
+
+    The structure has to be walked rather than searched. A camera writes
+    an EXIF block holding its own preview image, and on a Fujifilm frame
+    that block runs to 65 448 bytes -- so looking for the profile within
+    a fixed window near the front finds nothing on exactly the files most
+    likely to already have one, and tags them a second time.
+    """
+    found: list[tuple[int, bytes, bytes]] = []
+    at = 2
+    while at + 4 <= len(data) and data[at] == 0xFF:
+        marker = data[at:at + 2]
+        if marker == _SCAN_START:
+            break
+        if marker == _JPEG_START or 0xD0 <= data[at + 1] <= 0xD9:
+            at += 2                                  # a marker without a body
+            continue
+        length = int.from_bytes(data[at + 2:at + 4], "big")
+        if length < 2:
+            break
+        found.append((at, marker, data[at + 4:at + 2 + length]))
+        at += 2 + length
+    return found
 
 
 def tag_in_place(path: Path) -> bool:
@@ -56,15 +97,18 @@ def tag_in_place(path: Path) -> bool:
     data = path.read_bytes()
     if not data.startswith(_JPEG_START):
         raise ValueError(f"{path.name} is not a JPEG")
-    if _ICC_TAG in data[:64 << 10]:
+    header = segments(data)
+    if any(marker == _APP2 and payload.startswith(_ICC_TAG)
+           for _at, marker, payload in header):
         return False
 
     at = 2
-    while at + 4 <= len(data) and data[at:at + 2] in _PRECEDING:
-        at += 2 + int.from_bytes(data[at + 2:at + 4], "big")
+    for start, marker, payload in header:
+        if marker not in _PRECEDING:
+            break
+        at = start + 4 + len(payload)
 
-    profile = srgb_profile()
-    payload = _ICC_TAG + b"\x01\x01" + profile
+    payload = _ICC_TAG + b"\x01\x01" + srgb_profile()
     segment = _APP2 + (len(payload) + 2).to_bytes(2, "big") + payload
     temporary = path.with_suffix(path.suffix + ".tagging")
     try:

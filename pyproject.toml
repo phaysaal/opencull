@@ -43,6 +43,7 @@ Homepage = "https://github.com/mfaisalalameen/opencull"
 # Flat layout: the audited kernels are top-level modules because Kimiya loads
 # them by path, and the pipelines are invoked as scripts.
 py-modules = [
+    "colour_profile",
     "scan",
     "gui",
     "opencull_desktop",

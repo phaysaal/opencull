@@ -21,7 +21,11 @@ from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from colour_profile import srgb_profile, tag_in_place  # noqa: E402
+from colour_profile import (  # noqa: E402
+    segments,
+    srgb_profile,
+    tag_in_place,
+)
 from development_engine import render_recipe  # noqa: E402
 from opencull_gui.photos import PhotoStore  # noqa: E402
 from opencull_gui.proofsheet import _embedded  # noqa: E402
@@ -119,6 +123,64 @@ class TaggingFinishedWorkTests(unittest.TestCase):
         with Image.open(path) as image:
             self.assertEqual(image.getexif().get(271), "FUJIFILM")
             self.assertEqual(image.info.get("icc_profile"), srgb_profile())
+
+    def with_a_camera_sized_header(self, path: Path) -> Path:
+        """Put a Fujifilm-sized EXIF block in front of a photograph.
+
+        Pillow will not write one this large in a single segment, and the
+        size is the whole point: the camera's own preview image lives in
+        there, and on the four frames this test exists for it pushed the
+        profile past 64 KB into the file.
+        """
+        data = path.read_bytes()
+        big = b"Exif\x00\x00" + b"\x00" * 65000
+        block = b"\xff\xe1" + (len(big) + 2).to_bytes(2, "big") + big
+        xmp = b"http://ns.adobe.com/xap/1.0/\x00" + b" " * 12000
+        block += b"\xff\xe1" + (len(xmp) + 2).to_bytes(2, "big") + xmp
+        path.write_bytes(data[:2] + block + data[2:])
+        return path
+
+    def test_a_profile_behind_a_camera_sized_exif_block_is_still_found(self):
+        """The defect that tagged four finished photographs twice.
+
+        Looking for the profile in a window near the front of the file
+        finds nothing on exactly the frames whose header is largest, and
+        writes a second profile behind the first.
+        """
+        path = self.with_a_camera_sized_header(self.a_photograph())
+        self.assertTrue(tag_in_place(path))
+        self.assertGreater(
+            path.read_bytes().find(b"ICC_PROFILE"), 64 << 10,
+            "the fixture must put the profile past a window scan")
+        self.assertFalse(tag_in_place(path))
+        self.assertEqual(len(self.profiles(path)), 1)
+        with Image.open(path) as image:
+            self.assertEqual(image.info.get("icc_profile"), srgb_profile())
+
+    def profiles(self, path: Path) -> list[bytes]:
+        return [payload for _at, marker, payload in segments(path.read_bytes())
+                if marker == b"\xff\xe2" and payload.startswith(b"ICC_PROFILE")]
+
+    def test_the_profile_is_the_same_bytes_every_time(self):
+        """Two exports of one photograph must not differ in their headers.
+
+        littleCMS stamps the moment of creation into an ICC header, so
+        asking it for sRGB twice gives two byte strings for one colour
+        space -- and makes "is our profile already in this file?"
+        unanswerable by comparison.
+        """
+        import subprocess
+        import sys
+        root = str(Path(__file__).resolve().parent.parent)
+        asked = (f"import hashlib, sys; sys.path.insert(0, {root!r});"
+                 " from colour_profile import srgb_profile;"
+                 " print(hashlib.sha256(srgb_profile()).hexdigest())")
+        digests = [
+            subprocess.run([sys.executable, "-c", asked], capture_output=True,
+                           text=True, check=True).stdout.strip()
+            for _ in range(2)]
+        self.assertEqual(digests[0], digests[1])
+        self.assertEqual(srgb_profile()[24:36], bytes(12))
 
     def test_something_that_is_not_a_jpeg_is_refused(self):
         path = self.root / "notes.txt"
