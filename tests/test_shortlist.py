@@ -9,7 +9,7 @@ from pathlib import Path
 from PIL import Image
 
 from opencull_gui.assets import AssetError, index_asset_families
-from opencull_gui.jobs import JobManager
+from opencull_gui.jobs import QUEUE_FORMAT, JobManager
 from opencull_gui.photos import PhotoStore
 from opencull_gui.report import load_report
 from opencull_gui.reviews import ReviewStore
@@ -560,6 +560,64 @@ class ShortlistSchemaTests(unittest.TestCase):
                     self.write_shortlist(
                         root, report, entry={"score": 101}),
                     report, photos)
+
+
+class UnwatchedCompletionTests(unittest.TestCase):
+    """A run that finished while nobody was looking is not still running.
+
+    A job whose output is on disk is reconciled to completed when the
+    application next opens. It kept the sentence it had been given while
+    it was working, so the list showed "Professional shortlist is
+    running" beside a finished job -- and the finished output waited for
+    a further launch to reach the project catalogue.
+    """
+
+    def manager(self, root: Path, state: dict) -> JobManager:
+        (root / "jobs.json").write_text(
+            json.dumps(state), encoding="utf-8")
+        made = JobManager(root / "jobs.json", root)
+        self.addCleanup(made.shutdown)
+        return made
+
+    def job(self, root: Path, status: str, output: Path) -> dict:
+        return {
+            "format": QUEUE_FORMAT, "revision": 1,
+            "created_at": "now", "updated_at": "now",
+            "jobs": [{
+                "id": "abc123", "kind": "professional_shortlist",
+                "photos": str(root), "output": str(output),
+                "log": str(output) + ".log",
+                "checkpoint": str(output) + ".checkpoint.json",
+                "report": str(root / "shoot-results.json"),
+                "status": status, "pid": None,
+                "message": "Professional shortlist is running.",
+                "created_at": "now", "started_at": "now",
+                "finished_at": None, "exit_code": None,
+            }],
+        }
+
+    def test_it_is_marked_finished_and_said_to_be(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output = root / "shortlist.json"
+            output.write_text("{}", encoding="utf-8")
+            manager = self.manager(root, self.job(root, "running", output))
+            job = manager.public()["jobs"][0]
+            self.assertEqual(job["status"], "completed")
+            self.assertNotEqual(
+                job["message"], "Professional shortlist is running.",
+                "a finished job kept the sentence it had while working")
+            self.assertIn("Completed", job["message"])
+            self.assertIsNotNone(job["finished_at"])
+
+    def test_a_run_with_no_output_and_no_process_waits_to_be_resumed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manager = self.manager(
+                root, self.job(root, "running", root / "absent.json"))
+            job = manager.public()["jobs"][0]
+            self.assertEqual(job["status"], "paused")
+            self.assertIn("checkpoint", job["message"])
 
 
 class ConfidenceTests(unittest.TestCase):

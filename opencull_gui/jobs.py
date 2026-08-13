@@ -334,7 +334,17 @@ class JobManager:
         for job in self._state["jobs"]:
             if job.get("status") in ACTIVE:
                 if Path(job["output"]).is_file():
-                    job.update(status="completed", finished_at=_now(), pid=None)
+                    # The message is what the photographer reads, and
+                    # leaving the old one there says "is running" beside a
+                    # job that finished. Registering the output here too:
+                    # the loop above has already passed, so a run that
+                    # completed unwatched would otherwise wait for the
+                    # next launch to reach the project catalogue.
+                    job.update(
+                        status="completed", finished_at=_now(), pid=None,
+                        message="Completed while the application was "
+                                "not running.")
+                    self._register_completed_output(job)
                 elif _pid_alive(job.get("pid")):
                     job.update(
                         status="detached",
