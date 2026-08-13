@@ -28,6 +28,8 @@ from typing import Any
 import numpy as np
 from PIL import ExifTags, Image, ImageOps
 
+from colour_profile import srgb_profile
+
 try:
     import rawpy
 except ImportError:  # JPEG-only use remains possible without rawpy.
@@ -389,7 +391,7 @@ def measure(path: Path, root: Path) -> Measured:
             bounded = ImageOps.contain(
                 image, (PREVIEW_BOUND, PREVIEW_BOUND),
                 Image.Resampling.LANCZOS)
-            bounded.save(cache, "JPEG", quality=88)
+            bounded.save(cache, "JPEG", quality=88, icc_profile=srgb_profile())
         preview_relative = (
             f"{managed.name}/Previews/{cache.name}")
     return Measured(

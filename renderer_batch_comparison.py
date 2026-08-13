@@ -19,6 +19,7 @@ import numpy as np
 import tifffile
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
+from colour_profile import srgb_profile
 from development_engine import _srgb_to_linear_rec2020, render_recipe
 from raw_developer import render_baseline
 from recipe_compiler import compile_recipe
@@ -87,7 +88,8 @@ def _contact_sheet_1440p(
         draw.text(
             (panel_x + outer_margin, 22), label,
             fill="#f4f6f8", font=font)
-    canvas.save(output, format="JPEG", quality=95, optimize=True)
+    canvas.save(output, format="JPEG", quality=95, optimize=True,
+                icc_profile=srgb_profile())
 
 
 def _write_gallery(output_dir: Path, manifest: dict[str, Any]) -> Path:

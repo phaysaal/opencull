@@ -19,6 +19,7 @@ from typing import Any
 
 from PIL import Image, ImageDraw, ImageOps
 
+from colour_profile import srgb_profile
 from scan import BITMAP_EXTENSIONS, RAW_EXTENSIONS, open_preview
 
 from .photos import PhotoError, PhotoStore
@@ -1005,7 +1006,8 @@ def create_contact_sheets(
         output = destination / f"opencull-contact-sheet-{page_number:03d}.jpg"
         if output.exists():
             raise ActionError(f"contact sheet already exists: {output}")
-        page.save(output, "JPEG", quality=90, optimize=True)
+        page.save(output, "JPEG", quality=90, optimize=True,
+                  icc_profile=srgb_profile())
         outputs.append(str(output))
     return outputs
 
@@ -1128,7 +1130,8 @@ class ContactSheetOperation:
                         fill="#f1f0e9",
                     )
                 temporary = output.with_suffix(".tmp")
-                page.save(temporary, "JPEG", quality=90, optimize=True)
+                page.save(temporary, "JPEG", quality=90, optimize=True,
+                          icc_profile=srgb_profile())
                 os.replace(temporary, output)
                 with self._lock:
                     self.journal["outputs"].append(str(output))

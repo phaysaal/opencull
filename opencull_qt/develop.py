@@ -50,6 +50,7 @@ from opencull_gui.development import (
 from opencull_gui.directions import verdict_of
 
 from . import theme
+from .colour import load_for_screen
 from .previews import PreviewLoader, plain_icon, scaled
 from .widgets import Stamp, short_path, workspace_title
 
@@ -394,7 +395,7 @@ class Renderer(QObject):
                   path: str) -> None:
         if generation != self._generation:
             return
-        pixmap = QPixmap(path)
+        pixmap = load_for_screen(path)
         if pixmap.isNull():
             self.failed.emit(photo, "the render could not be read back")
             return
@@ -480,7 +481,7 @@ class PreviewQueue(QObject):
 
     def _finished(self, _generation: int, photo: str, treatment: str,
                   path: str) -> None:
-        pixmap = QPixmap(path)
+        pixmap = load_for_screen(path)
         if not pixmap.isNull():
             self.ready.emit(photo, treatment, pixmap)
         self._step()

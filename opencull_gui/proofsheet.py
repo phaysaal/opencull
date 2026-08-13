@@ -21,6 +21,8 @@ from typing import Any
 
 from PIL import Image, ImageOps
 
+from colour_profile import srgb_profile
+
 # Bounded copies are embedded, not the delivered bytes: a proof sheet is
 # for looking, and a page that is a gigabyte is a page nobody opens.
 EDGE = 1200
@@ -40,7 +42,7 @@ def _embedded(path: Path) -> str:
         image = image.convert("RGB")
         image.thumbnail((EDGE, EDGE), Image.Resampling.LANCZOS)
         buffer = io.BytesIO()
-        image.save(buffer, "JPEG", quality=QUALITY)
+        image.save(buffer, "JPEG", quality=QUALITY, icc_profile=srgb_profile())
     return "data:image/jpeg;base64," + base64.b64encode(
         buffer.getvalue()).decode("ascii")
 

@@ -19,6 +19,8 @@ from PySide6.QtGui import QIcon, QPixmap
 
 from opencull_gui.photos import PhotoError, PhotoStore
 
+from .colour import load_for_screen
+
 
 class _Signals(QObject):
     ready = Signal(str, str, QPixmap)   # name, size, pixmap
@@ -49,7 +51,7 @@ class _Job(QRunnable):
             return
         if self._current() != self.generation:
             return
-        pixmap = QPixmap(str(path))
+        pixmap = load_for_screen(path)
         if pixmap.isNull():
             self.signals.failed.emit(
                 self.key, self.size, "the generated preview could not be read")

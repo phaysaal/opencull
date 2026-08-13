@@ -14,6 +14,7 @@ from typing import Any
 
 from PIL import Image, ImageOps
 
+from colour_profile import srgb_profile
 from scan import open_preview, raw_decoder_status
 
 from .project import project_directory
@@ -114,6 +115,7 @@ class PhotoStore:
                 format="JPEG",
                 quality=88 if size_name == "detail" else 80,
                 optimize=True,
+                icc_profile=srgb_profile(),
             )
             temporary.replace(destination)
         except Exception:

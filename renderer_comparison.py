@@ -15,6 +15,7 @@ import numpy as np
 import tifffile
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
+from colour_profile import srgb_profile
 from darktable_engine import render_darktable_default
 from development_engine import _srgb_to_linear_rec2020, render_recipe
 from raw_developer import render_baseline
@@ -118,7 +119,8 @@ def _contact_sheet(items: list[tuple[str, Path]], output: Path) -> None:
         y = label_height + (panel_height - image.height) // 2
         canvas.paste(image, (x, y))
         draw.text((index * panel_width + 18, 17), label, fill="#f4f6f8", font=font)
-    canvas.save(output, format="JPEG", quality=94, optimize=True)
+    canvas.save(output, format="JPEG", quality=94, optimize=True,
+                icc_profile=srgb_profile())
 
 
 def compare_renderers(

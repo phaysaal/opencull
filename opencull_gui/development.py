@@ -30,6 +30,7 @@ import numpy as np
 import tifffile
 from PIL import Image, ImageOps
 
+from colour_profile import srgb_profile
 from darktable_engine import DARKTABLE_WORKFLOW, render_darktable_default
 from development_engine import (
     RECIPE_ENGINE_REVISION,
@@ -539,7 +540,7 @@ class DevelopmentWorkspace:
                 return image
             frame.thumbnail((maximum, maximum), Image.Resampling.LANCZOS)
             smaller = work / f"native-{maximum}.jpg"
-            frame.save(smaller, "JPEG", quality=95)
+            frame.save(smaller, "JPEG", quality=95, icc_profile=srgb_profile())
         return smaller
 
     def recipe_preview(
@@ -600,7 +601,8 @@ class DevelopmentWorkspace:
             small = open_preview(reference)
             small.thumbnail((maximum, maximum), Image.Resampling.LANCZOS)
             small_reference = work / "reference.jpg"
-            small.save(small_reference, "JPEG", quality=94)
+            small.save(small_reference, "JPEG", quality=94,
+                       icc_profile=srgb_profile())
             if engine == "darktable":
                 baseline = self._from_display(
                     self._native_decode(
@@ -906,7 +908,7 @@ class DevelopmentWorkspace:
         small.thumbnail((maximum, maximum), Image.Resampling.LANCZOS)
         staged = destination.with_name(
             f".{destination.name}.{secrets.token_hex(4)}.tmp")
-        small.save(staged, "JPEG", quality=94)
+        small.save(staged, "JPEG", quality=94, icc_profile=srgb_profile())
         os.replace(staged, destination)
         return destination
 

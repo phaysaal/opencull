@@ -36,6 +36,7 @@ from opencull_gui.style import (
 )
 
 from . import theme
+from .colour import for_screen
 from .widgets import ElidedLabel, Filmstrip, short_path
 
 # The kernel reads at most this many examples, so asking for more spends
@@ -147,7 +148,7 @@ class ProfileCard(QFrame):
                     max(1, int(size.height() * scale))))
             image = reader.read()
             if not image.isNull():
-                self.strip.set_frame(slot, QPixmap.fromImage(image))
+                self.strip.set_frame(slot, QPixmap.fromImage(for_screen(image)))
 
     def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt naming
         if event.button() == Qt.MouseButton.LeftButton:
@@ -200,7 +201,7 @@ class ExampleTile(QFrame):
         if image.isNull():
             self.image.setText("unreadable")
             return
-        self.image.setPixmap(QPixmap.fromImage(image))
+        self.image.setPixmap(QPixmap.fromImage(for_screen(image)))
         self.image.setText("")
 
     def set_state(self, state: str) -> None:

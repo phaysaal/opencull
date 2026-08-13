@@ -16,6 +16,8 @@ import numpy as np
 import tifffile
 from PIL import Image, ImageEnhance
 
+from colour_profile import srgb_profile
+
 ENGINE_FORMAT = "opencull-development-render-v1"
 
 # Bumped whenever the operations render differently from before. A cached
@@ -653,7 +655,8 @@ def render_recipe(
     fd, temporary = tempfile.mkstemp(prefix=f".{output.name}.", suffix=".tmp", dir=destination)
     os.close(fd)
     try:
-        image.save(temporary, format="JPEG", quality=95, optimize=True)
+        image.save(temporary, format="JPEG", quality=95, optimize=True,
+                   icc_profile=srgb_profile())
         os.replace(temporary, output)
     finally:
         if os.path.exists(temporary):

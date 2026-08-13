@@ -16,6 +16,8 @@ from urllib.parse import parse_qs, urlparse
 
 from PIL import Image, ImageOps
 
+from colour_profile import srgb_profile
+
 from . import dialogs
 from .actions import ActionController, ActionError, export_bytes
 from .development import DevelopmentWorkspace
@@ -352,7 +354,8 @@ class ReviewHandler(BaseHTTPRequestHandler):
                 image = ImageOps.exif_transpose(opened).convert("RGB")
                 image.thumbnail((maximum, maximum), Image.Resampling.LANCZOS)
                 output = io.BytesIO()
-                image.save(output, "JPEG", quality=91, optimize=True)
+                image.save(output, "JPEG", quality=91, optimize=True,
+                           icc_profile=srgb_profile())
                 body = output.getvalue()
         except (OSError, ValueError):
             self._json({"error": "development preview could not be decoded"},
@@ -592,7 +595,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
                 self._json({"error": str(exc)}, HTTPStatus.NOT_FOUND)
                 return
             output = io.BytesIO()
-            crop.save(output, "JPEG", quality=90)
+            crop.save(output, "JPEG", quality=90, icc_profile=srgb_profile())
             body = output.getvalue()
             self._headers(HTTPStatus.OK, "image/jpeg", len(body))
             self.wfile.write(body)
