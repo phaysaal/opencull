@@ -713,6 +713,58 @@ class DevelopPageTests(unittest.TestCase):
     def workspace_of(self, page):
         return page.workspace
 
+    def test_a_full_render_uses_the_raw_not_its_embedded_preview(self):
+        """A full-size export must be the size of the photograph.
+
+        The camera's embedded preview stood in for the frame's own
+        dimensions. Fujifilm embeds a near-full-size JPEG so it was
+        nearly right; Sony embeds 1616 pixels against a 4608-pixel
+        sensor, and every full-size ARW export was a third of the frame.
+        """
+        from unittest import mock
+
+        from opencull_gui.development import full_size
+
+        raw = Path(self._temporary.name) / "DSC00001.ARW"
+        raw.write_bytes(b"not really a raw")
+        small = Path(self._temporary.name) / "preview.jpg"
+        Image.new("RGB", (1616, 1080), (30, 30, 40)).save(small)
+
+        class Sizes:
+            width, height = 4608, 3072
+
+        class Raw:
+            sizes = Sizes()
+            def __enter__(self): return self
+            def __exit__(self, *_): return False
+
+        with mock.patch.dict(
+            "sys.modules", {"rawpy": mock.Mock(imread=lambda _p: Raw())}
+        ):
+            self.assertEqual(full_size(raw, small), 4608)
+
+    def test_a_raw_that_cannot_be_read_falls_back_rather_than_failing(self):
+        from unittest import mock
+
+        from opencull_gui.development import full_size
+
+        raw = Path(self._temporary.name) / "DSC00002.ARW"
+        raw.write_bytes(b"damaged")
+        small = Path(self._temporary.name) / "preview2.jpg"
+        Image.new("RGB", (1616, 1080), (30, 30, 40)).save(small)
+        with mock.patch.dict(
+            "sys.modules",
+            {"rawpy": mock.Mock(imread=mock.Mock(side_effect=OSError))}
+        ):
+            self.assertEqual(full_size(raw, small), 1616)
+
+    def test_an_ordinary_photograph_is_its_own_size(self):
+        from opencull_gui.development import full_size
+
+        path = Path(self._temporary.name) / "B.JPG"
+        Image.new("RGB", (900, 600), (60, 60, 60)).save(path)
+        self.assertEqual(full_size(path, path), 900)
+
     # --- infrared --------------------------------------------------------
 
     def test_an_album_is_ordinary_light_until_somebody_says_otherwise(self):

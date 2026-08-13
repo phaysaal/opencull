@@ -98,6 +98,35 @@ def suggested_filename(photo: str, variant: str) -> str:
     return f"{Path(photo).stem}-{safe}.jpg"
 
 
+def full_size(source: Path, reference: Path) -> int:
+    """The longest edge a full-size render should actually have.
+
+    This was taken from the camera's embedded preview, because that is
+    what an image reader can open and it stood in for the photograph's
+    own dimensions. Fujifilm embeds a near-full-size JPEG, so it was
+    nearly right and nobody looked. Sony embeds 1616 pixels against a
+    4608-pixel sensor: every "full size" export of an ARW was a third of
+    the frame, after paying for a demosaic of all of it.
+
+    Asked of the file the render actually decodes -- a matched raw where
+    there is one, the photograph itself otherwise -- because that is the
+    thing whose resolution is on offer.
+    """
+    if source.suffix.casefold() in RAW_EXTENSIONS:
+        try:
+            import rawpy
+
+            with rawpy.imread(str(source)) as raw:
+                largest = max(int(raw.sizes.width), int(raw.sizes.height))
+            if largest > 0:
+                return largest
+        except Exception:                            # noqa: BLE001 - fall back
+            # An unreadable raw is not a reason to refuse the render; the
+            # embedded preview is smaller but honest.
+            pass
+    return max(open_preview(reference).size)
+
+
 def shrink_linear(tiff: Path, maximum: int, destination: Path) -> Path:
     """Resample a scene-linear baseline down to proof size.
 
@@ -868,7 +897,8 @@ class DevelopmentWorkspace:
             # always be traced, but nothing is decoded or interpreted and
             # no recipe is claimed for it.
             return self._register_as_shot(photo, reference, provenance)
-        maximum = max(open_preview(reference).size)
+        prepared = self._prepare(photo, style, engine)
+        maximum = full_size(prepared["source"], reference)
         preview = self.recipe_preview(
             photo, style, engine, demosaic, maximum, adjustments, progress)
         digest = hashlib.sha256(preview.read_bytes()).hexdigest()
