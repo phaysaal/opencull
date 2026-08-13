@@ -287,6 +287,77 @@ class AdjustedRenderTests(FineTunePageTests):
         self.assertEqual(record["render"]["variant"], "standard")
         self.assertEqual(record["render"]["adjustments"], [])
 
+    # --- keeping a look ---------------------------------------------------
+
+    def own_presets(self) -> Path:
+        """A presets folder belonging to this test and nobody else."""
+        from opencull_gui import presets
+
+        mine = self.root / "presets"
+        self.enterContext(mock.patch.dict(
+            "os.environ", {presets.PRESETS_ENVIRONMENT: str(mine)}))
+        return mine
+
+    def test_a_tuned_version_can_be_kept_as_a_preset(self):
+        from opencull_gui import presets
+
+        self.own_presets()
+        page = self.page()
+        exposure = self.control(page, "tone.exposure")
+        exposure.slider.setValue(exposure._tick(0.30))
+        with mock.patch.object(
+            page, "ask_preset_name", return_value=("Evening walk", True)
+        ):
+            page.save_preset()
+        kept = presets.saved()
+        self.assertEqual([item["name"] for item in kept], ["Evening walk"])
+        moved = next(item for item in kept[0]["operations"]
+                     if item["op"] == "tone.exposure")
+        self.assertAlmostEqual(moved["value"], 0.30, places=2)
+        self.assertIn("Evening walk", page.status.text())
+
+    def test_what_is_kept_is_what_was_on_screen_not_what_was_suggested(self):
+        self.own_presets()
+        page = self.page()
+        exposure = self.control(page, "tone.exposure")
+        self.assertAlmostEqual(exposure.control["asked"], 0.45, places=2)
+        exposure.slider.setValue(exposure._tick(0.10))
+        kept = {item["op"]: item["value"]
+                for item in page.preset_operations()}
+        self.assertAlmostEqual(kept["tone.exposure"], 0.10, places=2)
+
+    def test_an_operation_switched_off_is_not_kept(self):
+        self.own_presets()
+        page = self.page()
+        shadows = self.control(page, "tone.shadow")
+        shadows.enabled.setChecked(False)
+        self.assertNotIn(
+            "tone.shadow", [item["op"] for item in page.preset_operations()])
+
+    def test_saying_no_to_the_name_saves_nothing(self):
+        from opencull_gui import presets
+
+        self.own_presets()
+        page = self.page()
+        with mock.patch.object(
+            page, "ask_preset_name", return_value=("", False)
+        ):
+            page.save_preset()
+        self.assertEqual(presets.saved(), [])
+
+    def test_a_refused_save_says_why_and_keeps_the_page_usable(self):
+        from opencull_gui import presets
+
+        self.own_presets()
+        page = self.page()
+        with mock.patch.object(page, "preset_operations", return_value=[]), \
+             mock.patch.object(
+                 page, "ask_preset_name", return_value=("Empty", True)):
+            page.save_preset()
+        self.assertEqual(presets.saved(), [])
+        self.assertTrue(page.status.text())
+        self.assertEqual(page.status.property("tone"), "alarm")
+
     def test_an_adjusted_proof_is_cached_apart_from_the_suggested_one(self):
         page = self.page()
         exposure = self.control(page, "tone.exposure")

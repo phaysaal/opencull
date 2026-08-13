@@ -2408,8 +2408,11 @@ class GuiJobTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             photos = Path(temporary) / "photos"; photos.mkdir()
             workspace = development_workspace(photos)
+            # Presets are offered everywhere, whatever anybody has said
+            # about the frame; what this is about is the suggestions.
             self.assertEqual(
-                [item["id"] for item in workspace.treatments("A.JPG")],
+                [item["id"] for item in workspace.treatments("A.JPG")
+                 if item.get("kind") != "preset"],
                 ["calibrated", "as-shot"])
 
     def test_the_baseline_renders_without_any_edit_direction(self):

@@ -44,6 +44,8 @@ from scan import RAW_EXTENSIONS, open_preview
 from . import dialogs
 from .adjustments import apply as apply_adjustments
 from .jobs import JobError
+from .presets import presets as preset_library
+from .presets import recipe_for as preset_recipe
 from .project import load_project, project_sha256, update_project
 from .raw_sources import RawSourceStore
 from .shortlist import ShortlistError
@@ -154,6 +156,19 @@ class DevelopmentWorkspace:
         self.decoders = available_decoders() if decoders is None else set(decoders)
         self.project: dict[str, Any] = load_project(project_path)
         self._native_locks: dict[str, threading.Lock] = {}
+        # Where the photographer's own presets are read from. A test, and
+        # an installation with several accounts, need this to be somewhere
+        # other than the one place the application would find on its own.
+        self.presets_root: Path | None = None
+
+    def presets(self) -> list[dict[str, Any]]:
+        """Every preset available to this project.
+
+        Read each time rather than held: a preset kept on the fine-tuning
+        page should be on the develop page's list without reopening the
+        project, and reading nine small files costs nothing worth caching.
+        """
+        return preset_library(self.presets_root)
 
     def bind(self, project_path: Path, project_layout: dict[str, Path]) -> None:
         """Follow a project that has moved, as migration moves it."""
@@ -295,6 +310,16 @@ class DevelopmentWorkspace:
                 "name": str(item.get("name") or "Imported recipe"),
                 "intent": f"Imported from {Path(str(item.get('source_path', ''))).name}",
                 "kind": "imported"})
+        # Presets sit below what was written for this photograph and above
+        # the camera's own frame: a stated look is a weaker claim than an
+        # answer about this scene and a stronger one than no edit at all.
+        for preset in self.presets():
+            available.append({
+                "id": str(preset["id"]),
+                "name": str(preset["name"]),
+                "intent": str(preset.get("intent") or ""),
+                "kind": "preset",
+                "origin": str(preset.get("origin") or "built-in")})
         available.append({
             "id": "as-shot", "name": "As shot",
             "intent": "The camera's own rendering of this frame, delivered "
@@ -313,7 +338,11 @@ class DevelopmentWorkspace:
         by definition -- so there is no claim to check and this answers
         empty rather than inventing one.
         """
-        if style == "calibrated":
+        if style == "calibrated" or style.startswith(("preset-", "saved-")):
+            # A preset states a look; it says nothing about this
+            # photograph, so there is no claim for verification to check.
+            # Asking a model whether a preset did what it promised is
+            # asking about a promise nobody made.
             return ""
         entry = next((item for item in self.payload().get("candidates", [])
                       if item.get("photo") == photo), None)
@@ -398,8 +427,10 @@ class DevelopmentWorkspace:
         workspace = self.payload()
         entry = next((item for item in workspace.get("candidates", [])
                       if item.get("photo") == photo), None)
+        preset = next(
+            (item for item in self.presets() if item["id"] == style), None)
         if entry is None:
-            if style != "calibrated":
+            if style != "calibrated" and preset is None:
                 raise ValueError("photograph has no edit direction")
             # The baseline interprets nothing, so it needs no direction. Only
             # the RAW match matters, and that is indexed separately.
@@ -421,7 +452,7 @@ class DevelopmentWorkspace:
         source_kind = "raw" if source.suffix.casefold() not in {".jpg", ".jpeg"} else "jpeg"
         recipe_value = entry.get(f"{style}_recipe")
         portable = None
-        if style not in builtin_styles:
+        if style not in builtin_styles and preset is None:
             portable = next((
                 item for item in workspace.get("recipes", [])
                 if isinstance(item, dict)
@@ -443,6 +474,12 @@ class DevelopmentWorkspace:
                 "coverage": {"instructions": 0, "executable": 0,
                              "guardrails": 0, "unsupported": 0},
             }
+        elif preset is not None:
+            # A preset is already compiled -- it was compiled when it was
+            # written, or when it was kept -- so nothing is parsed here.
+            # What renders is exactly what the preset says, and the only
+            # thing this frame contributes is what it is.
+            recipe = preset_recipe(preset, photo, source_kind)
         elif portable is not None:
             if not isinstance(recipe_value, dict) or not isinstance(
                 recipe_value.get("operations"), list

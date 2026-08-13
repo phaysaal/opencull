@@ -29,6 +29,16 @@ from opencull_gui.report import load_report  # noqa: E402
 NAMES = ["A.JPG", "B.JPG", "C.JPG"]
 
 
+def written(offered):
+    """The treatments written for the photograph, without the presets.
+
+    Presets are offered for every frame whatever anybody has said about
+    it, so a test asking what was *suggested* has to leave them out or it
+    is asking a different question.
+    """
+    return [item for item in offered if item.get("kind") != "preset"]
+
+
 def build_shoot(root: Path) -> tuple[Path, Path]:
     photos = root / "photos"
     photos.mkdir(parents=True, exist_ok=True)
@@ -141,12 +151,12 @@ class SuggestedTreatmentTests(unittest.TestCase):
 
     def test_without_an_assessment_only_the_baseline_is_offered(self):
         self.assertEqual(
-            [item["id"] for item in self.workspace().treatments("A.JPG")],
+            [item["id"] for item in written(self.workspace().treatments("A.JPG"))],
             ["calibrated", "as-shot"])
 
     def test_suggested_treatments_reach_the_develop_page(self):
         assess_and_suggest(self.root, self.report_path, self.photos_path)
-        offered = self.workspace().treatments("A.JPG")
+        offered = written(self.workspace().treatments("A.JPG"))
         self.assertEqual(
             [item["id"] for item in offered],
             ["calibrated", "standard", "signature", "as-shot"])
@@ -157,7 +167,7 @@ class SuggestedTreatmentTests(unittest.TestCase):
         assess_and_suggest(
             self.root, self.report_path, self.photos_path, marked=("A.JPG",))
         self.assertEqual(
-            [item["id"] for item in self.workspace().treatments("B.JPG")],
+            [item["id"] for item in written(self.workspace().treatments("B.JPG"))],
             ["calibrated", "as-shot"])
 
     def test_a_shortlist_from_a_different_cull_is_treated_as_absent(self):
@@ -173,7 +183,7 @@ class SuggestedTreatmentTests(unittest.TestCase):
         shortlist.write_text(json.dumps(value), encoding="utf-8")
         # The develop page still opens; it simply has no suggestions.
         self.assertEqual(
-            [item["id"] for item in self.workspace().treatments("A.JPG")],
+            [item["id"] for item in written(self.workspace().treatments("A.JPG"))],
             ["calibrated", "as-shot"])
 
     def test_a_suggested_treatment_renders(self):
@@ -443,17 +453,30 @@ class DevelopPageTests(unittest.TestCase):
             self.assertIn(
                 item.data(Qt.ItemDataRole.UserRole), item.text())
 
+    def rows_with_a_treatment(self, page):
+        """The rows that stand for something renderable.
+
+        The presets heading is a row too, and it has no treatment behind
+        it -- it is the control that folds the ones below it away.
+        """
+        from opencull_qt.develop import PRESETS_ROW
+
+        return [page.treatments.item(row)
+                for row in range(page.treatments.count())
+                if page.treatments.item(row).data(
+                    Qt.ItemDataRole.UserRole) != PRESETS_ROW]
+
     def test_every_treatment_shows_what_it_does_to_this_frame(self):
         page = self.suggested_page(marked=(NAMES[0],))
-        self.assertGreater(page.treatments.count(), 1)
+        rows = self.rows_with_a_treatment(page)
+        self.assertGreater(len(rows), 1)
         self.assertTrue(
             self.wait_for(lambda: all(
-                not page.treatments.item(row).icon().isNull()
-                for row in range(page.treatments.count()))),
+                not item.icon().isNull()
+                for item in self.rows_with_a_treatment(page))),
             "the treatments were never given their previews")
         # Rendered once and kept: coming back to a frame costs nothing.
-        self.assertEqual(
-            len(page.previews), page.treatments.count())
+        self.assertEqual(len(page.previews), len(rows))
         before = dict(page.previews)
         page._request_previews()
         self.assertEqual(page.previews, before)
@@ -504,11 +527,152 @@ class DevelopPageTests(unittest.TestCase):
 
     def test_a_treatment_tooltip_keeps_its_name_on_the_first_line(self):
         page = self.suggested_page(marked=(NAMES[0],))
-        rows = range(page.treatments.count())
-        named = [page.treatments.item(row).toolTip().split("\n")[0]
-                 for row in rows]
+        named = [item.toolTip().split("\n")[0]
+                 for item in self.rows_with_a_treatment(page)]
         self.assertEqual(
-            named, [item["name"] for item in page.available])
+            named, [item["name"] for item in written(page.available)])
+
+    # --- presets ---------------------------------------------------------
+
+    def preset_rows(self, page):
+        from opencull_qt.develop import PRESETS_ROW
+
+        return [page.treatments.item(row)
+                for row in range(page.treatments.count())
+                if str(page.treatments.item(row).data(
+                    Qt.ItemDataRole.UserRole)).startswith(("preset-", "saved-"))
+                and page.treatments.item(row).data(
+                    Qt.ItemDataRole.UserRole) != PRESETS_ROW]
+
+    def heading_row(self, page):
+        from opencull_qt.develop import PRESETS_ROW
+
+        return next(
+            (page.treatments.item(row)
+             for row in range(page.treatments.count())
+             if page.treatments.item(row).data(
+                 Qt.ItemDataRole.UserRole) == PRESETS_ROW), None)
+
+    def test_presets_are_offered_on_a_folder_nobody_has_assessed(self):
+        """They belong to the photographer, not to the assessment."""
+        page = self.page()
+        offered = [item for item in page.available
+                   if item.get("kind") == "preset"]
+        self.assertGreater(len(offered), 4)
+
+    def test_presets_are_folded_away_until_they_are_asked_for(self):
+        page = self.page()
+        self.assertEqual(self.preset_rows(page), [])
+        heading = self.heading_row(page)
+        self.assertIsNotNone(heading)
+        self.assertIn("PRESETS", heading.text())
+
+    def test_clicking_the_heading_opens_and_shuts_the_presets(self):
+        page = self.page()
+        page._clicked_treatment(self.heading_row(page))
+        self.assertEqual(
+            len(self.preset_rows(page)),
+            len([item for item in page.available
+                 if item.get("kind") == "preset"]))
+        page._clicked_treatment(self.heading_row(page))
+        self.assertEqual(self.preset_rows(page), [])
+
+    def test_the_heading_cannot_become_the_treatment_that_renders(self):
+        page = self.page()
+        before = page.treatment
+        heading = self.heading_row(page)
+        page.treatments.setCurrentItem(heading)
+        self.assertEqual(page.treatment, before)
+        self.assertNotEqual(page.treatment, "")
+
+    def test_the_list_grows_only_by_what_it_shows(self):
+        page = self.page()
+        shut = page.treatments.height()
+        page.toggle_presets()
+        self.assertGreater(page.treatments.height(), shut)
+        page.toggle_presets()
+        self.assertEqual(page.treatments.height(), shut)
+
+    def test_opening_the_presets_does_not_push_the_page_off_the_window(self):
+        """Thirteen tiles is taller than the window they are shown in.
+
+        Below the list is the button that develops what has been chosen.
+        A list that grows without limit takes it off the bottom of the
+        screen, and the photographer can select a preset and not reach
+        the control that renders it.
+        """
+        page = self.page()
+        page.resize(1200, 820)
+        page.show()
+        page.toggle_presets()
+        self.application.processEvents()
+        self.assertLess(page.treatments.height(), page.height())
+        self.assertGreater(
+            page.develop_button.visibleRegion().boundingRect().height(), 0,
+            "the develop button was pushed out of the window")
+
+    def test_no_preset_is_rendered_before_anybody_asks_for_one(self):
+        """Nine looks across a selection is the sweep several times over."""
+        page = self.suggested_page(marked=(NAMES[0], NAMES[1]))
+        page.toggle_presets()
+        asked = {treatment for _photo, treatment in page.thumbs._asked}
+        self.assertTrue(asked, "nothing was queued at all")
+        self.assertEqual(
+            [item for item in asked if item.startswith("preset-")], [])
+
+    def test_choosing_a_preset_asks_for_its_picture(self):
+        page = self.page()
+        page.toggle_presets()
+        chosen = self.preset_rows(page)[0]
+        page.treatments.setCurrentItem(chosen)
+        wanted = chosen.data(Qt.ItemDataRole.UserRole)
+        self.assertEqual(page.treatment, wanted)
+        self.assertIn((page.current, wanted), page.thumbs._asked)
+
+    def test_a_preset_renders_and_is_not_the_baseline(self):
+        page = self.page()
+        page.toggle_presets()
+        page.treatments.setCurrentItem(self.preset_rows(page)[0])
+        page.develop_current()
+        self.assertTrue(
+            self.wait_for(lambda: (page.current, page.treatment)
+                          in page.rendered),
+            "the preset never rendered")
+        treated = page.rendered[(page.current, page.treatment)]
+        base = self.workspace_of(page).recipe_preview(
+            page.current, "calibrated", "default", "markesteijn-3-pass",
+            treated.width())
+        self.assertTrue(base.is_file())
+
+    def test_a_preset_makes_no_claim_so_nothing_verifies_it(self):
+        page = self.suggested_page(marked=(NAMES[0],))
+        page.toggle_presets()
+        page.treatments.setCurrentItem(self.preset_rows(page)[0])
+        self.assertEqual(page.suggestion(), "")
+        self.assertFalse(page.verify_button.isEnabled())
+
+    def test_a_preset_the_photographer_kept_is_offered_everywhere(self):
+        from unittest import mock
+
+        from opencull_gui import presets
+
+        # Its own folder: a preset saved here must not still be in the
+        # list when the next test asks what is offered.
+        mine = Path(self._temporary.name) / "my-presets"
+        self.enterContext(mock.patch.dict(
+            "os.environ", {presets.PRESETS_ENVIRONMENT: str(mine)}))
+        presets.save("My own look", [{
+            "op": "tone.contrast", "value": 9.0, "unit": "percent",
+            "mode": "delta"}])
+        page = self.page()
+        page.toggle_presets()
+        names = [item.text().strip() for item in self.preset_rows(page)]
+        self.assertIn("My own look", names)
+        # The photographer's own come first, before what shipped.
+        self.assertEqual(names[0], "My own look")
+
+    def workspace_of(self, page):
+        return page.workspace
 
     def test_previews_are_rendered_for_every_treated_frame_not_only_one(self):
         """The twentieth frame should not be rendered while you look at it."""
@@ -714,7 +878,8 @@ class DevelopPageTests(unittest.TestCase):
         # state of a folder that has just been culled.
         page = self.page()
         self.assertEqual(
-            [item["id"] for item in page.available], ["calibrated", "as-shot"])
+            [item["id"] for item in written(page.available)],
+            ["calibrated", "as-shot"])
         self.assertTrue(page.develop_button.isEnabled())
 
     def test_nothing_is_rendered_until_it_is_asked_for(self):

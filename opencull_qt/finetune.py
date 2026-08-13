@@ -20,6 +20,7 @@ rendering against a claim it no longer makes.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QSize, Qt, QThreadPool, Signal
@@ -27,6 +28,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QFrame,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -38,7 +40,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from opencull_gui import adjustments
+from opencull_gui import adjustments, presets
 from opencull_gui.development import DevelopmentWorkspace
 
 from . import theme
@@ -48,6 +50,10 @@ from .widgets import tooltip
 
 PHOTO_ROW = 30
 TREATMENT_ROW = 34
+# Treatments and presets share this list, so it can be thirteen rows long.
+# Past six it scrolls rather than growing, because the controls below it
+# are what the page is for.
+TREATMENT_ROWS_SHOWN = 6
 
 # Sliders are integers. Every control is carried at this resolution and
 # divided back down, which is finer than any of the units are read at.
@@ -288,6 +294,17 @@ class FineTunePage(QWidget):
         self.reset_button.clicked.connect(self.reset)
         actions.addWidget(self.reset_button)
         actions.addStretch(1)
+        self.preset_button = QPushButton("Save as preset…")
+        self.preset_button.setObjectName("ghost")
+        self.preset_button.setFont(theme.body(10))
+        self.preset_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.preset_button.setToolTip(tooltip(
+            "Keep these adjustments as a look you can apply to any "
+            "photograph. The numbers travel; the crop and the "
+            "straightening stay with this frame, because they are about "
+            "where its subject is."))
+        self.preset_button.clicked.connect(self.save_preset)
+        actions.addWidget(self.preset_button)
         layout.addLayout(actions)
 
         self.keep_button = QPushButton("Keep this version")
@@ -357,7 +374,8 @@ class FineTunePage(QWidget):
             self.treatment_list.addItem(entry)
         self.treatment_list.blockSignals(False)
         self.treatment_list.setFixedHeight(
-            max(len(self.treatments), 1) * TREATMENT_ROW + 10)
+            min(max(len(self.treatments), 1), TREATMENT_ROWS_SHOWN)
+            * TREATMENT_ROW + 10)
         if self.treatments:
             self.treatment_list.setCurrentRow(0)
             self.show_treatment(str(self.treatments[0].get("id")))
@@ -553,6 +571,50 @@ class FineTunePage(QWidget):
         self._report(
             f"Kept as {variant}. It is on the export page beside the "
             "treatment it came from.", "ok")
+
+    # --- keeping a look ---------------------------------------------------
+
+    def preset_operations(self) -> list[dict[str, Any]]:
+        """This version's adjustments, as a look rather than as a render.
+
+        The compiled recipe with the photographer's moves folded in is
+        exactly what the renderer would execute, which is what makes it
+        worth keeping: what gets saved is what they were looking at, not
+        the prose that started it.
+        """
+        if not self.recipe:
+            return []
+        applied = adjustments.apply(self.recipe, self.changes)
+        return presets.portable_operations(applied.get("operations", []))
+
+    def save_preset(self) -> None:
+        name, said = self.ask_preset_name()
+        if not said:
+            return
+        try:
+            kept = presets.save(
+                name, self.preset_operations(),
+                intent=f"Kept from the {self._treatment_name()} treatment "
+                       f"of {self.current}.",
+                origin_note={"photo": self.current,
+                             "treatment": self.treatment},
+                root=self.workspace.presets_root)
+        except presets.PresetError as exc:
+            self._report(str(exc), "alarm")
+            return
+        self._report(
+            f"Kept as the preset “{kept['name']}”. It is on every "
+            "photograph's treatment list, under Presets.", "ok")
+
+    def ask_preset_name(self) -> tuple[str, bool]:
+        suggested = f"{self._treatment_name()} — {Path(self.current).stem}"
+        return QInputDialog.getText(
+            self, "Save as preset", "Call this look:", text=suggested)
+
+    def _treatment_name(self) -> str:
+        return next(
+            (str(item["name"]) for item in self.treatments
+             if item["id"] == self.treatment), self.treatment)
 
     def _report(self, message: str, tone: str = "") -> None:
         self.status.setText(message)

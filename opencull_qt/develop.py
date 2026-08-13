@@ -67,6 +67,15 @@ TREATMENT_ROW = 34
 # Room for a thumbnail and the name beside it, in both lists.
 PHOTO_ROW = 74
 TREATMENT_TILE = 84
+# The presets heading is a row of text, not a row with a picture in it.
+PRESETS_HEADING = 30
+# With the presets open the list is thirteen tiles long, which is taller
+# than the window it lives in -- and the panel below it holds the button
+# that develops the thing being chosen. Past this many it scrolls.
+TILES_SHOWN = 5
+# What the heading row carries where a treatment carries its id. No
+# treatment can be called this, so the two can never be confused.
+PRESETS_ROW = "\u00b7presets\u00b7"
 
 # Small enough that five of them for one frame is a wait somebody will
 # sit through, large enough to tell two treatments apart. Cached on disk
@@ -732,6 +741,10 @@ class DevelopPage(QWidget):
         self.current = self.photo_names[0] if self.photo_names else ""
         self.treatment = ""
         self.available: list[dict] = []
+        # Presets start folded away. Somebody who mostly develops what
+        # was written for the frame should not scroll past nine looks to
+        # reach the camera's own rendering.
+        self.presets_open = False
         self.rendered: dict[tuple[str, str], QPixmap] = {}
 
         # One pool for both renderers. A render saturates the machine on
@@ -918,8 +931,7 @@ class DevelopPage(QWidget):
         # Choosing a treatment by hand is asking to see it at proof size.
         # Moving between frames selects one too, and that must not spend a
         # full render nobody asked for, so only the click renders.
-        self.treatments.itemClicked.connect(
-            lambda _item: self.develop_current(arriving=True))
+        self.treatments.itemClicked.connect(self._clicked_treatment)
         layout.addWidget(self.treatments)
 
         self.intent = QLabel("")
@@ -1159,31 +1171,84 @@ class DevelopPage(QWidget):
             self._report(str(exc), "alarm")
         self.available = available
         previous = self.treatment
+        written = [item for item in available if item.get("kind") != "preset"]
+        stated = [item for item in available if item.get("kind") == "preset"]
+        # A preset the photographer is already on keeps the section open,
+        # so refilling the list on the way to the next frame does not shut
+        # the thing they are working in.
+        if any(item["id"] == previous for item in stated):
+            self.presets_open = True
         self.treatments.blockSignals(True)
         self.treatments.clear()
-        for item in available:
-            entry = QListWidgetItem(f"  {item['name']}")
-            entry.setData(Qt.ItemDataRole.UserRole, item["id"])
-            entry.setToolTip(tooltip(
-                f"{item['name']}\n{item.get('intent', '')}".strip()))
-            entry.setSizeHint(QSize(0, TREATMENT_TILE))
-            preview = self.previews.get((self.current, str(item["id"])))
-            if preview is not None:
-                entry.setIcon(plain_icon(preview))
-            self.treatments.addItem(entry)
+        for item in written:
+            self.treatments.addItem(self._treatment_row(item))
+        if stated:
+            self.treatments.addItem(self._presets_row(len(stated)))
+            if self.presets_open:
+                for item in stated:
+                    self.treatments.addItem(self._treatment_row(item))
         self.treatments.blockSignals(False)
         self._request_previews()
         self._size_treatments()
-        ids = [item["id"] for item in available]
-        row = ids.index(previous) if previous in ids else 0
+        row = self._row_of(previous)
         if available:
-            self.treatments.setCurrentRow(row)
-            self._chose_treatment(row)
+            self.treatments.setCurrentRow(max(row, 0))
+            self._chose_treatment(max(row, 0))
         else:
             self.treatment = ""
             self.intent.setText(
                 "This photograph has no treatment available.")
             self.develop_button.setEnabled(False)
+
+    def _treatment_row(self, item: dict) -> QListWidgetItem:
+        entry = QListWidgetItem(f"  {item['name']}")
+        entry.setData(Qt.ItemDataRole.UserRole, item["id"])
+        entry.setToolTip(tooltip(
+            f"{item['name']}\n{item.get('intent', '')}".strip()))
+        entry.setSizeHint(QSize(0, TREATMENT_TILE))
+        preview = self.previews.get((self.current, str(item["id"])))
+        if preview is not None:
+            entry.setIcon(plain_icon(preview))
+        return entry
+
+    def _presets_row(self, count: int) -> QListWidgetItem:
+        """The heading that opens and closes the presets, and is one itself.
+
+        Nine presets at tile height are eight hundred pixels of list in a
+        panel that has room for four treatments, and most of the time the
+        photographer wants the treatment written for this photograph. So
+        they fold, and folding is one click on the row that says so.
+        """
+        entry = QListWidgetItem(
+            f"  {'▾' if self.presets_open else '▸'}  PRESETS · {count}")
+        entry.setData(Qt.ItemDataRole.UserRole, PRESETS_ROW)
+        entry.setToolTip(tooltip(
+            "Looks you can apply to any photograph. A preset says nothing "
+            "about this frame in particular, so nothing verifies it."))
+        entry.setFont(theme.display(8))
+        entry.setSizeHint(QSize(0, PRESETS_HEADING))
+        # Clickable, so it can be opened; unselectable, so it can never
+        # become the treatment that gets rendered.
+        entry.setFlags(Qt.ItemFlag.ItemIsEnabled)
+        return entry
+
+    def _row_of(self, treatment: str) -> int:
+        for row in range(self.treatments.count()):
+            if self.treatments.item(row).data(
+                    Qt.ItemDataRole.UserRole) == treatment:
+                return row
+        return -1
+
+    def _at_row(self, row: int) -> dict | None:
+        if not (0 <= row < self.treatments.count()):
+            return None
+        chosen = self.treatments.item(row).data(Qt.ItemDataRole.UserRole)
+        return next(
+            (item for item in self.available if item["id"] == chosen), None)
+
+    def toggle_presets(self) -> None:
+        self.presets_open = not self.presets_open
+        self._fill_treatments()
 
     def _size_treatments(self) -> None:
         """Let the list be as tall as its contents and no taller.
@@ -1191,20 +1256,43 @@ class DevelopPage(QWidget):
         Two treatments in a panel-high box reads as a list that failed to
         load the rest.
         """
-        rows = max(self.treatments.count(), 1)
+        rows = [self.treatments.item(row).sizeHint().height()
+                for row in range(self.treatments.count())]
         # The list's own 4px padding top and bottom, and its 1px border.
-        self.treatments.setFixedHeight(rows * TREATMENT_TILE + 10)
+        wanted = (sum(rows) or TREATMENT_TILE) + 10
+        self.treatments.setFixedHeight(
+            min(wanted, TILES_SHOWN * TREATMENT_TILE + PRESETS_HEADING + 10))
+
+    def _clicked_treatment(self, item: QListWidgetItem) -> None:
+        """A click on a treatment asks to see it; a click on the heading folds."""
+        if item.data(Qt.ItemDataRole.UserRole) == PRESETS_ROW:
+            self.toggle_presets()
+            return
+        self.develop_current(arriving=True)
 
     def _chose_treatment(self, row: int) -> None:
-        if not (0 <= row < len(self.available)):
+        chosen = self._at_row(row)
+        if chosen is None:
             return
-        chosen = self.available[row]
         self.treatment = str(chosen["id"])
         self.intent.setText(str(chosen.get("intent") or ""))
         self.develop_button.setEnabled(True)
         self.engine_note.setText(self._engine_note())
+        if chosen.get("kind") == "preset":
+            # Its picture was not swept for, so it is asked for now --
+            # once, for this frame, because this is the frame the
+            # photographer is looking at it on.
+            self._want_preview(self.current, str(chosen["id"]))
         self._show_treated()
         self._show_verdict()
+
+    def _want_preview(self, photo: str, treatment: str) -> None:
+        if not photo or (photo, treatment) in self.previews:
+            return
+        self.thumbs.want(
+            [(photo, treatment)],
+            {photo: (self.engine_for(photo), self._demosaic())})
+        self.thumbs.prefer(photo)
 
     def decoder_for(self, photo: str) -> dict:
         # The workspace decides, so what this says and what the renderer then
@@ -1277,7 +1365,14 @@ class DevelopPage(QWidget):
             settings[photo] = (self.engine_for(photo), demosaic)
             pairs.extend(
                 (photo, str(item["id"])) for item in treatments
-                if (photo, str(item["id"])) not in self.previews)
+                # A preset is a look the photographer reaches for, not one
+                # of the answers written about this frame, so it is not
+                # rendered ahead of being asked for. Nine of them across a
+                # whole selection would be the sweep several times over,
+                # and on RAW frames that is minutes of demosaicing for
+                # pictures nobody has looked at.
+                if item.get("kind") != "preset"
+                and (photo, str(item["id"])) not in self.previews)
         self.thumbs.want(pairs, settings)
         if self.current:
             self.thumbs.prefer(self.current)

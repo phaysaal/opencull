@@ -12,6 +12,11 @@ from typing import Any
 IR_FORMAT = "opencull-development-recipe-v1"
 CORPUS_FORMAT = "opencull-development-corpus-v1"
 STYLES = ("standard", "signature", "creative", "personal")
+# A preset is compiled by the same compiler as a suggestion -- same
+# grammar, same bounds, same diagnostics -- but it is nobody's answer
+# about a photograph, so it is not one of the styles a model may claim.
+PRESET_STYLE = "preset"
+COMPILABLE = (*STYLES, PRESET_STYLE)
 RANGES = {
     "tone.exposure": (-5.0, 5.0, "EV"),
     "tone.contrast": (-100.0, 100.0, "percent"),
@@ -380,7 +385,7 @@ def compile_recipe(
     photo: str, style: str, title: str, intent: str, recipe: Any,
     guardrails: str, source_kind: str = "raw",
 ) -> dict[str, Any]:
-    if style not in STYLES or source_kind not in {"raw", "jpeg"}:
+    if style not in COMPILABLE or source_kind not in {"raw", "jpeg"}:
         raise RecipeCompileError("invalid style or source kind")
     if isinstance(recipe, str):
         try:

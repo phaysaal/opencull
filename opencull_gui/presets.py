@@ -1,0 +1,383 @@
+"""Presets: a look you can reach for, and a look you can keep.
+
+Every treatment in this application so far was written for one
+photograph by a model that had looked at it. That is the right default
+and it is not the whole of editing. Sometimes the answer is a look you
+already know -- a grade you use, a monochrome you like -- and asking a
+model to rediscover it frame by frame is slower, costs money, and
+arrives slightly different every time.
+
+A preset is that: a fixed set of adjustments, stated once, applied to
+anything. It makes no claim about the photograph in front of it. That is
+the difference from a treatment, and it is why a preset is never
+verified -- there is no claim to check.
+
+Presets work better here than they do in most raw editors, and the
+reason is worth writing down. A preset normally lands on whatever the
+decoder produced, so the same numbers mean different things on every
+frame and the photographer spends the day re-tuning. Here a treatment
+starts from the camera-matched baseline: the raw developed and then
+matched, per channel, to the rendering the camera made of that same
+scene. The frame is normalised before the preset touches it, so a preset
+means closer to the same thing across a shoot.
+
+Two kinds live here. The built-in ones are written below in the same
+grammar the models write in, and compiled by the same compiler -- so
+they are readable, they are checked the way a suggestion is checked, and
+there is one grammar in the application rather than two. The saved ones
+are the photographer's own, kept outside any project, because a look
+belongs to the person and not to one shoot.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import re
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+from recipe_compiler import PRESET_STYLE, RecipeCompileError, compile_recipe
+
+from .appdirs import support_dir
+
+PRESET_FORMAT = "darkimiya-preset-v1"
+# Where the photographer's own presets are kept, when it is not
+# the ordinary place.
+PRESETS_ENVIRONMENT = "DARKIMIYA_PRESETS"
+
+# A crop and a rotation belong to one photograph -- they are about where
+# its subject is, not about how it should look -- so they are left behind
+# when a tuned treatment is kept as a preset. Applying somebody else's
+# crop to a frame it was not made for damages the frame.
+UNPORTABLE = ("geometry.",)
+
+# The built-in set, written as the instructions a preset is. Each is one
+# thing done clearly rather than a slight variation of its neighbour: a
+# wall of near-duplicates is harder to choose from than eight presets
+# that disagree with each other.
+BUILT_IN: tuple[dict[str, Any], ...] = (
+    {
+        "slug": "clean-contrast",
+        "name": "Clean contrast",
+        "intent": "The baseline with its back straightened: a little more "
+                  "contrast, the black and white points opened, and enough "
+                  "clarity to separate what is in front from what is behind.",
+        "instructions": {
+            "global_exposure": ["Contrast +12"],
+            "hdr_levels_curves": ["Blacks -5", "Whites +5"],
+            "detail_and_noise": ["Clarity +8"],
+        },
+    },
+    {
+        "slug": "warm-daylight",
+        "name": "Warm daylight",
+        "intent": "Late-afternoon warmth without the whole frame going "
+                  "orange: the temperature moves, the warm colours gain a "
+                  "little, and the shadows open so the warmth reaches them.",
+        "instructions": {
+            "white_balance_and_color": ["Temperature +400 kelvin", "Tint +4"],
+            "color_editor": ["Orange saturation +8", "Yellow saturation +5"],
+            "hdr_levels_curves": ["Shadows +8"],
+        },
+    },
+    {
+        "slug": "cool-shade",
+        "name": "Cool shade",
+        "intent": "For open shade and overcast light, where the frame comes "
+                  "back flat and blue-grey: the blues become deliberate "
+                  "rather than accidental, and the highlights come down.",
+        "instructions": {
+            "white_balance_and_color": ["Temperature -350 kelvin"],
+            "color_editor": ["Blue saturation +10", "Cyan saturation +8"],
+            "hdr_levels_curves": ["Highlights -8", "Blacks -4"],
+            "detail_and_noise": ["Clarity +6"],
+        },
+    },
+    {
+        "slug": "monochrome",
+        "name": "Monochrome",
+        "intent": "Colour removed and the tones asked to carry the "
+                  "photograph on their own, with the contrast and local "
+                  "separation that asks for.",
+        "instructions": {
+            "global_exposure": ["Saturation -100", "Contrast +14"],
+            "detail_and_noise": ["Clarity +10", "Structure +6"],
+        },
+    },
+    {
+        "slug": "monochrome-red-filter",
+        "name": "Monochrome, red filter",
+        "intent": "The monochrome a red filter makes: skies driven down, "
+                  "skin and stone lifted, before the colour is taken away. "
+                  "The filtering happens first, which is what makes it a "
+                  "filter rather than a tint.",
+        "instructions": {
+            # Order is the whole trick: these move the brightness of each
+            # colour family while there is still colour to move, and the
+            # desaturation below then reads those brightnesses as grey.
+            "color_editor": [
+                "Red lightness +22", "Orange lightness +18",
+                "Blue lightness -24", "Cyan lightness -18",
+            ],
+            "global_exposure": ["Saturation -100", "Contrast +10"],
+            "detail_and_noise": ["Clarity +8"],
+        },
+    },
+    {
+        "slug": "high-key",
+        "name": "High key",
+        "intent": "Bright and open, with the shadows lifted off the floor "
+                  "and the contrast softened so nothing in the frame reads "
+                  "as heavy.",
+        "instructions": {
+            "global_exposure": ["Exposure +0.35", "Contrast -10"],
+            "hdr_levels_curves": ["Shadows +20", "Blacks +10",
+                                  "Highlights -6"],
+        },
+    },
+    {
+        "slug": "low-key",
+        "name": "Low key",
+        "intent": "Weight and shadow: the frame settles down, the darks "
+                  "close up, and a soft vignette keeps the eye off the "
+                  "edges.",
+        "instructions": {
+            "global_exposure": ["Exposure -0.25", "Contrast +12"],
+            "hdr_levels_curves": ["Shadows -16", "Blacks -10", "Whites +4"],
+            "finishing_and_output": ["Vignette -14"],
+        },
+    },
+    {
+        "slug": "landscape-separation",
+        "name": "Landscape separation",
+        "intent": "Depth by colour rather than by contrast: the greens, the "
+                  "water and the far haze are pulled apart from each other "
+                  "so the distance between them can be seen.",
+        "instructions": {
+            "color_editor": [
+                "Green saturation +12", "Green lightness -6",
+                "Blue saturation +10", "Cyan saturation +12",
+                "Orange saturation +5",
+            ],
+            "detail_and_noise": ["Clarity +12", "Dehaze +10"],
+            "hdr_levels_curves": ["Blacks -4"],
+        },
+    },
+    {
+        "slug": "portrait-skin",
+        "name": "Portrait skin",
+        "intent": "Restraint where it matters: skin kept believable and a "
+                  "little brighter, clarity taken off so texture is not "
+                  "sharpened into damage, and the background left alone.",
+        "instructions": {
+            "color_editor": ["Skin saturation -3", "Skin lightness +5"],
+            "detail_and_noise": ["Clarity -8"],
+            "hdr_levels_curves": ["Shadows +8", "Highlights -5"],
+        },
+    },
+)
+
+
+class PresetError(ValueError):
+    """A preset could not be read, written, or compiled."""
+
+
+def presets_dir() -> Path:
+    """Where a photographer's own presets live.
+
+    Outside every project: a look is the photographer's, not the shoot's,
+    and one kept during an Alps edit should be there for the next wedding.
+    Naming a folder moves them all -- a shared drive, so two machines edit
+    with the same looks, or somewhere a test can write without touching
+    the presets of whoever is running it.
+    """
+    named = os.environ.get(PRESETS_ENVIRONMENT, "").strip()
+    if named:
+        return Path(named).expanduser()
+    return support_dir() / "Presets"
+
+
+def _slug(name: str) -> str:
+    cleaned = re.sub(r"[^a-z0-9]+", "-", str(name).casefold()).strip("-")
+    return cleaned or "preset"
+
+
+def _compiled(slug: str, name: str, intent: str,
+              instructions: dict[str, list[str]]) -> list[dict[str, Any]]:
+    """The operations a preset's instructions come to.
+
+    Compiled by the recipe compiler rather than written as operations by
+    hand, so a built-in preset is held to exactly the bounds a model's
+    answer is held to, and a typo in one is a compile error here instead
+    of a strange rendering later.
+    """
+    try:
+        recipe = compile_recipe(
+            "", PRESET_STYLE, name, intent, instructions, "", "raw")
+    except RecipeCompileError as exc:
+        raise PresetError(f"preset {slug!r} will not compile: {exc}") from exc
+    unsupported = [
+        item["instruction"] for item in recipe.get("diagnostics", [])]
+    if unsupported:
+        raise PresetError(
+            f"preset {slug!r} has instructions the compiler cannot execute: "
+            + "; ".join(unsupported))
+    if not recipe["operations"]:
+        raise PresetError(f"preset {slug!r} compiles to nothing")
+    return recipe["operations"]
+
+
+def built_in() -> list[dict[str, Any]]:
+    """The presets that ship with the application."""
+    made = []
+    for item in BUILT_IN:
+        made.append({
+            "format": PRESET_FORMAT,
+            "id": f"preset-{item['slug']}",
+            "name": item["name"],
+            "intent": item["intent"],
+            "origin": "built-in",
+            "instructions": item["instructions"],
+            "operations": _compiled(
+                item["slug"], item["name"], item["intent"],
+                item["instructions"]),
+        })
+    return made
+
+
+def _read(path: Path) -> dict[str, Any] | None:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(value, dict) or value.get("format") != PRESET_FORMAT:
+        return None
+    operations = value.get("operations")
+    if not isinstance(operations, list) or not operations:
+        return None
+    if any(not isinstance(item, dict) for item in operations):
+        return None
+    value["origin"] = "saved"
+    value.setdefault("id", f"saved-{path.stem}")
+    value.setdefault("name", path.stem)
+    value.setdefault("intent", "")
+    return value
+
+
+def saved(root: Path | None = None) -> list[dict[str, Any]]:
+    """The photographer's own presets, oldest first.
+
+    A preset file that cannot be read is skipped rather than raised: one
+    bad file in the folder should not take the whole list away, and the
+    list is drawn every time the develop page opens.
+    """
+    folder = Path(root) if root is not None else presets_dir()
+    if not folder.is_dir():
+        return []
+    found = [_read(path) for path in sorted(folder.glob("*.json"))]
+    return [item for item in found if item is not None]
+
+
+def presets(root: Path | None = None) -> list[dict[str, Any]]:
+    """Every preset there is: the photographer's own first, then the shipped."""
+    return saved(root) + built_in()
+
+
+def portable_operations(operations: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The part of a treatment that can honestly travel to another frame.
+
+    What the photographer switched off is not part of the look they are
+    keeping -- carrying it along as a disabled operation would put an
+    instruction into the preset that says to do nothing.
+    """
+    return [
+        json.loads(json.dumps(item)) for item in operations
+        if isinstance(item, dict)
+        and item.get("enabled", True) is not False
+        and not str(item.get("op", "")).startswith(UNPORTABLE)
+    ]
+
+
+def save(name: str, operations: list[dict[str, Any]], intent: str = "",
+         origin_note: dict[str, Any] | None = None,
+         root: Path | None = None) -> dict[str, Any]:
+    """Keep a set of adjustments as a preset of the photographer's own.
+
+    What is kept is the operations, not the prose that produced them: the
+    photographer has moved the numbers, and the numbers are what they
+    meant. Where those numbers came from is recorded beside them so the
+    preset can say what it is a memory of.
+    """
+    title = " ".join(str(name).split())[:80]
+    if not title:
+        raise PresetError("a preset needs a name")
+    portable = portable_operations(operations)
+    if not portable:
+        raise PresetError(
+            "there is nothing in this version that would mean the same on "
+            "another photograph")
+    digest = hashlib.sha256(json.dumps(
+        portable, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    folder = Path(root) if root is not None else presets_dir()
+    folder.mkdir(parents=True, exist_ok=True)
+    stem = f"{_slug(title)}-{digest[:8]}"
+    value = {
+        "format": PRESET_FORMAT,
+        "id": f"saved-{stem}",
+        "name": title,
+        "intent": str(intent).strip(),
+        "origin": "saved",
+        "saved_at": datetime.now(UTC).isoformat(),
+        "operations": portable,
+    }
+    if origin_note:
+        value["kept_from"] = origin_note
+    destination = folder / f"{stem}.json"
+    temporary = destination.with_suffix(".json.writing")
+    temporary.write_text(
+        json.dumps(value, indent=2, sort_keys=False), encoding="utf-8")
+    temporary.replace(destination)
+    return value
+
+
+def forget(preset_id: str, root: Path | None = None) -> bool:
+    """Remove one of the photographer's own presets. Built-ins cannot go."""
+    if not str(preset_id).startswith("saved-"):
+        return False
+    folder = Path(root) if root is not None else presets_dir()
+    destination = folder / f"{str(preset_id)[len('saved-'):]}.json"
+    if not destination.is_file():
+        return False
+    destination.unlink()
+    return True
+
+
+def recipe_for(preset: dict[str, Any], photo: str,
+               source_kind: str) -> dict[str, Any]:
+    """One preset, as a recipe the renderer will execute for one photograph."""
+    return {
+        "format": "opencull-development-recipe-v1",
+        "source_photo": photo,
+        "source_kind": source_kind,
+        "style": PRESET_STYLE,
+        "title": str(preset.get("name") or "Preset"),
+        "intent": str(preset.get("intent") or ""),
+        "working_space": "scene-linear-rec2020-d65",
+        "operations": json.loads(json.dumps(preset["operations"])),
+        "guardrails": [],
+        "diagnostics": [],
+        "coverage": {
+            "instructions": len(preset["operations"]),
+            "executable": len(preset["operations"]),
+            "guardrails": 0, "unsupported": 0,
+        },
+    }
+
+
+__all__ = [
+    "PRESETS_ENVIRONMENT", "PRESET_FORMAT", "PresetError", "built_in", "forget", "portable_operations",
+    "presets", "presets_dir", "recipe_for", "save", "saved",
+]
