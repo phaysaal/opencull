@@ -35,7 +35,22 @@ RANGES = {
     "detail.structure": (-100.0, 100.0, "percent"),
     "detail.dehaze": (-100.0, 100.0, "percent"),
     "finish.vignette": (-100.0, 100.0, "percent"),
+    "color.neutralize": (0.0, 100.0, "percent"),
 }
+
+# Infrared work needs two things no ordinary photograph does: a white
+# balance nobody's camera profile can supply, and the freedom to move one
+# colour channel into another. Both are written in the colour section.
+CHANNEL_SWAPS = {
+    "red-blue": [[0.0, 0.0, 1.0], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]],
+    "red-green": [[0.0, 1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+    "green-blue": [[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0]],
+}
+_SWAP_WORDS = (
+    (r"red\s+(?:and|with|<->|/)\s*blue|blue\s+(?:and|with|<->|/)\s*red", "red-blue"),
+    (r"red\s+(?:and|with|<->|/)\s*green|green\s+(?:and|with|<->|/)\s*red", "red-green"),
+    (r"green\s+(?:and|with|<->|/)\s*blue|blue\s+(?:and|with|<->|/)\s*green", "green-blue"),
+)
 
 
 class RecipeCompileError(ValueError):
@@ -202,6 +217,15 @@ def _compile_step(
         return None
 
     if section == "white_balance_and_color":
+        # "Neutralise" asks for the channels to be brought into agreement
+        # rather than for a colour temperature, which is the only white
+        # balance an infrared frame can be given: its own average.
+        if re.search(r"(?i)\bneutrali[sz]e\b", text):
+            amount = _amount_for(text, r"neutrali[sz]e|amount|strength")
+            _operation(operations, "color.neutralize",
+                       100.0 if amount is None else amount, "percent",
+                       "absolute", text, section)
+            return None
         value = _amount_for(text, r"kelvin|temperature|white\s+balance")
         if value is not None:
             mode = "delta" if abs(value) < 2000 \
@@ -216,6 +240,13 @@ def _compile_step(
             return None
 
     if section == "color_editor":
+        if re.search(r"(?i)\bswap\b", text):
+            for pattern, name in _SWAP_WORDS:
+                if re.search(rf"(?i){pattern}", text):
+                    _operation(
+                        operations, "color.channel_mixer", CHANNEL_SWAPS[name],
+                        "matrix", "absolute", text, section)
+                    return None
         colour_aliases = (
             (r"blue(?:/|\s+and\s+|-)cyan|cyan(?:/|\s+and\s+|-)blue", "blue/teal"),
             (r"orange(?:/|\s+and\s+|-)red|red(?:/|\s+and\s+|-)orange", "orange/red"),

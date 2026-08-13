@@ -323,6 +323,46 @@ def _apply_global(rgb: np.ndarray, operations: list[dict[str, Any]],
         value = item.get("value")
         # Structured local operations must be handled before the scalar-value
         # guard.  Their value is a mask descriptor, not a number.
+        if op == "color.neutralize":
+            # White balance where it can still be done honestly.
+            #
+            # The obvious place is darktable's own raw coefficients, and
+            # that was tried: on this Sony it drove red from 45 to 1 and
+            # saturation to 99%, because those multipliers sit upstream of
+            # a camera colour matrix that has no meaning for a photograph
+            # taken past 760nm. The matrix is built for light the filter
+            # removed.
+            #
+            # So it is done here instead, on the developed frame, by the
+            # oldest method there is: make the channel averages agree.
+            # For an infrared frame that is exactly the classic move of
+            # white balancing off the foliage, because past the cut-off
+            # the foliage is most of what the sensor saw.
+            strength = min(max(float(value) / 100.0, 0.0), 1.0)
+            averages = result.reshape(-1, 3).mean(axis=0)
+            target = float(averages.mean())
+            gains = np.where(averages > 1e-6, target / np.maximum(averages, 1e-6), 1.0)
+            result = result * (1.0 + (gains - 1.0) * strength).astype(np.float32)
+            if progress is not None:
+                progress(done, total, _named(item))
+            continue
+        if op == "color.channel_mixer" and isinstance(value, list):
+            # A channel mixer is a matrix, and a matrix belongs in linear
+            # light: mixing gamma-encoded numbers mixes the encoding along
+            # with the colour. Handled here, above the scalar guard,
+            # because its value is nine numbers rather than one.
+            #
+            # This is the operation infrared work turns on. Past a 720nm
+            # filter the red channel holds the foliage and the blue holds
+            # what little sky there is, and swapping them is what makes
+            # the false colour a person can actually read.
+            matrix = np.asarray(value, dtype=np.float32)
+            if matrix.shape == (3, 3):
+                result = np.maximum(
+                    np.einsum("ij,...j->...i", matrix, result), 0.0)
+            if progress is not None:
+                progress(done, total, _named(item))
+            continue
         if op.startswith("mask.") and isinstance(value, dict):
             mask = _spatial_mask(result, op[5:], value)
             opacity = float(value.get("opacity", 1.0))

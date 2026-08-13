@@ -73,6 +73,62 @@ class BuiltInTests(unittest.TestCase):
         self.assertEqual(ops[grey]["value"], -100.0)
 
 
+class InfraredPresetTests(unittest.TestCase):
+    """The looks for a filter on the front of the lens.
+
+    Infrared is where the preset idea earns itself: the treatment is the
+    same for every frame behind a given filter, and no model needs to be
+    asked what a 760nm cut-off does.
+    """
+
+    def preset(self, name: str) -> dict:
+        return next(item for item in presets.built_in()
+                    if item["id"] == f"preset-infrared-{name}")
+
+    def ops(self, name: str) -> list[str]:
+        return [item["op"] for item in self.preset(name)["operations"]]
+
+    def test_every_infrared_preset_neutralises_before_anything_else(self):
+        """The cast has to go first or every later move works on it."""
+        for name in ("760-mono", "850-mono", "720-false-colour", "720-mono"):
+            with self.subTest(name):
+                self.assertEqual(self.ops(name)[0], "color.neutralize")
+
+    def test_the_deep_filters_are_monochrome_because_the_light_is(self):
+        """Past 760nm the three channels record the same thing."""
+        for name in ("760-mono", "850-mono", "720-mono"):
+            with self.subTest(name):
+                grey = next(
+                    item for item in self.preset(name)["operations"]
+                    if item["op"] == "color.saturation")
+                self.assertEqual(grey["value"], -100.0)
+
+    def test_false_colour_swaps_the_channels_and_keeps_the_colour(self):
+        operations = self.preset("720-false-colour")["operations"]
+        swap = next(item for item in operations
+                    if item["op"] == "color.channel_mixer")
+        self.assertEqual(swap["value"],
+                         [[0.0, 0.0, 1.0], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]])
+        self.assertNotIn(
+            -100.0, [item["value"] for item in operations
+                     if item["op"] == "color.saturation"])
+
+    def test_the_swap_happens_after_the_neutralising(self):
+        """Swapping a cast only moves the cast to another channel."""
+        ops = self.ops("720-false-colour")
+        self.assertLess(ops.index("color.neutralize"),
+                        ops.index("color.channel_mixer"))
+
+    def test_the_deeper_filter_lifts_harder(self):
+        """850nm reaches the sensor as far less light than 760nm does."""
+        deep = {item["op"]: item["value"]
+                for item in self.preset("850-mono")["operations"]}
+        shallow = {item["op"]: item["value"]
+                   for item in self.preset("760-mono")["operations"]}
+        self.assertGreater(deep.get("tone.exposure", 0),
+                           shallow.get("tone.exposure", 0))
+
+
 class SavingTests(unittest.TestCase):
     """A look the photographer kept, and what travels with it."""
 

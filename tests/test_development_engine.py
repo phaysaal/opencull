@@ -91,6 +91,104 @@ class SwitchedOffTests(unittest.TestCase):
             self.assertEqual(image.size, (24, 16))
 
 
+class InfraredOperationTests(unittest.TestCase):
+    """The two moves infrared work needs and ordinary work does not."""
+
+    def setUp(self):
+        self._temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self._temporary.cleanup)
+
+    def cast(self, red=0.18, green=0.18, blue=0.40):
+        """A frame with the blue cast an infrared decode comes back with."""
+        frame = np.zeros((6, 8, 3), np.float32)
+        frame[..., 0], frame[..., 1], frame[..., 2] = red, green, blue
+        return frame
+
+    def averages(self, frame):
+        return frame.reshape(-1, 3).mean(axis=0)
+
+    def test_neutralising_brings_the_channels_into_agreement(self):
+        out = _apply_global(self.cast(), [
+            {"op": "color.neutralize", "value": 100, "unit": "percent",
+             "mode": "absolute"}])
+        red, green, blue = self.averages(out)
+        self.assertAlmostEqual(red, blue, places=5)
+        self.assertAlmostEqual(green, blue, places=5)
+
+    def spread(self, frame):
+        means = self.averages(frame)
+        return float(means.max() - means.min())
+
+    def test_it_can_be_asked_for_by_halves(self):
+        before = self.spread(self.cast())
+        out = _apply_global(self.cast(), [
+            {"op": "color.neutralize", "value": 50, "unit": "percent",
+             "mode": "absolute"}])
+        self.assertAlmostEqual(self.spread(out), before / 2, places=4)
+
+    def test_neutralising_nothing_changes_nothing(self):
+        frame = self.cast()
+        out = _apply_global(frame, [
+            {"op": "color.neutralize", "value": 0, "unit": "percent",
+             "mode": "absolute"}])
+        self.assertTrue(np.allclose(out, frame))
+
+    def test_an_already_neutral_frame_survives_it(self):
+        frame = self.cast(0.2, 0.2, 0.2)
+        out = _apply_global(frame, [
+            {"op": "color.neutralize", "value": 100, "unit": "percent",
+             "mode": "absolute"}])
+        self.assertTrue(np.allclose(out, frame, atol=1e-6))
+
+    def test_swapping_red_and_blue_swaps_red_and_blue(self):
+        frame = self.cast(0.30, 0.20, 0.05)
+        out = _apply_global(frame, [
+            {"op": "color.channel_mixer",
+             "value": [[0, 0, 1], [0, 1, 0], [1, 0, 0]],
+             "unit": "matrix", "mode": "absolute"}])
+        red, green, blue = self.averages(out)
+        self.assertAlmostEqual(red, 0.05, places=5)
+        self.assertAlmostEqual(green, 0.20, places=5)
+        self.assertAlmostEqual(blue, 0.30, places=5)
+
+    def test_a_mixer_that_is_not_a_matrix_is_ignored_not_fatal(self):
+        frame = self.cast()
+        out = _apply_global(frame, [
+            {"op": "color.channel_mixer", "value": [1, 2, 3],
+             "unit": "matrix", "mode": "absolute"}])
+        self.assertTrue(np.allclose(out, frame))
+
+    def test_a_mixer_never_produces_negative_light(self):
+        frame = self.cast(0.30, 0.20, 0.05)
+        out = _apply_global(frame, [
+            {"op": "color.channel_mixer",
+             "value": [[1, -2, 0], [0, 1, 0], [0, 0, 1]],
+             "unit": "matrix", "mode": "absolute"}])
+        self.assertGreaterEqual(float(out.min()), 0.0)
+
+    def test_both_survive_a_whole_render(self):
+        root = Path(self._temporary.name)
+        baseline = root / "baseline.tiff"
+        array = np.zeros((12, 16, 3), dtype=np.uint16)
+        array[..., 0], array[..., 1], array[..., 2] = 3000, 3000, 9000
+        write_baseline(baseline, array)
+        result = render_recipe(baseline, {
+            "format": "opencull-development-recipe-v1",
+            "source_photo": "A.ARW", "source_kind": "raw", "style": "standard",
+            "operations": [
+                {"op": "color.neutralize", "value": 100, "unit": "percent",
+                 "mode": "absolute"},
+                {"op": "color.channel_mixer",
+                 "value": [[0, 0, 1], [0, 1, 0], [1, 0, 0]],
+                 "unit": "matrix", "mode": "absolute"},
+            ],
+        }, root / "out")
+        with Image.open(result["output"]["path"]) as image:
+            pixels = np.asarray(image.convert("RGB"), dtype=np.float32)
+        means = pixels.reshape(-1, 3).mean(axis=0)
+        self.assertLess(float(means.max() - means.min()), 1.5)
+
+
 class DevelopmentEngineTests(unittest.TestCase):
     def recipe(self, diagnostics=None):
         return {

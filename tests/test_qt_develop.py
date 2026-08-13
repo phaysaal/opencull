@@ -674,6 +674,90 @@ class DevelopPageTests(unittest.TestCase):
     def workspace_of(self, page):
         return page.workspace
 
+    # --- infrared --------------------------------------------------------
+
+    def test_an_album_is_ordinary_light_until_somebody_says_otherwise(self):
+        page = self.page()
+        self.assertFalse(page.workspace.infrared())
+        self.assertFalse(page.infrared.isChecked())
+
+    def test_marking_the_album_infrared_is_remembered(self):
+        page = self.page()
+        page.infrared.setChecked(True)
+        self.assertTrue(page.workspace.infrared())
+        # Read back from disk rather than from the object that set it.
+        from opencull_gui.project import load_project
+        stored = load_project(page.workspace.project_path)
+        self.assertEqual(stored["rendering"]["spectrum"], "infrared")
+
+    def test_an_infrared_frame_is_not_matched_to_the_camera(self):
+        """The whole point: the camera's guess must not be copied.
+
+        Past an infrared filter the camera has no idea what it is looking
+        at, and the baseline's job -- reproduce the picture the camera
+        made -- becomes the one thing worth refusing. Asked of the
+        workspace rather than of the page, because the page also renders
+        previews in the background and they would land in the middle of
+        the count.
+        """
+        from unittest import mock
+
+        import opencull_gui.development as development
+
+        assess_and_suggest(
+            Path(self._temporary.name), self.report_path, self.photos_path)
+        from opencull_qt.develop import workspace_for
+        workspace = workspace_for(self.report, self.photos.root, decoders=set())
+
+        seen = []
+        real_render = development.render_recipe
+
+        def watching(*args, **kwargs):
+            seen.append(kwargs.get("reference_jpeg"))
+            return real_render(*args, **kwargs)
+
+        with mock.patch.object(development, "render_recipe", watching):
+            workspace.recipe_preview(
+                NAMES[0], "standard", "default", "markesteijn-3-pass", 64)
+            workspace.set_spectrum("infrared")
+            workspace.recipe_preview(
+                NAMES[0], "standard", "default", "markesteijn-3-pass", 64)
+        self.assertEqual(len(seen), 2)
+        self.assertIsNotNone(seen[0], "ordinary light should match the camera")
+        self.assertIsNone(seen[1], "infrared should not match the camera")
+
+    def test_the_proofs_from_before_are_not_served_afterwards(self):
+        """A proof made from the other base is a proof of something else.
+
+        Leaving the spectrum out of the identity is how three earlier
+        renderer fixes stayed invisible behind cached files.
+        """
+        page = self.suggested_page(marked=(NAMES[0],))
+        before = page.workspace.recipe_preview(
+            NAMES[0], "standard", "default", "markesteijn-3-pass", 64)
+        page.infrared.setChecked(True)
+        after = page.workspace.recipe_preview(
+            NAMES[0], "standard", "default", "markesteijn-3-pass", 64)
+        self.assertNotEqual(before.name, after.name)
+        # And the earlier one is still there: changing your mind back
+        # costs nothing.
+        self.assertTrue(before.is_file())
+
+    def test_turning_it_on_drops_the_pictures_made_from_the_old_base(self):
+        page = self.suggested_page(marked=(NAMES[0],))
+        self.assertTrue(
+            self.wait_for(lambda: bool(page.previews)),
+            "no previews were made to begin with")
+        page.infrared.setChecked(True)
+        self.assertEqual(page.previews, {})
+        self.assertEqual(page.rendered, {})
+
+    def test_the_infrared_presets_are_offered_like_any_other(self):
+        page = self.page()
+        offered = [item["id"] for item in page.available]
+        for name in ("760-mono", "850-mono", "720-false-colour", "720-mono"):
+            self.assertIn(f"preset-infrared-{name}", offered)
+
     def test_previews_are_rendered_for_every_treated_frame_not_only_one(self):
         """The twentieth frame should not be rendered while you look at it."""
         page = self.suggested_page(marked=(NAMES[0], NAMES[1]))

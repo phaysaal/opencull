@@ -137,6 +137,7 @@ def create_project(path: Path, name: str, source_folder: Path) -> dict[str, Any]
         "rendering": {
             "engine": "darktable",
             "demosaic": "markesteijn-3-pass",
+            "spectrum": "visible",
         },
         "stage": "import", "artifacts": artifacts, "history": [],
     }
@@ -223,7 +224,14 @@ def update_project(path: Path, **changes: Any) -> dict[str, Any]:
             "markesteijn-3-pass-vng",
         }:
             raise ValueError("unsupported project demosaic preference")
-        value["rendering"] = {"engine": engine, "demosaic": demosaic}
+        # What the camera was looking at. An infrared shoot is a property
+        # of the whole album -- the filter was on the front of the lens
+        # for all of it -- rather than something decided frame by frame.
+        spectrum = str(rendering.get("spectrum", "visible")) or "visible"
+        if spectrum not in {"visible", "infrared"}:
+            raise ValueError("unsupported project spectrum")
+        value["rendering"] = {"engine": engine, "demosaic": demosaic,
+                              "spectrum": spectrum}
     value["updated_at"] = _now()
     value.setdefault("history", []).append({"updated_at": value["updated_at"],
                                              "changes": sorted(changes)})

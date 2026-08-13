@@ -29,6 +29,7 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import QColor, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
+    QCheckBox,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -465,6 +466,18 @@ class PreviewQueue(QObject):
     def prefer(self, photo: str) -> None:
         """Put one frame's remaining previews at the front of the queue."""
         self._pending.sort(key=lambda pair: pair[0] != photo)
+
+    def forget(self) -> None:
+        """Drop the queue and the memory of what has been asked for.
+
+        Not the same as stopping. Stopping is for shutdown and cannot be
+        undone; this is for when the frames themselves have changed --
+        the album marked infrared, say -- and every previous answer is an
+        answer about a different photograph.
+        """
+        self._pending.clear()
+        self._asked.clear()
+        self._done = 0
 
     def outstanding(self) -> int:
         return len(self._pending)
@@ -953,6 +966,21 @@ class DevelopPage(QWidget):
         self.engine_note.setFont(theme.body(9))
         layout.addWidget(self.engine_note)
 
+        # A filter on the front of the lens was there for the whole
+        # album, so this is one decision about the folder rather than a
+        # question asked again on every frame.
+        self.infrared = QCheckBox("Infrared album")
+        self.infrared.setFont(theme.body(9))
+        self.infrared.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.infrared.setToolTip(tooltip(
+            "Develop these frames without matching them to the camera's "
+            "own rendering. Past an infrared filter the camera does not "
+            "know what it is looking at, and matching to its guess puts "
+            "that guess into every treatment."))
+        self.infrared.setChecked(self.workspace.infrared())
+        self.infrared.toggled.connect(self._chose_spectrum)
+        layout.addWidget(self.infrared)
+
         self.sweep_note = QLabel("")
         self.sweep_note.setObjectName("hint")
         self.sweep_note.setWordWrap(True)
@@ -1293,6 +1321,29 @@ class DevelopPage(QWidget):
             [(photo, treatment)],
             {photo: (self.engine_for(photo), self._demosaic())})
         self.thumbs.prefer(photo)
+
+    def _chose_spectrum(self, infrared: bool) -> None:
+        """Redevelop the album from the other base.
+
+        Every proof on screen was made from the base that is being left
+        behind, so they are dropped rather than shown beside the new
+        ones. They stay on disk under their own identity; going back
+        finds them again without rendering anything.
+        """
+        try:
+            self.workspace.set_spectrum("infrared" if infrared else "visible")
+        except Exception as exc:                     # noqa: BLE001 - reported
+            self._report(str(exc), "alarm")
+            return
+        self.previews.clear()
+        self.rendered.clear()
+        self.thumbs.forget()
+        self._fill_treatments()
+        self._show_treated()
+        self._report(
+            "Developing from the raw itself, with no camera match."
+            if infrared else
+            "Back to matching the camera's own rendering.", "ok")
 
     def decoder_for(self, photo: str) -> dict:
         # The workspace decides, so what this says and what the renderer then

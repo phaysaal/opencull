@@ -161,6 +161,32 @@ class DevelopmentWorkspace:
         # other than the one place the application would find on its own.
         self.presets_root: Path | None = None
 
+    def spectrum(self) -> str:
+        """What the camera was looking at: ordinary light, or infrared."""
+        rendering = self.project.get("rendering") or {}
+        found = str(rendering.get("spectrum") or "visible")
+        return found if found in {"visible", "infrared"} else "visible"
+
+    def infrared(self) -> bool:
+        return self.spectrum() == "infrared"
+
+    def set_spectrum(self, spectrum: str) -> dict[str, Any]:
+        """Record what the camera was looking at, for the whole album.
+
+        Every proof already rendered was developed from the other base,
+        so the identity a proof is filed under carries the spectrum and
+        the old ones are simply not found again. Nothing is deleted:
+        marking an album infrared by mistake and marking it back costs
+        the renders once, not twice.
+        """
+        if spectrum not in {"visible", "infrared"}:
+            raise ValueError("unsupported project spectrum")
+        rendering = dict(self.payload().get("rendering") or {})
+        rendering["spectrum"] = spectrum
+        self.project = update_project(
+            self.project_path, rendering=rendering)
+        return self.payload()
+
     def presets(self) -> list[dict[str, Any]]:
         """Every preset available to this project.
 
@@ -209,9 +235,11 @@ class DevelopmentWorkspace:
                 "edit_directions_path": directions_path,
                 "source_folder": self.project.get("source_folder"),
                 "default_export_directory": str(self.project_layout["Exports"]),
-                "rendering": self.project.get("rendering") or {
+                "rendering": {
                     "engine": "darktable",
                     "demosaic": "markesteijn-3-pass",
+                    "spectrum": "visible",
+                    **(self.project.get("rendering") or {}),
                 },
                 "project_sha256": project_sha256(self.project_path)}
 
@@ -617,6 +645,12 @@ class DevelopmentWorkspace:
             # just part of the decode behind it. Keying only the decode by
             # it left every proof already rendered showing the old base.
             "workflow": DARKTABLE_WORKFLOW,
+            # Infrared frames are developed from a different base, so a
+            # proof made before the album was marked infrared is a proof
+            # of something else. Left out of the key, every previously
+            # rendered frame would go on showing the old base -- which is
+            # how three earlier renderer fixes stayed invisible.
+            "spectrum": self.spectrum(),
         }, sort_keys=True).encode()).hexdigest()[:24]
         destination = self.project_layout["Previews"] / "DevelopRecipes" / (
             f"{Path(photo).stem}.{style}.{engine}.{identity}.jpg")
@@ -652,7 +686,17 @@ class DevelopmentWorkspace:
                 # is held in the tones and released in the highlights, so
                 # the headroom the raw still has is not spent on copying a
                 # rendering that already spent its own.
-                calibration_reference = small_reference
+                #
+                # Except in infrared, where the camera's own rendering is
+                # the one thing not worth matching. Past the filter's
+                # cut-off the camera has no idea what it is looking at:
+                # measured on a Sony frame at 760nm, its JPEG comes back
+                # R 30.9 / G 34.7 / B 86.1, and matching to it re-imposed
+                # that cast on every treatment. So the raw is left as the
+                # raw, and the neutralising is done as a stated operation
+                # the photographer can see and move.
+                calibration_reference = (
+                    None if self.infrared() else small_reference)
             elif source_kind == "raw" and "libraw" in decoders:
                 # OpenCull's own renderer: the deterministic fallback the
                 # renderer plan describes. It already produces the
@@ -664,7 +708,8 @@ class DevelopmentWorkspace:
                 calibration_reference = None
             else:
                 baseline = self._from_display(small_reference, work)
-                calibration_reference = small_reference
+                calibration_reference = (
+                    None if self.infrared() else small_reference)
             result = render_recipe(
                 baseline, recipe, work / "render", allow_incomplete=True,
                 reference_jpeg=calibration_reference, progress=progress)

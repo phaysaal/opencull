@@ -4,8 +4,10 @@ import unittest
 from pathlib import Path
 
 from recipe_compiler import (
+    CHANNEL_SWAPS,
     CORPUS_FORMAT,
     IR_FORMAT,
+    PRESET_STYLE,
     RecipeCompileError,
     compile_checkpoint,
     compile_recipe,
@@ -173,3 +175,47 @@ class LevelsScaleTests(unittest.TestCase):
         values = self.compile("Levels input black 5%, input white 96%.")
         self.assertAlmostEqual(values["black_input"], 12.75, places=2)
         self.assertAlmostEqual(values["white_input"], 244.8, places=1)
+
+
+class InfraredGrammarTests(unittest.TestCase):
+    """The two instructions infrared presets are written with."""
+
+    def compile(self, sections):
+        return compile_recipe("A.ARW", PRESET_STYLE, "IR", "for infrared",
+                              sections, "", "raw")
+
+    def test_neutralise_asks_for_the_channels_to_agree(self):
+        recipe = self.compile({"white_balance_and_color": ["Neutralise"]})
+        self.assertEqual(
+            [(item["op"], item["value"]) for item in recipe["operations"]],
+            [("color.neutralize", 100.0)])
+
+    def test_the_american_spelling_reads_the_same(self):
+        recipe = self.compile({"white_balance_and_color": ["Neutralize 60"]})
+        self.assertEqual(recipe["operations"][0]["value"], 60.0)
+
+    def test_it_does_not_swallow_an_ordinary_temperature(self):
+        recipe = self.compile(
+            {"white_balance_and_color": ["Temperature +400 kelvin"]})
+        self.assertEqual(recipe["operations"][0]["op"], "color.temperature")
+
+    def test_swapping_red_and_blue_compiles_to_the_matrix(self):
+        recipe = self.compile({"color_editor": ["Swap red and blue channels"]})
+        self.assertEqual(len(recipe["operations"]), 1)
+        self.assertEqual(recipe["operations"][0]["op"], "color.channel_mixer")
+        self.assertEqual(recipe["operations"][0]["value"],
+                         [[0.0, 0.0, 1.0], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]])
+
+    def test_the_other_two_swaps_are_understood(self):
+        for words, expected in (
+            ("Swap red and green", "red-green"),
+            ("Swap green and blue", "green-blue"),
+        ):
+            with self.subTest(words):
+                recipe = self.compile({"color_editor": [words]})
+                self.assertEqual(recipe["operations"][0]["value"],
+                                 CHANNEL_SWAPS[expected])
+
+    def test_an_ordinary_colour_instruction_is_not_read_as_a_swap(self):
+        recipe = self.compile({"color_editor": ["Blue saturation +10"]})
+        self.assertEqual(recipe["operations"][0]["op"], "color.hsl_range")

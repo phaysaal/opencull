@@ -166,6 +166,83 @@ BUILT_IN: tuple[dict[str, Any], ...] = (
             "hdr_levels_curves": ["Blacks -4"],
         },
     },
+    # --- infrared ---------------------------------------------------
+    #
+    # These belong with the others rather than in a category of their
+    # own, because from the renderer's side they are ordinary presets.
+    # What makes infrared work is upstream: an album marked infrared is
+    # developed without matching to the camera's own rendering, because
+    # past the filter's cut-off the camera does not know what it is
+    # looking at. Neutralising is then stated here, as an operation the
+    # photographer can see and move, rather than hidden in a decode.
+    #
+    # How much colour is left depends entirely on the cut-off. At 720nm
+    # the channels still disagree enough to swap; at 760nm they are
+    # within 3% of each other and at 850nm there is nothing but
+    # brightness. So two of these are monochrome by arithmetic, not by
+    # preference.
+    {
+        "slug": "infrared-760-mono",
+        "name": "Infrared · 760nm",
+        "intent": "For a full-spectrum body behind a 760nm cut filter. "
+                  "Past that wavelength the three colour channels record "
+                  "almost the same light, so there is no colour to keep: "
+                  "the frame is neutralised, taken to grey, and given the "
+                  "contrast that infrared foliage and sky need.",
+        "instructions": {
+            "white_balance_and_color": ["Neutralise"],
+            "global_exposure": ["Saturation -100", "Contrast +16"],
+            "hdr_levels_curves": ["Blacks -6", "Whites +6", "Shadows +8"],
+            "detail_and_noise": ["Clarity +14", "Structure +8"],
+        },
+    },
+    {
+        "slug": "infrared-850-mono",
+        "name": "Infrared · 850nm",
+        "intent": "For an unconverted body behind an 850nm filter, where "
+                  "the internal hot mirror is still fighting the filter. "
+                  "Deeper than 760nm and much darker, so this lifts harder "
+                  "and leans on contrast rather than on colour, of which "
+                  "there is none at all at this wavelength.",
+        "instructions": {
+            "white_balance_and_color": ["Neutralise"],
+            "global_exposure": ["Exposure +0.40", "Saturation -100",
+                                "Contrast +20"],
+            "hdr_levels_curves": ["Shadows +16", "Blacks -8", "Whites +8"],
+            "detail_and_noise": ["Clarity +16", "Structure +10",
+                                 "Luminance noise reduction 40"],
+        },
+    },
+    {
+        "slug": "infrared-720-false-colour",
+        "name": "Infrared · 720nm false colour",
+        "intent": "The classic Hoya R72 look. At 720nm enough visible red "
+                  "still reaches the sensor for the channels to disagree, "
+                  "so swapping red and blue turns the infrared-bright "
+                  "foliage white and the sky blue. Neutralised first, "
+                  "because the swap only means something once the cast it "
+                  "would otherwise swap is gone.",
+        "instructions": {
+            "white_balance_and_color": ["Neutralise"],
+            "color_editor": ["Swap red and blue channels"],
+            "global_exposure": ["Contrast +10", "Saturation +14"],
+            "hdr_levels_curves": ["Shadows +10", "Blacks -4"],
+            "detail_and_noise": ["Clarity +10"],
+        },
+    },
+    {
+        "slug": "infrared-720-mono",
+        "name": "Infrared · 720nm monochrome",
+        "intent": "The same R72 frame read as black and white instead: "
+                  "for the photographs where the false colour is a "
+                  "distraction and the infrared tonality is the subject.",
+        "instructions": {
+            "white_balance_and_color": ["Neutralise"],
+            "global_exposure": ["Saturation -100", "Contrast +14"],
+            "hdr_levels_curves": ["Shadows +10", "Blacks -6", "Whites +4"],
+            "detail_and_noise": ["Clarity +12", "Structure +6"],
+        },
+    },
     {
         "slug": "portrait-skin",
         "name": "Portrait skin",
