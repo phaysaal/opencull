@@ -52,7 +52,7 @@ from opencull_gui.directions import verdict_of
 from . import theme
 from .colour import load_for_screen
 from .previews import PreviewLoader, plain_icon, scaled
-from .widgets import Stamp, short_path, workspace_title
+from .widgets import Stamp, short_path, tooltip, workspace_title
 
 # A proof, not a delivery. Big enough to judge a treatment on a laptop
 # screen, small enough that a demosaic finishes while you are still looking
@@ -812,7 +812,7 @@ class DevelopPage(QWidget):
             button.setCheckable(True)
             button.setFont(theme.body(9))
             button.setCursor(Qt.CursorShape.PointingHandCursor)
-            button.setToolTip(tip)
+            button.setToolTip(tooltip(tip))
             button.clicked.connect(
                 lambda _=False, value=key: self.set_scope(value))
             self.scope_buttons[key] = button
@@ -897,7 +897,7 @@ class DevelopPage(QWidget):
         why.setObjectName("ghost")
         why.setFont(theme.body(9))
         why.setCursor(Qt.CursorShape.PointingHandCursor)
-        why.setToolTip("The recorded story of this frame.")
+        why.setToolTip(tooltip("The recorded story of this frame."))
         why.clicked.connect(lambda: self.why_wanted.emit(self.current))
         head.addWidget(why)
         layout.addLayout(head)
@@ -960,9 +960,9 @@ class DevelopPage(QWidget):
         self.export_button.setObjectName("ghost")
         self.export_button.setFont(theme.body(10))
         self.export_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.export_button.setToolTip(
+        self.export_button.setToolTip(tooltip(
             "Render this treatment at the photograph's own size and write a "
-            "copy where you choose.")
+            "copy where you choose."))
         self.export_button.clicked.connect(self.export_current)
         layout.addWidget(self.export_button)
 
@@ -970,9 +970,9 @@ class DevelopPage(QWidget):
         self.verify_button.setObjectName("ghost")
         self.verify_button.setFont(theme.body(10))
         self.verify_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.verify_button.setToolTip(
+        self.verify_button.setToolTip(tooltip(
             "Ask a model whether this rendering did what the treatment said "
-            "it would, without losing the subject.")
+            "it would, without losing the subject."))
         self.verify_button.clicked.connect(self.verify_current)
         layout.addWidget(self.verify_button)
 
@@ -1164,8 +1164,8 @@ class DevelopPage(QWidget):
         for item in available:
             entry = QListWidgetItem(f"  {item['name']}")
             entry.setData(Qt.ItemDataRole.UserRole, item["id"])
-            entry.setToolTip(
-                f"{item['name']}\n{item.get('intent', '')}".strip())
+            entry.setToolTip(tooltip(
+                f"{item['name']}\n{item.get('intent', '')}".strip()))
             entry.setSizeHint(QSize(0, TREATMENT_TILE))
             preview = self.previews.get((self.current, str(item["id"])))
             if preview is not None:
@@ -1327,12 +1327,12 @@ class DevelopPage(QWidget):
         """Say whether this rendering has been checked, and what was found."""
         suggestion = self.suggestion()
         self.verify_button.setEnabled(bool(suggestion))
-        self.verify_button.setToolTip(
+        self.verify_button.setToolTip(tooltip(
             "Ask a model whether this rendering did what the treatment said "
             "it would, without losing the subject."
             if suggestion else
             "The baseline is asked to do nothing, so there is no claim to "
-            "check.")
+            "check."))
         certificate = None
         if suggestion:
             record = self.workspace.render_record(self.current, self._variant())

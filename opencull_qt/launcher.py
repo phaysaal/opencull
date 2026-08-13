@@ -73,7 +73,7 @@ from .shortlist import ShortlistPage
 from .studio import StudioPage
 from .style import StyleDialog, StylePanel
 from .suggestions import SuggestionsPage
-from .widgets import ProjectCard, Row, band, replace_rows, short_path
+from .widgets import ProjectCard, Row, band, replace_rows, short_path, tooltip
 
 ACTIVE = {"running", "queued", "stopping", "detached"}
 
@@ -201,9 +201,9 @@ class CullProgress(QWidget):
             self.pause_button = QPushButton("Pause")
             self.pause_button.setObjectName("ghost")
             self.pause_button.setFont(theme.body(9))
-            self.pause_button.setToolTip(
+            self.pause_button.setToolTip(tooltip(
                 "Stop after the current group. Every decision made so far "
-                "is checkpointed; resuming buys only the rest.")
+                "is checkpointed; resuming buys only the rest."))
             self.pause_button.clicked.connect(lambda _=False: on_pause())
             head.addWidget(self.pause_button)
         outer.addLayout(head)
@@ -405,9 +405,9 @@ class AssessProgress(QWidget):
             self.pause_button = QPushButton("Pause")
             self.pause_button.setObjectName("ghost")
             self.pause_button.setFont(theme.body(9))
-            self.pause_button.setToolTip(
+            self.pause_button.setToolTip(tooltip(
                 "Stop after the current frame. Every rating so far is "
-                "checkpointed; resuming buys only the rest.")
+                "checkpointed; resuming buys only the rest."))
             self.pause_button.clicked.connect(lambda _=False: on_pause())
             head.addWidget(self.pause_button)
         outer.addLayout(head)
@@ -633,9 +633,9 @@ class SuggestProgress(QWidget):
             self.pause_button = QPushButton("Pause")
             self.pause_button.setObjectName("ghost")
             self.pause_button.setFont(theme.body(9))
-            self.pause_button.setToolTip(
+            self.pause_button.setToolTip(tooltip(
                 "Stop after the current frame. Every treatment written so "
-                "far is checkpointed; resuming buys only the rest.")
+                "far is checkpointed; resuming buys only the rest."))
             self.pause_button.clicked.connect(lambda _=False: on_pause())
             head.addWidget(self.pause_button)
         outer.addLayout(head)
@@ -898,9 +898,9 @@ class Launcher(QMainWindow):
         self.studio_button.setObjectName("ghost")
         self.studio_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.studio_button.setFont(theme.body(10))
-        self.studio_button.setToolTip(
+        self.studio_button.setToolTip(tooltip(
             "Your own things: profiles, the taste ledger, providers. They "
-            "serve every folder alike.")
+            "serve every folder alike."))
         self.studio_button.clicked.connect(self.show_studio)
         layout.addWidget(self.studio_button)
         return bar
@@ -1524,7 +1524,7 @@ class Launcher(QMainWindow):
                 if button is None:
                     continue
                 button.setEnabled(not nothing)
-                button.setToolTip(reason if nothing else "")
+                button.setToolTip(tooltip(reason if nothing else ""))
         sheet.changed.connect(recount)
         recount()
 

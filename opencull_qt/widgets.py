@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import textwrap
 from collections.abc import Callable
 from pathlib import Path
 
@@ -37,7 +38,7 @@ class ElidedLabel(QLabel):
     def setText(self, text: str) -> None:  # noqa: N802 - Qt naming
         self._full = text
         super().setText(text)
-        self.setToolTip(text)
+        self.setToolTip(tooltip(text))
 
     def full_text(self) -> str:
         return self._full
@@ -222,6 +223,33 @@ def short_path(value: str) -> str:
     return f"~{value[len(home):]}" if value.startswith(home) else value
 
 
+# A tooltip is a sentence or two, and a sentence set on one line runs as
+# far as the sentence is long -- a treatment's stated intent is around
+# three hundred characters, which leaves the window behind and reaches
+# the far edge of the screen. Qt does not wrap plain text and wraps rich
+# text only against the whole display, so the column is chosen here.
+# Fifty-six characters is about what a paragraph wants: long enough not
+# to shred short phrases, short enough to sit beside the thing it
+# describes.
+TOOLTIP_COLUMN = 56
+
+
+def tooltip(text: str) -> str:
+    """One tooltip, set in a readable column instead of a single line.
+
+    Line breaks the caller put in are kept: the first line of a
+    treatment's tooltip is its name, and it should stay its own line.
+    Text already wrapped narrower than the column is left alone, so
+    calling this twice does nothing the first call did not.
+    """
+    lines = []
+    for paragraph in str(text).split("\n"):
+        lines.extend(
+            textwrap.wrap(paragraph, TOOLTIP_COLUMN) if paragraph.strip()
+            else [""])
+    return "\n".join(lines)
+
+
 def band(title: str) -> tuple[QWidget, QVBoxLayout]:
     """A titled section containing a rounded list of rows."""
     section = QWidget()
@@ -267,7 +295,7 @@ class IconButton(QPushButton):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFlat(True)
         if tip:
-            self.setToolTip(tip)
+            self.setToolTip(tooltip(tip))
 
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt naming
         super().paintEvent(event)
@@ -335,7 +363,7 @@ class Filmstrip(QWidget):
         self.setCursor(
             Qt.CursorShape.PointingHandCursor if opens
             else Qt.CursorShape.ArrowCursor)
-        self.setToolTip(tip if opens else "")
+        self.setToolTip(tooltip(tip if opens else ""))
         self.setMouseTracking(opens)
         self.update()
 
@@ -547,7 +575,7 @@ class Stamp(QLabel):
         # and inventing one for them would be worse than saying nothing.
         self.setVisible(bool(words))
         self.setText(words[0] if words else "")
-        self.setToolTip(words[1] if words else "")
+        self.setToolTip(tooltip(words[1] if words else ""))
         self.setProperty("state", str(verdict or ""))
         self.style().unpolish(self)
         self.style().polish(self)

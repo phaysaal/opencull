@@ -41,7 +41,7 @@ from PySide6.QtWidgets import (
 from opencull_gui import phases
 
 from . import theme
-from .widgets import Paragraph
+from .widgets import Paragraph, tooltip
 
 # Blocked and ready must not be told apart by colour alone: the two dimmest
 # readable greys in the palette are nearly the same shade, and the only ones
@@ -68,8 +68,8 @@ class PhaseButton(QPushButton):
         self.setCursor(
             Qt.CursorShape.ForbiddenCursor if blocked
             else Qt.CursorShape.PointingHandCursor)
-        self.setToolTip(phase["reason"] if blocked else (
-            f"{phase['purpose']}\n{phase['detail']}".strip()))
+        self.setToolTip(tooltip(phase["reason"] if blocked else (
+            f"{phase['purpose']}\n{phase['detail']}".strip())))
 
     def set_current(self, current: bool) -> None:
         self.setProperty("current", current)

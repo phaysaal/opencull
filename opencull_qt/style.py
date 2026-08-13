@@ -37,7 +37,7 @@ from opencull_gui.style import (
 
 from . import theme
 from .colour import for_screen
-from .widgets import ElidedLabel, Filmstrip, short_path
+from .widgets import ElidedLabel, Filmstrip, short_path, tooltip
 
 # The kernel reads at most this many examples, so asking for more spends
 # nothing extra and says something untrue about what was read.
@@ -69,9 +69,9 @@ class ProfileCard(QFrame):
         self.setFixedSize(self.WIDTH, self.HEIGHT)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setProperty("kept", "true" if in_use else "false")
-        self.setToolTip(
+        self.setToolTip(tooltip(
             f"{item.get('model_name') or item['name']}\n"
-            "Click to read how this profile was extracted.")
+            "Click to read how this profile was extracted."))
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
@@ -121,7 +121,7 @@ class ProfileCard(QFrame):
             button.setProperty("slim", True)
             button.setFont(theme.body(9))
             button.setCursor(Qt.CursorShape.PointingHandCursor)
-            button.setToolTip(tip)
+            button.setToolTip(tooltip(tip))
             button.clicked.connect(
                 lambda _checked=False, emit=signal: emit.emit(self.index))
             row.addWidget(button)
@@ -185,7 +185,7 @@ class ExampleTile(QFrame):
         self.badge.setObjectName("tileBadge")
         self.badge.setFont(theme.body(8))
         self.badge.hide()
-        self.setToolTip(str(self.path))
+        self.setToolTip(tooltip(str(self.path)))
 
     def paint_thumbnail(self) -> None:
         """Decode at thumbnail size, which a finished export needs."""
@@ -319,9 +319,9 @@ class StylePanel(QWidget):
         self.add_button.setObjectName("ghost")
         self.add_button.setFont(theme.body(9))
         self.add_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.add_button.setToolTip(
+        self.add_button.setToolTip(tooltip(
             "Add finished photographs of your own. Add from several "
-            "folders if the look lives across them.")
+            "folders if the look lives across them."))
         self.add_button.clicked.connect(
             lambda _checked=False: self.add_examples())
         examples_head.addWidget(self.add_button)
@@ -329,7 +329,7 @@ class StylePanel(QWidget):
         self.clear_button.setObjectName("ghost")
         self.clear_button.setFont(theme.body(9))
         self.clear_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.clear_button.setToolTip("Take every chosen photograph out.")
+        self.clear_button.setToolTip(tooltip("Take every chosen photograph out."))
         self.clear_button.clicked.connect(
             lambda _checked=False: self.clear_examples())
         examples_head.addWidget(self.clear_button)
@@ -349,9 +349,9 @@ class StylePanel(QWidget):
         self.create_button.setObjectName("primary")
         self.create_button.setFont(theme.body(10))
         self.create_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.create_button.setToolTip(
+        self.create_button.setToolTip(tooltip(
             "Choose finished photographs of your own -- edited the way "
-            "you like them -- and read a style from them.")
+            "you like them -- and read a style from them."))
         self.create_button.clicked.connect(
             lambda _checked=False: self.add_examples())
         start.addWidget(self.create_button)
@@ -371,9 +371,9 @@ class StylePanel(QWidget):
         self.retry_button.setObjectName("ghost")
         self.retry_button.setFont(theme.body(9))
         self.retry_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.retry_button.setToolTip(
+        self.retry_button.setToolTip(tooltip(
             "Read exactly those photographs into this profile. Nothing "
-            "already read is read again.")
+            "already read is read again."))
         self.retry_button.clicked.connect(
             lambda _checked=False: self.retry_unread())
         unread_row.addWidget(self.retry_button)
@@ -381,9 +381,9 @@ class StylePanel(QWidget):
         self.ignore_button.setObjectName("ghost")
         self.ignore_button.setFont(theme.body(9))
         self.ignore_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.ignore_button.setToolTip(
+        self.ignore_button.setToolTip(tooltip(
             "Keep the profile as it is. The photographs stay recorded as "
-            "unread, so the profile never passes for more than it is.")
+            "unread, so the profile never passes for more than it is."))
         self.ignore_button.clicked.connect(
             lambda _checked=False: self.ignore_unread())
         unread_row.addWidget(self.ignore_button)
@@ -416,9 +416,9 @@ class StylePanel(QWidget):
         self.build_button.setObjectName("primary")
         self.build_button.setFont(theme.body(10))
         self.build_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.build_button.setToolTip(
+        self.build_button.setToolTip(tooltip(
             "Read your style from the photographs above. Every one is "
-            "shown to a vision model, so this costs.")
+            "shown to a vision model, so this costs."))
         self.build_button.clicked.connect(
             lambda _checked=False: self.build())
         actions.addWidget(self.build_button)
@@ -785,9 +785,9 @@ class StylePanel(QWidget):
             "own.")
         self.build_button.setText("Refine this profile")
         self.build_button.setEnabled(False)
-        self.build_button.setToolTip(
+        self.build_button.setToolTip(tooltip(
             "Add photographs to refine this profile. Its own are already "
-            "in it, so only the new ones are read.")
+            "in it, so only the new ones are read."))
 
 
     def retire(self, row: int) -> None:

@@ -237,7 +237,10 @@ class VerificationTests(unittest.TestCase):
         self.choose(page, "calibrated")
         self.assertEqual(page.suggestion(), "")
         self.assertFalse(page.verify_button.isEnabled())
-        self.assertIn("no claim to check", page.verify_button.toolTip())
+        # Tooltips are set in a column, so the sentence a test is looking
+        # for may fall across two lines of it.
+        self.assertIn("no claim to check",
+                      " ".join(page.verify_button.toolTip().split()))
 
     def test_a_suggested_treatment_carries_what_it_promised(self):
         page = self.page()
@@ -454,6 +457,58 @@ class DevelopPageTests(unittest.TestCase):
         before = dict(page.previews)
         page._request_previews()
         self.assertEqual(page.previews, before)
+
+    def test_no_tooltip_is_drawn_wider_than_the_window(self):
+        """A tooltip is a paragraph, and a paragraph needs a column.
+
+        Qt sets plain text on one line however long the sentence is, so a
+        treatment's stated intent -- three hundred characters of it --
+        was drawn as a single strip wider than the window it belonged to.
+        """
+        from PySide6.QtGui import QFontMetrics
+        from PySide6.QtWidgets import QToolTip, QWidget
+
+        page = self.suggested_page(marked=(NAMES[0],))
+        # An intent the length a model actually writes. The fixture's own
+        # are a handful of words, which would fit however they were set
+        # and would let this test pass over the defect it is here for.
+        written = page.workspace.treatments
+        page.workspace.treatments = lambda photo: [
+            {**item, "intent": item["intent"] and (
+                "A professionally refined adaptation of the learned "
+                "Saturated Coastal Monumentalism profile: use its bold blue "
+                "atmosphere, luminous cloud structure, selective green "
+                "intensity, and crisp environmental separation for this "
+                "lake-and-mountain overlook, while avoiding its "
+                "inappropriate cliff-and-surf exaggeration.")}
+            for item in written(photo)]
+        page._fill_treatments()
+
+        metrics = QFontMetrics(QToolTip.font())
+        tips = [
+            (widget.__class__.__name__, widget.toolTip())
+            for widget in page.findChildren(QWidget) if widget.toolTip()]
+        tips += [("treatment", page.treatments.item(row).toolTip())
+                 for row in range(page.treatments.count())]
+        self.assertGreater(len(tips), 5, "no tooltips were found to measure")
+        self.assertGreater(
+            max(len(text) for _where, text in tips), 300,
+            "the longest tooltip must be long enough to overflow unwrapped")
+        for where, text in tips:
+            widest = max(metrics.horizontalAdvance(line)
+                         for line in text.split("\n"))
+            self.assertLessEqual(
+                widest, page.width(),
+                f"{where} is drawn {widest}px wide in a {page.width()}px "
+                f"window: {text.splitlines()[0][:60]}...")
+
+    def test_a_treatment_tooltip_keeps_its_name_on_the_first_line(self):
+        page = self.suggested_page(marked=(NAMES[0],))
+        rows = range(page.treatments.count())
+        named = [page.treatments.item(row).toolTip().split("\n")[0]
+                 for row in rows]
+        self.assertEqual(
+            named, [item["name"] for item in page.available])
 
     def test_previews_are_rendered_for_every_treated_frame_not_only_one(self):
         """The twentieth frame should not be rendered while you look at it."""

@@ -717,7 +717,7 @@ class LauncherWindowTests(unittest.TestCase):
         invitation.shows.set_all(False)
         self.assertFalse(invitation.button.isEnabled())
         self.assertIn("nothing for the run to read",
-                      invitation.button.toolTip())
+                      " ".join(invitation.button.toolTip().split()))
 
     def test_a_partial_cull_carries_the_prefilter_to_the_job(self):
         window, services = self.build(projects=[])

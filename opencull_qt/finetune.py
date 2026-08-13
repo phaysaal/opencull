@@ -44,6 +44,7 @@ from opencull_gui.development import DevelopmentWorkspace
 from . import theme
 from .develop import PROOF_EDGE, PhotoLabel, Renderer
 from .previews import PreviewLoader
+from .widgets import tooltip
 
 PHOTO_ROW = 30
 TREATMENT_ROW = 34
@@ -70,9 +71,9 @@ class Control(QWidget):
         self.enabled = QCheckBox(control["label"])
         self.enabled.setChecked(control["enabled"])
         self.enabled.setFont(theme.body(10))
-        self.enabled.setToolTip(
+        self.enabled.setToolTip(tooltip(
             "Switch this operation off entirely. What it was asked to do "
-            "stays readable.")
+            "stays readable."))
         self.enabled.toggled.connect(self._switched)
         head.addWidget(self.enabled)
         head.addStretch(1)
@@ -256,10 +257,10 @@ class FineTunePage(QWidget):
         self.prompt.setFont(theme.body(10))
         self.prompt.setPlaceholderText(
             "Say it: shadows +12, vignette -8, temperature 5400 kelvin")
-        self.prompt.setToolTip(
+        self.prompt.setToolTip(tooltip(
             "Typed words compile on this machine, through the same grammar "
             "the suggestions use, and move the controls below. No model is "
-            "asked and nothing is spent.")
+            "asked and nothing is spent."))
         self.prompt.returnPressed.connect(self.speak)
         layout.addWidget(self.prompt)
 
@@ -282,8 +283,8 @@ class FineTunePage(QWidget):
         self.reset_button.setObjectName("ghost")
         self.reset_button.setFont(theme.body(10))
         self.reset_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.reset_button.setToolTip(
-            "Put every control back to what the model asked for.")
+        self.reset_button.setToolTip(tooltip(
+            "Put every control back to what the model asked for."))
         self.reset_button.clicked.connect(self.reset)
         actions.addWidget(self.reset_button)
         actions.addStretch(1)
@@ -293,9 +294,9 @@ class FineTunePage(QWidget):
         self.keep_button.setObjectName("primary")
         self.keep_button.setFont(theme.body(10))
         self.keep_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.keep_button.setToolTip(
+        self.keep_button.setToolTip(tooltip(
             "Render at full size and record it as its own version, beside "
-            "the treatment it came from.")
+            "the treatment it came from."))
         self.keep_button.clicked.connect(self.keep)
         layout.addWidget(self.keep_button)
 
@@ -432,11 +433,11 @@ class FineTunePage(QWidget):
             rail.setObjectName("guardrail")
             rail.setWordWrap(True)
             rail.setFont(theme.body(8))
-            rail.setToolTip(
+            rail.setToolTip(tooltip(
                 "A promise this treatment made, which verification checks. "
                 "It is shown rather than offered: switching it off would "
                 "leave a certificate judging a claim the rendering no longer "
-                "makes.")
+                "makes."))
             self.body.addWidget(rail)
         self.body.addStretch(1)
 

@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
 
 from . import theme
 from .previews import PreviewLoader, scaled
+from .widgets import tooltip
 
 TILE = 168
 # Contact sheets want density first: extra width becomes extra columns at
@@ -104,7 +105,7 @@ class Tile(QFrame):
         if selectable:
             self.setCursor(Qt.CursorShape.PointingHandCursor)
             self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-            self.setToolTip("Click to leave this frame out of the run.")
+            self.setToolTip(tooltip("Click to leave this frame out of the run."))
         self.glass = _Glass(self)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(5, 5, 5, 4)
@@ -134,9 +135,9 @@ class Tile(QFrame):
         self.eye.setObjectName("tileEye")
         self.eye.setFont(theme.body(8))
         self.eye.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.eye.setToolTip(
+        self.eye.setToolTip(tooltip(
             "Why this frame was rated as it was: the model's full "
-            "response, every axis it judged.")
+            "response, every axis it judged."))
         self.eye.setFixedSize(24, 20)
         self.eye.clicked.connect(
             lambda _checked=False: self.inspect_wanted.emit(self.name))
@@ -155,7 +156,7 @@ class Tile(QFrame):
     def set_badge(self, text: str, tip: str = "") -> None:
         """A small verdict over the image's corner; empty clears it."""
         self.badge.setText(text)
-        self.badge.setToolTip(tip)
+        self.badge.setToolTip(tooltip(tip))
         self.badge.setVisible(bool(text))
         if text:
             self._place_badge()
@@ -204,9 +205,9 @@ class Tile(QFrame):
         self.setProperty("left", not included)
         self.style().unpolish(self)
         self.style().polish(self)
-        self.setToolTip(
+        self.setToolTip(tooltip(
             "Left out. Click to bring it back."
-            if not included else "Click to leave this frame out of the run.")
+            if not included else "Click to leave this frame out of the run."))
         # Over the photograph, not the caption: the name stays readable so
         # the left-out frame is still accountable.
         self.glass.setGeometry(5, 5, self._tile, self._tile)
@@ -318,7 +319,7 @@ class ContactSheet(QWidget):
             tile.opens = opens
             if opens:
                 tile.setCursor(Qt.CursorShape.PointingHandCursor)
-                tile.setToolTip("Open this frame.")
+                tile.setToolTip(tooltip("Open this frame."))
             tile.toggled.connect(self.toggle)
             tile.inspect_wanted.connect(self.inspect_wanted)
             tile.opened.connect(self.opened)

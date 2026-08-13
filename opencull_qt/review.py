@@ -44,7 +44,7 @@ from opencull_gui.reviews import ReviewError, ReviewStore, approve_remaining
 
 from . import theme
 from .previews import PreviewLoader, plain_icon, scaled
-from .widgets import Filmstrip, workspace_title
+from .widgets import Filmstrip, tooltip, workspace_title
 
 THUMB = 200
 # The stored thumb previews are 520px on the long edge, so tiles can grow
@@ -99,7 +99,7 @@ class Frame(QFrame):
             star = QLabel("AI")
             star.setObjectName("frameAi")
             star.setFont(theme.display(7))
-            star.setToolTip("Recommended by the curator")
+            star.setToolTip(tooltip("Recommended by the curator"))
             caption.addWidget(star)
         layout.addLayout(caption)
 
@@ -188,7 +188,7 @@ class GroupCard(QFrame):
         self.setObjectName("card")
         self.setFixedSize(self.WIDTH, self.HEIGHT)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setToolTip("Open this group to review or override.")
+        self.setToolTip(tooltip("Open this group to review or override."))
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
@@ -204,9 +204,9 @@ class GroupCard(QFrame):
         mark = QLabel("✓" if reviewed else "·")
         mark.setObjectName("frameAi" if reviewed else "frameNumber")
         mark.setFont(theme.mono(8))
-        mark.setToolTip(
+        mark.setToolTip(tooltip(
             "You have reviewed this group." if reviewed
-            else "Not reviewed yet; the AI proposal stands.")
+            else "Not reviewed yet; the AI proposal stands."))
         caption.addWidget(mark)
         title = QLabel(cluster_id)
         title.setObjectName("frameName")
@@ -478,9 +478,9 @@ class ReviewPage(QWidget):
         self.back_button.setObjectName("ghost")
         self.back_button.setFont(theme.body(9))
         self.back_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.back_button.setToolTip(
+        self.back_button.setToolTip(tooltip(
             "Back to every group at once. Your decisions are saved as "
-            "you make them.")
+            "you make them."))
         self.back_button.clicked.connect(self.show_overview)
         heading_row.addWidget(self.back_button)
         self.heading = QLabel("")
@@ -520,7 +520,7 @@ class ReviewPage(QWidget):
             button = QPushButton(label)
             button.setObjectName("ghost")
             button.setFont(theme.body(9))
-            button.setToolTip(tip)
+            button.setToolTip(tooltip(tip))
             button.clicked.connect(slot)
             actions.addWidget(button)
         actions.addStretch(1)
@@ -595,9 +595,9 @@ class ReviewPage(QWidget):
         self.approve_button.setObjectName("ghost")
         self.approve_button.setFont(theme.body(10))
         self.approve_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.approve_button.setToolTip(
+        self.approve_button.setToolTip(tooltip(
             "Accept the proposal for every group you have not reviewed. "
-            "Groups you already decided stay exactly as you left them.")
+            "Groups you already decided stay exactly as you left them."))
         self.approve_button.clicked.connect(self.approve_the_lot)
         layout.addWidget(self.approve_button)
 
@@ -690,9 +690,9 @@ class ReviewPage(QWidget):
             item.setData(Qt.ItemDataRole.UserRole + 1, reviewed)
             item.setIcon(plain_icon(self._index_pixmap(cluster_id, reviewed)))
             item.setSizeHint(QSize(220, 70))
-            item.setToolTip(
+            item.setToolTip(tooltip(
                 "Reviewed." if reviewed
-                else "Not reviewed yet; the AI proposal stands.")
+                else "Not reviewed yet; the AI proposal stands."))
             self.clusters.addItem(item)
 
         if show_headers:

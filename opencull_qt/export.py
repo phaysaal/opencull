@@ -38,7 +38,7 @@ from opencull_gui.development import DevelopmentWorkspace
 from opencull_gui.proofsheet import write_proof_sheet
 
 from . import theme
-from .widgets import short_path
+from .widgets import short_path, tooltip
 
 RENDER_ROW = 34
 
@@ -185,9 +185,9 @@ class ExportPage(QWidget):
         # recorded on every export record.
         self.list.setDragDropMode(
             QListWidget.DragDropMode.InternalMove)
-        self.list.setToolTip(
+        self.list.setToolTip(tooltip(
             "Drag to set the delivery order. The order is recorded with "
-            "the delivery.")
+            "the delivery."))
         column.addWidget(self.list)
 
         where = QHBoxLayout()
@@ -207,10 +207,10 @@ class ExportPage(QWidget):
         self.proof = QCheckBox("Also write a proof sheet")
         self.proof.setFont(theme.body(10))
         self.proof.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.proof.setToolTip(
+        self.proof.setToolTip(tooltip(
             "One self-contained page beside the delivery: each frame as "
             "delivered next to the frame as shot, with its treatment's "
-            "intent and its certificate. Nothing is spent.")
+            "intent and its certificate. Nothing is spent."))
         column.addWidget(self.proof)
 
         actions = QHBoxLayout()
@@ -324,7 +324,7 @@ class ExportPage(QWidget):
             item.setCheckState(
                 Qt.CheckState.Unchecked if already in delivered
                 else Qt.CheckState.Checked)
-            item.setToolTip(short_path(str(render.get("path", ""))))
+            item.setToolTip(tooltip(short_path(str(render.get("path", "")))))
             item.setSizeHint(QSize(0, RENDER_ROW))
             self.list.addItem(item)
         self.list.blockSignals(False)

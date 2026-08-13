@@ -51,6 +51,7 @@ from .develop import PhotoLabel
 from .previews import PreviewLoader, plain_icon
 from .sheet import ContactSheet
 from .suggestions import ask_suggestion_scope, launch_suggestions
+from .widgets import tooltip
 
 ROW = 32
 
@@ -202,17 +203,17 @@ class ShortlistPage(QWidget):
         why.setObjectName("ghost")
         why.setFont(theme.body(9))
         why.setCursor(Qt.CursorShape.PointingHandCursor)
-        why.setToolTip(
+        why.setToolTip(tooltip(
             "The recorded story of this frame: culled, reviewed, assessed, "
-            "rated. Nothing is computed; nothing is asked.")
+            "rated. Nothing is computed; nothing is asked."))
         why.clicked.connect(lambda: self.why_wanted.emit(self.current))
         back_to_grid = QPushButton("← All frames")
         back_to_grid.setObjectName("ghost")
         back_to_grid.setFont(theme.body(9))
         back_to_grid.setCursor(Qt.CursorShape.PointingHandCursor)
-        back_to_grid.setToolTip(
+        back_to_grid.setToolTip(tooltip(
             "Back to every frame at once. Your ratings are saved as you "
-            "make them.")
+            "make them."))
         back_to_grid.clicked.connect(
             lambda _checked=False: self.show_overview())
         head.insertWidget(0, back_to_grid)
@@ -221,9 +222,9 @@ class ShortlistPage(QWidget):
         self.reask_button.setObjectName("ghost")
         self.reask_button.setFont(theme.body(9))
         self.reask_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.reask_button.setToolTip(
+        self.reask_button.setToolTip(tooltip(
             "Ask the models about this one photograph again. Every other "
-            "frame's rating is kept, so this costs one frame.")
+            "frame's rating is kept, so this costs one frame."))
         self.reask_button.clicked.connect(
             lambda _checked=False: self.reask_wanted.emit(self.current))
         head.addWidget(self.reask_button)
@@ -232,9 +233,9 @@ class ShortlistPage(QWidget):
             self.detail_button.setObjectName("ghost")
             self.detail_button.setFont(theme.body(9))
             self.detail_button.setCursor(Qt.CursorShape.PointingHandCursor)
-            self.detail_button.setToolTip(
+            self.detail_button.setToolTip(tooltip(
                 "The model's full response for this frame: every axis it "
-                "judged, the score, and its reason.")
+                "judged, the score, and its reason."))
             self.detail_button.clicked.connect(self._show_assessment_detail)
             head.addWidget(self.detail_button)
         head.addStretch(1)
@@ -389,9 +390,9 @@ class ShortlistPage(QWidget):
             self.reassess_button.setObjectName("ghost")
             self.reassess_button.setFont(theme.body(9))
             self.reassess_button.setCursor(Qt.CursorShape.PointingHandCursor)
-            self.reassess_button.setToolTip(
+            self.reassess_button.setToolTip(tooltip(
                 "Ask the models to assess this selection again from "
-                "scratch. Your own ratings and marks are kept.")
+                "scratch. Your own ratings and marks are kept."))
             self.reassess_button.clicked.connect(self.reassess_wanted)
             layout.addWidget(self.reassess_button)
 
@@ -415,8 +416,8 @@ class ShortlistPage(QWidget):
         self.interesting.setObjectName("gate")
         self.interesting.setFont(theme.body(10))
         self.interesting.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.interesting.setToolTip(
-            "Only frames marked here are sent for editing suggestions.")
+        self.interesting.setToolTip(tooltip(
+            "Only frames marked here are sent for editing suggestions."))
         self.interesting.clicked.connect(self.set_interesting)
         row.addWidget(self.interesting)
 
@@ -483,9 +484,9 @@ class ShortlistPage(QWidget):
         self.suggest_button.setObjectName("primary")
         self.suggest_button.setFont(theme.body(10))
         self.suggest_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.suggest_button.setToolTip(
+        self.suggest_button.setToolTip(tooltip(
             "Ask the models how to develop each marked frame. One call per "
-            "frame, so this costs.")
+            "frame, so this costs."))
         self.suggest_button.clicked.connect(self.suggest)
         actions.addWidget(self.suggest_button)
         layout.addLayout(actions)
@@ -561,8 +562,8 @@ class ShortlistPage(QWidget):
             # the tier the rest of the pipeline reads.
             item.setData(Qt.ItemDataRole.UserRole + 1, tier_stars(rated))
             if odd:
-                item.setToolTip(
-                    f"The model {self._disagreements[photo]}.")
+                item.setToolTip(tooltip(
+                    f"The model {self._disagreements[photo]}."))
             item.setIcon(plain_icon(self._entry_pixmap(photo, rated)))
             item.setSizeHint(QSize(0, max(ROW, 64)))
             self.list.addItem(item)

@@ -50,7 +50,7 @@ from opencull_gui.shortlist import settled_order, tier_rank
 from . import theme
 from .previews import scaled
 from .sheet import ContactSheet
-from .widgets import Stamp
+from .widgets import Stamp, tooltip
 
 PHOTO_ROW = 30
 
@@ -218,7 +218,7 @@ class SuggestionsPage(QWidget):
         why.setObjectName("ghost")
         why.setFont(theme.body(9))
         why.setCursor(Qt.CursorShape.PointingHandCursor)
-        why.setToolTip("The recorded story of this frame.")
+        why.setToolTip(tooltip("The recorded story of this frame."))
         why.clicked.connect(lambda: self.why_wanted.emit(self.current))
         head.addWidget(why)
         head.addStretch(1)
@@ -244,16 +244,16 @@ class SuggestionsPage(QWidget):
         self.ask_button.setObjectName("primary")
         self.ask_button.setFont(theme.body(10))
         self.ask_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.ask_button.setToolTip(
-            "Every marked frame is a separate call to a model, so this costs.")
+        self.ask_button.setToolTip(tooltip(
+            "Every marked frame is a separate call to a model, so this costs."))
         self.ask_button.clicked.connect(self.suggest)
         actions.addWidget(self.ask_button)
         self.choose_button = QPushButton("Choose frames…")
         self.choose_button.setObjectName("ghost")
         self.choose_button.setFont(theme.body(10))
         self.choose_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.choose_button.setToolTip(
-            "Change which assessed frames are marked to develop.")
+        self.choose_button.setToolTip(tooltip(
+            "Change which assessed frames are marked to develop."))
         self.choose_button.clicked.connect(lambda: self.show_chooser())
         actions.addWidget(self.choose_button)
         actions.addStretch(1)
@@ -695,11 +695,11 @@ class SceneStrip(QFrame):
             frame.setFixedSize(self.THUMB, self.THUMB)
             frame.setAlignment(Qt.AlignmentFlag.AlignCenter)
             speaks = photo == self.representative
-            frame.setToolTip(
+            frame.setToolTip(tooltip(
                 f"{photo} — its treatment is written, and shared with the "
                 f"rest of this scene." if speaks else
                 f"{photo} — developed with the treatment written for "
-                f"{self.representative}.")
+                f"{self.representative}."))
             if speaks:
                 frame.setStyleSheet(
                     f"border: 2px solid {theme.SAFELIGHT}; border-radius: 4px;")

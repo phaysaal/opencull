@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 from opencull_gui import criteria
 
 from . import theme
+from .widgets import tooltip
 
 
 class _WrapLabel(QLabel):
@@ -203,9 +204,9 @@ class CriteriaDialog(QDialog):
     def _lenses_changed(self, _checked: bool = False) -> None:
         any_lens = any(w.choice.isChecked() for w in self.lens_options)
         self.run.setEnabled(any_lens)
-        self.run.setToolTip(
+        self.run.setToolTip(tooltip(
             "" if any_lens
-            else "Choose at least one kind of merit to judge by.")
+            else "Choose at least one kind of merit to judge by."))
 
     def choice(self) -> dict:
         """The composed parts, for remembering and for the record."""
