@@ -548,6 +548,42 @@ class CarriedMovesTests(unittest.TestCase):
         self.assertNotIn("CURRENTLY IN FORCE", built)
 
 
+class LostAnswerTests(unittest.TestCase):
+    """An answer that never arrived costs its mask, not the treatment.
+
+    The runtime discards a generation that is missing any field of its
+    schema. A linear mask has no centre and no radius, the model left
+    them out, every retry was thrown away -- and the check on the mask
+    took the whole run down with it: plan paid for, frame rendered,
+    nothing kept.
+    """
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+
+    def test_a_mask_that_never_arrived_is_not_kept(self):
+        self.assertFalse(treatment.keep_mask(str(self.root), [], None))
+
+    def test_what_did_arrive_is_written_down_anyway(self):
+        treatment.keep_mask(str(self.root), [], None)
+        kept = json.loads((self.root / "mask-1.json").read_text())
+        self.assertIn("unreadable", kept)
+
+    def test_the_masks_that_did_arrive_still_make_a_recipe(self):
+        good = {"region": "the rooftop", "shape": "linear",
+                "anchor": "bottom", "adjustments": {"exposure": 0.4}}
+        recipe = json.loads(treatment.assemble_recipe(
+            "A.ARW", {"mask_count": 2, "global_adjustments": {"exposure": -1.5}},
+            [good]))
+        self.assertEqual([item["op"] for item in recipe["operations"]],
+                         ["tone.exposure", "mask.linear"])
+
+    def test_the_mask_question_says_every_field_is_required(self):
+        built = treatment.mask_prompt(
+            json.dumps({"baseline": {}}), {"strategy": "s"}, 0, 1, [])
+        self.assertIn("EVERY FIELD PRESENT", built)
+
+
 class ContactSheetTests(unittest.TestCase):
     """Every round on one sheet, so the argument can be looked at."""
 

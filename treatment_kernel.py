@@ -357,6 +357,10 @@ def mask_prompt(evidence_text: str, plan: Any, index: float, total: float,
         "photographer would use -- 'the solar crescent', 'the rooftop "
         "and tree line'. Not a number. In 'purpose', say what it is for. "
         "Everything else is numbers.",
+        "ANSWER WITH EVERY FIELD PRESENT, including the ones your shape "
+        "does not use: give centre_x, centre_y and radius as 0 for a "
+        "linear or luma mask, and anchor as \"\" for a radial one. An "
+        "answer missing a field is thrown away and the mask is lost.",
         "shape: 'radial' for a region around a point; 'linear' for a "
         "gradient from an edge; 'luma' for a band of brightness.",
         "For a radial mask give centre_x and centre_y as percentages "

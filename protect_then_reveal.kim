@@ -96,11 +96,14 @@ forall attempt in range(rounds):
 
         -- The branch. Most photographs answer zero and the loop below
         -- never runs; this one is asked about each region on its own.
+        -- A mask that does not arrive is skipped, not fatal. One live run
+        -- lost a whole treatment -- the plan, the render, the budget --
+        -- because a single answer came back without every field in it.
         masks := []
         forall index in range(mask_count(plan)):
             mask := memo gen<Mask>(mask_prompt(evidence, plan, index, mask_count(plan), masks), images=[start]) by A
-            check keep_mask(directory, masks, mask)
-            masks := masks + [mask]
+            if check keep_mask(directory, masks, mask):
+                masks := masks + [mask]
 
         -- Assembled here from numbers, not written as prose and hoped to
         -- compile: a live round once produced two operations out of a
