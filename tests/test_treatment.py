@@ -548,6 +548,37 @@ class CarriedMovesTests(unittest.TestCase):
         self.assertNotIn("CURRENTLY IN FORCE", built)
 
 
+class ContactSheetTests(unittest.TestCase):
+    """Every round on one sheet, so the argument can be looked at."""
+
+    def setUp(self):
+        self._temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self._temporary.name)
+        self.addCleanup(self._temporary.cleanup)
+        frame(self.root / "start.jpg")
+        self.records = []
+        for n in (1, 2):
+            render = frame(self.root / f"round-{n}.jpg", bright=(700, 380 + n))
+            self.records.append(json.dumps({
+                "round": n, "render": str(render),
+                "measurements": {"mean": 10.0 + n}}))
+
+    def test_it_puts_the_start_and_every_round_on_one_sheet(self):
+        where = treatment.contact_sheet(str(self.root), self.records, 1)
+        self.assertEqual(Path(where).name, "contact-sheet.jpg")
+        with Image.open(where) as sheet:
+            self.assertGreater(sheet.height, 600)
+
+    def test_a_round_whose_render_is_gone_is_left_out_not_fatal(self):
+        missing = json.dumps({"round": 3, "render": str(self.root / "no.jpg")})
+        self.assertTrue(treatment.contact_sheet(
+            str(self.root), [*self.records, missing], 1))
+
+    def test_nothing_to_compare_makes_no_sheet(self):
+        empty = Path(tempfile.mkdtemp())
+        self.assertEqual(treatment.contact_sheet(str(empty), [], 0), "")
+
+
 class BoundaryTests(unittest.TestCase):
     """Nothing crossing from the program assumes what shape it is in.
 

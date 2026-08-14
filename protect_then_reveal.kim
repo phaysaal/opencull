@@ -118,6 +118,11 @@ forall attempt in range(rounds):
 
 check len(records) > 0
 chosen := best_round(records)
+
+-- Every round on one sheet, so the argument the loop had with itself
+-- can be looked at without opening six files.
+sheet := contact_sheet(directory, records, chosen)
+check len(sheet) > 0
 report := treatment_report(directory, photo, evidence, records, chosen)
 check treatment_valid(report)
 warrant := treatment_evidence(report)

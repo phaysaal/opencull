@@ -64,7 +64,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from PIL import Image, ImageFilter
+from PIL import Image, ImageDraw, ImageFilter
 
 from recipe_compiler import PRESET_STYLE, RecipeCompileError, compile_recipe
 
@@ -670,6 +670,57 @@ def starting_frame(photos: str, photo: str, directory: str,
 
 
 # --- keeping the working -------------------------------------------------
+
+def contact_sheet(directory: str, records: list[str], chosen: int) -> str:
+    """Every round the treatment kept, on one sheet, in order.
+
+    The rounds are already on disk as separate files, which is the proof;
+    this is so a photographer can see the argument the loop had with
+    itself without opening six of them. The round it is offering is
+    marked, and each frame carries the measurements it was judged on.
+    """
+    root = Path(str(directory))
+    frames = [("as the renderer starts", root / "start.jpg")]
+    for item in records:
+        record = data(item) or {}
+        render = str(record.get("render") or "")
+        if render and Path(render).is_file():
+            number = int(record.get("round", 0))
+            mark = "  ← offered" if number == int(chosen) else ""
+            frames.append((f"round {number}{mark}", Path(render)))
+    frames = [(label, path) for label, path in frames if path.is_file()]
+    if len(frames) < 2:
+        return ""
+
+    wide, pad, caption = 560, 14, 30
+    thumbs = []
+    for label, path in frames:
+        picture = Image.open(path).convert("RGB")
+        picture.thumbnail((wide, wide), Image.Resampling.LANCZOS)
+        thumbs.append((label, path, picture))
+    columns = 2
+    tall = max(item[2].height for item in thumbs)
+    rows = (len(thumbs) + columns - 1) // columns
+    sheet = Image.new(
+        "RGB", (columns * wide + (columns + 1) * pad,
+                rows * (tall + caption) + (rows + 1) * pad), (18, 18, 20))
+    draw = ImageDraw.Draw(sheet)
+    for index, (label, path, picture) in enumerate(thumbs):
+        column, row = index % columns, index // columns
+        x = pad + column * (wide + pad) + (wide - picture.width) // 2
+        y = pad + row * (tall + caption + pad)
+        sheet.paste(picture, (x, y))
+        measured = measure_frame(str(path))
+        draw.text(
+            (pad + column * (wide + pad), y + tall + 8),
+            f"{label}  ·  separation {measured['subject_separation']}"
+            f"  ·  veil {measured['veil_percent']}%"
+            f"  ·  black {measured['black_percent']}%"
+            f"  ·  grain {measured['grain']}", fill=(205, 205, 210))
+    destination = root / "contact-sheet.jpg"
+    sheet.save(destination, quality=92)
+    return str(destination)
+
 
 def treatment_directory(photos: str, photo: str, stamp: str) -> str:
     """Where one treatment's rounds are kept, beside the photographs."""
