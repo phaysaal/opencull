@@ -1259,6 +1259,7 @@ class GuiProviderTests(unittest.TestCase):
         for name in (
             "opencull.kim", "scan.py", "opencull_kernel.py",
             "professional_shortlist.kim", "shortlist_kernel.py",
+            "protect_then_reveal.kim", "treatment_kernel.py",
         ):
             (project / name).write_bytes((source / name).read_bytes())
         keychain = FakeKeychain()
@@ -1481,13 +1482,21 @@ class GuiProviderTests(unittest.TestCase):
                 command_builder=lambda job: [],
                 program_checker=lambda path: None,
             )
+            saved = store.save(provider_data(), 0, "private-token")
+            profile_id = saved["profiles"][0]["id"]
             try:
                 state = manager.add_treatment(
-                    str(photos), "DSC00703.ARW", rounds=4)
+                    str(photos), "DSC00703.ARW", rounds=4,
+                    provider_profile_id=profile_id)
                 job = state["jobs"][0]
                 self.assertEqual(job["kind"], "treatment")
                 self.assertEqual(job["photo"], "DSC00703.ARW")
                 self.assertEqual(job["rounds"], 4)
+                # The worker reads this to hand the key to the process;
+                # a job without it queues fine and then starves every
+                # model call.
+                self.assertTrue(job["credential_env"])
+                self.assertEqual(job["provider_profile_id"], profile_id)
                 self.assertTrue(job["output"].endswith(
                     "DSC00703.treatment.json"))
                 # A second ask must not overwrite the first report.

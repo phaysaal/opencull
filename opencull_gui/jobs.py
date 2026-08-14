@@ -1050,6 +1050,12 @@ class JobManager:
                     provider_bundle["program_sha256"] if provider_bundle else None),
                 "program_path": (
                     provider_bundle["program_path"] if provider_bundle else None),
+                # The worker reads this to put the key into the process
+                # environment. Every job kind records it; the one that
+                # forgot queued fine and then starved its model calls.
+                "credential_env": (
+                    provider_bundle["credential_env"]
+                    if provider_bundle else ""),
             }
             self._state["jobs"].append(job)
             self._save()
