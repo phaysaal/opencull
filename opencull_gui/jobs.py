@@ -1766,6 +1766,42 @@ class JobManager:
         checkpoint_complete = False
         kind = job.get("kind")
 
+        if kind == "treatment":
+            # The run writes its work down as it goes -- a plan, then the
+            # masks, then the round's render -- so progress is read off
+            # the disk rather than guessed. The newest directory for this
+            # frame that appeared after the job started is this run's.
+            rounds = max(int(job.get("rounds") or 3), 1)
+            stem = Path(str(job.get("photo") or "")).stem
+            started = str(job.get("started_at") or job.get("created_at") or "")
+            newest, rendered, planning = None, 0, 0
+            root = (Path(str(job.get("photos") or "")) / ".darkimiya"
+                    / "Treatments")
+            if stem and root.is_dir():
+                stamp = started.replace("-", "").replace(":", "")[:15]
+                candidates = sorted(
+                    item.name for item in root.glob(f"{stem}.*")
+                    if item.is_dir()
+                    and (not stamp or item.name.rsplit(".", 1)[-1] >= stamp))
+                newest = root / candidates[-1] if candidates else None
+            if newest is not None:
+                rendered = len(list(newest.glob("round-*.jpg")))
+                planning = len(list(newest.glob("plan-*.json")))
+            stage = (
+                "waiting for the first plan" if planning == 0
+                else f"round {rendered}: judging the render"
+                if rendered >= planning
+                else f"round {planning}: planning and rendering")
+            return {
+                "completed_clusters": rendered,
+                "total_clusters": rounds,
+                "fraction": min(rendered / rounds, 1.0),
+                "checkpoint_complete": False,
+                "completed_items": rendered,
+                "total_items": rounds,
+                "stage": stage,
+            }
+
         # Render jobs deliberately use their image output as the completion
         # artifact.  It is not a Kimiya JSON checkpoint and must never be
         # decoded as text while the queue API is assembling status.
@@ -1944,6 +1980,8 @@ class JobManager:
                 if job.get("kind") == "delivery_export"
                 else "Personal style extraction"
                 if job.get("kind") == "style_profile"
+                else "Kimiya treatment"
+                if job.get("kind") == "treatment"
                 else "Kimiya culling")
             job.update(
                 status="running", pid=process.pid, started_at=_now(),
@@ -1975,12 +2013,20 @@ class JobManager:
                     if job.get("kind") == "delivery_export"
                     else "Personal style profile is ready."
                     if job.get("kind") == "style_profile"
+                    else "The treatment is warranted; it is on the develop page."
+                    if job.get("kind") == "treatment"
                     else "Culling report is ready for review.",
                 )
             elif requested == "cancelled":
                 status, message = "cancelled", "Cancelled; checkpoint retained."
             elif job["status"] == "stopping":
                 status, message = "paused", "Paused; resume will validate the checkpoint."
+            elif (job.get("kind") == "treatment"
+                    and "ABSTAINED" in self._log_tail(Path(job["log"]))):
+                status, message = "failed", (
+                    "The panel declined to vouch for the treatment. Every "
+                    "round, render and measurement is kept under "
+                    ".darkimiya/Treatments beside the photographs.")
             elif "PROVIDER REFUSED" in self._log_tail(Path(job["log"])):
                 # Exhausted credit or failed authentication: no retry can
                 # help, and every decision so far is checkpointed. Pausing

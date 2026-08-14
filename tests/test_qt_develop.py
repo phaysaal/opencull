@@ -370,6 +370,31 @@ class TreatmentMarkerTests(unittest.TestCase):
         self.assertFalse(page.treat_button.isEnabled())
         self.assertTrue(page.treating.isVisible())
         self.assertIn("Treating this frame now", page.treating.text())
+        self.assertTrue(page.treating_bar.isVisible())
+
+    def test_the_marker_says_which_round_and_what_it_is_doing(self):
+        page = self.page()
+        job = self.job(page.current, "running")
+        job["rounds"] = 3
+        job["progress"] = {"completed_items": 1,
+                           "stage": "round 2: planning and rendering"}
+        page.treatment_jobs([job])
+        self.assertIn("round 2: planning and rendering",
+                      page.treating.text())
+        self.assertIn("1 of 3 rounds rendered", page.treating.text())
+
+    def test_a_queued_treatment_shows_no_busy_bar(self):
+        page = self.page()
+        page.treatment_jobs([self.job(page.current, "queued")])
+        self.assertFalse(page.treating_bar.isVisible())
+
+    def test_an_abstention_also_ends_the_marker(self):
+        page = self.page()
+        page.treatment_jobs([self.job(page.current, "running")])
+        page.treatment_jobs([self.job(page.current, "failed")])
+        self.assertTrue(page.treat_button.isEnabled())
+        self.assertFalse(page.treating.isVisible())
+        self.assertFalse(page.treating_bar.isVisible())
 
     def test_a_queued_treatment_says_it_is_waiting(self):
         page = self.page()

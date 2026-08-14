@@ -981,7 +981,15 @@ class DevelopPage(QWidget):
         self.treat_button.clicked.connect(self.treat_current)
         layout.addWidget(self.treat_button)
 
-        # What a treatment run for this frame is doing right now.
+        # What a treatment run for this frame is doing right now: a busy
+        # bar because the work is real, and words because a bar that
+        # cannot say "round 2 of 3" is just a light left on.
+        self.treating_bar = QProgressBar()
+        self.treating_bar.setRange(0, 0)
+        self.treating_bar.setTextVisible(False)
+        self.treating_bar.setFixedHeight(6)
+        self.treating_bar.setVisible(False)
+        layout.addWidget(self.treating_bar)
         self.treating = QLabel("")
         self.treating.setObjectName("hint")
         self.treating.setWordWrap(True)
@@ -1355,23 +1363,31 @@ class DevelopPage(QWidget):
         for job in jobs:
             if job.get("status") in {"queued", "running", "stopping",
                                      "detached"}:
-                active[str(job.get("photo") or "")] = str(
-                    job.get("status") or "queued")
+                active[str(job.get("photo") or "")] = job
         finished = {
             str(job.get("photo") or "")
-            for job in jobs if job.get("status") == "completed"}
+            for job in jobs if job.get("status") in {"completed", "failed"}}
         arrived = finished & self._treating_last
         self._treating_last = set(active)
         busy = self.current in active
         self.treat_button.setEnabled(not busy)
         if busy:
-            state = active[self.current]
-            self.treating.setText(
-                "Treating this frame now -- the rounds land under "
-                ".darkimiya/Treatments as they happen."
-                if state == "running" else
-                "A treatment of this frame is waiting in the queue.")
+            job = active[self.current]
+            if str(job.get("status")) == "running":
+                progress = job.get("progress") or {}
+                rounds = int(job.get("rounds") or 0)
+                done = int(progress.get("completed_items") or 0)
+                stage = str(progress.get("stage") or "").strip()
+                said = f"Treating this frame now -- {stage}" if stage else                     "Treating this frame now"
+                if rounds:
+                    said += f" ({done} of {rounds} rounds rendered)"
+                self.treating.setText(said + ".")
+            else:
+                self.treating.setText(
+                    "A treatment of this frame is waiting in the queue.")
         self.treating.setVisible(busy)
+        self.treating_bar.setVisible(
+            busy and str(active[self.current].get("status")) == "running")
         if arrived:
             # A run just ended. If it committed, its report is registered
             # and the list rebuild will offer it; if it abstained, the

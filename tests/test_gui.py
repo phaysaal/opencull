@@ -1514,6 +1514,49 @@ class GuiProviderTests(unittest.TestCase):
             finally:
                 manager.shutdown()
 
+    def test_treatment_progress_is_read_off_the_rounds_on_disk(self):
+        """The run writes its work down as it goes; the queue reads it."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            run = (root / ".darkimiya" / "Treatments"
+                   / "DSC00702.protect-then-reveal.20260814T153200Z")
+            run.mkdir(parents=True)
+            job = {"kind": "treatment", "photo": "DSC00702.ARW",
+                   "photos": str(root), "rounds": 3,
+                   "started_at": "2026-08-14T15:31:31+00:00",
+                   "checkpoint": str(root / "no.checkpoint.json")}
+            probe = JobManager._progress
+            told = probe(job)
+            self.assertEqual(told["stage"], "waiting for the first plan")
+            (run / "plan-1.json").write_text("{}")
+            self.assertIn("round 1: planning", probe(job)["stage"])
+            (run / "round-1.jpg").write_bytes(b"jpg")
+            told = probe(job)
+            self.assertEqual(told["completed_items"], 1)
+            self.assertIn("round 1: judging", told["stage"])
+            (run / "plan-2.json").write_text("{}")
+            (run / "round-2.jpg").write_bytes(b"jpg")
+            told = probe(job)
+            self.assertEqual(told["completed_items"], 2)
+            self.assertAlmostEqual(told["fraction"], 2 / 3, places=2)
+
+    def test_a_stale_treatment_directory_is_not_this_runs_progress(self):
+        """A failed run an hour ago must not report the new run started."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            stale = (root / ".darkimiya" / "Treatments"
+                     / "DSC00702.protect-then-reveal.20260814T104519Z")
+            stale.mkdir(parents=True)
+            (stale / "round-1.jpg").write_bytes(b"jpg")
+            (stale / "plan-1.json").write_text("{}")
+            job = {"kind": "treatment", "photo": "DSC00702.ARW",
+                   "photos": str(root), "rounds": 3,
+                   "started_at": "2026-08-14T15:31:31+00:00",
+                   "checkpoint": str(root / "no.checkpoint.json")}
+            told = JobManager._progress(job)
+            self.assertEqual(told["completed_items"], 0)
+            self.assertEqual(told["stage"], "waiting for the first plan")
+
     def test_queue_binds_custom_judgment_policy_to_generated_program(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

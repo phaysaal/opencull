@@ -104,6 +104,7 @@ JOB_TITLES = {
     "edit_suggestions": "Suggesting edits",
     "style_profile": "Reading your style",
     "semantic_verification": "Verifying",
+    "treatment": "Treating",
 }
 
 
