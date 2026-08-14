@@ -271,12 +271,19 @@ def keep_mask(directory: str, masks: list[str], mask: Any) -> bool:
     return keep_reasoning(directory, f"mask-{len(masks) + 1}", mask)
 
 
-def plan_prompt(evidence_text: str, critique: Any = "") -> str:
+def plan_prompt(evidence_text: str, critique: Any = "",
+                standing: Any = "") -> str:
     """Everything that always applies, asked at once -- including the branch."""
     evidence = data(evidence_text) or {}
+    held = data(standing) or {}
     revision = ([
         "THE LAST ATTEMPT WAS RENDERED AND MEASURED. What it showed, and "
         f"what you said to change:\n{said(data(critique))}",
+        "THE WHOLE-FRAME MOVES CURRENTLY IN FORCE:\n"
+        + json.dumps(held, indent=2, sort_keys=True)
+        + "\nThese stay unless you say otherwise. Name only what changes; "
+        "a move you do not mention keeps the value above. To take one "
+        "away, ask for it as 0. You do not need to restate the frame.",
         "Revise the plan. Change what the critique named -- including the "
         "number of masks, if the structure was wrong -- and leave the rest "
         "alone. A rewrite that moves everything cannot be judged.",
@@ -380,10 +387,13 @@ def _bounded(name: str, value: Any) -> dict[str, Any] | None:
         return None
     if abs(number) < 1e-9:
         return None
-    return {"op": op, "value": max(low, min(high, number)), "unit": unit,
+    held = max(low, min(high, number))
+    return {"op": op, "value": held, "unit": unit,
             "mode": "absolute" if unit == "percent" and op.startswith(
                 "detail.denoise") else "delta",
-            "source": f"{name} {number:g}"}
+            # What was applied, not what was asked for: the next round
+            # inherits this line and must inherit the truth.
+            "source": f"{name} {held:g}"}
 
 
 def _anchor_for(mask: dict[str, Any]) -> str:
@@ -405,8 +415,38 @@ def _anchor_for(mask: dict[str, Any]) -> str:
     return ", ".join(parts)
 
 
+def standing_moves(records: list[str]) -> str:
+    """The whole-frame moves already in force, as the next round inherits them.
+
+    A round is a revision of the last one, and it is asked for as one:
+    the critique says "reduce the bottom gradient slightly, leave the
+    whole-frame treatment unchanged". Read as a fresh recipe, "leave it
+    unchanged" arrives as an empty answer and the frame springs back --
+    which is exactly what happened, twice, in one live run: round one at
+    -1.5 EV, round two at nothing, mean 10.3 back up to 59.4. So what is
+    not mentioned carries, and a move is removed by asking for zero.
+    """
+    for item in reversed(list(records)):
+        record = data(item) or {}
+        recipe = record.get("recipe") or {}
+        if not recipe.get("operations"):
+            continue
+        held = {}
+        for operation in recipe["operations"]:
+            source = str(operation.get("source") or "")
+            name, _, number = source.rpartition(" ")
+            if name not in MOVES:
+                continue          # a mask's source is the region it is around
+            try:
+                held[name] = float(number)
+            except ValueError:
+                continue
+        return json.dumps(held, sort_keys=True)
+    return "{}"
+
+
 def assemble_recipe(photo: str, plan: Any, masks: list[str],
-                    source_kind: str = "raw") -> str:
+                    carried: Any = "", source_kind: str = "raw") -> str:
     """Build the recipe from what was answered, rather than from prose.
 
     The first shape of this asked a model to write instructions in the
@@ -416,10 +456,16 @@ def assemble_recipe(photo: str, plan: Any, masks: list[str],
     bounded to the ranges the renderer accepts and assembled in a fixed
     order -- whole frame first, then each mask -- so the same answers
     always make the same photograph.
+
+    Whole-frame moves are a revision of the ones already standing, not a
+    fresh set; see standing_moves.
     """
     settled = data(plan) or {}
     operations: list[dict[str, Any]] = []
-    whole = data(settled.get("global_adjustments")) or {}
+    whole = dict(data(carried) or {})
+    stated = data(settled.get("global_adjustments")) or {}
+    if isinstance(stated, dict):
+        whole.update(stated)
     if isinstance(whole, dict):
         for name in MOVES:
             made = _bounded(name, whole.get(name))

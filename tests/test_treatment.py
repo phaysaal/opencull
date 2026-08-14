@@ -448,6 +448,83 @@ class AnchorTests(unittest.TestCase):
         self.assertEqual(Path(first).name, "round-1.jpg")
 
 
+class CarriedMovesTests(unittest.TestCase):
+    """A round revises the last one; it does not start from nothing.
+
+    Live, the critique said "leave the whole-frame treatment unchanged"
+    and the plan came back with no whole-frame moves at all. Read as a
+    fresh recipe that is -1.5 EV thrown away: mean went 10.3 back up to
+    59.4, twice in one run.
+    """
+
+    def round(self, **moves):
+        plan = {"mask_count": 0, "global_adjustments": moves}
+        return json.dumps({
+            "round": 1,
+            "recipe": json.loads(treatment.assemble_recipe("A.ARW", plan, [])),
+        })
+
+    def test_what_was_applied_is_what_carries(self):
+        held = json.loads(treatment.standing_moves(
+            [self.round(exposure=-1.5, contrast=35)]))
+        self.assertEqual(held, {"exposure": -1.5, "contrast": 35.0})
+
+    def test_a_move_carries_at_the_value_the_renderer_took_not_the_one_asked(self):
+        held = json.loads(treatment.standing_moves([self.round(exposure=-40)]))
+        self.assertEqual(held["exposure"], -5.0)
+
+    def test_saying_nothing_keeps_the_frame_where_it_was(self):
+        standing = treatment.standing_moves([self.round(exposure=-1.5)])
+        recipe = json.loads(treatment.assemble_recipe(
+            "A.ARW", {"mask_count": 0, "global_adjustments": {}}, [], standing))
+        self.assertEqual(recipe["operations"][0]["value"], -1.5)
+
+    def test_a_move_that_is_named_replaces_the_one_standing(self):
+        standing = treatment.standing_moves([self.round(exposure=-1.5)])
+        recipe = json.loads(treatment.assemble_recipe(
+            "A.ARW", {"global_adjustments": {"exposure": -1.8}}, [], standing))
+        self.assertEqual(recipe["operations"][0]["value"], -1.8)
+
+    def test_zero_is_how_a_move_is_taken_away(self):
+        standing = treatment.standing_moves(
+            [self.round(exposure=-1.5, contrast=35)])
+        recipe = json.loads(treatment.assemble_recipe(
+            "A.ARW", {"global_adjustments": {"contrast": 0}}, [], standing))
+        self.assertEqual([item["op"] for item in recipe["operations"]],
+                         ["tone.exposure"])
+
+    def test_a_mask_is_not_mistaken_for_a_whole_frame_move(self):
+        """Its source line is the region it is around, not 'name number'."""
+        plan = {"mask_count": 1, "global_adjustments": {"exposure": -1.5}}
+        made = json.dumps({"round": 1, "recipe": json.loads(
+            treatment.assemble_recipe("A.ARW", plan, [
+                {"region": "the rooftop and tree line", "shape": "linear",
+                 "anchor": "bottom", "adjustments": {"exposure": 0.3}}]))})
+        self.assertEqual(json.loads(treatment.standing_moves([made])),
+                         {"exposure": -1.5})
+
+    def test_nothing_stands_before_the_first_round(self):
+        self.assertEqual(treatment.standing_moves([]), "{}")
+
+    def test_a_round_that_never_rendered_is_skipped(self):
+        empty = json.dumps({"round": 2, "recipe": {"operations": []}})
+        held = json.loads(treatment.standing_moves(
+            [self.round(exposure=-1.5), empty]))
+        self.assertEqual(held, {"exposure": -1.5})
+
+    def test_the_plan_is_told_what_it_is_revising(self):
+        built = treatment.plan_prompt(
+            json.dumps({"baseline": {}}), {"next_change": "lift the rooftop"},
+            json.dumps({"exposure": -1.5}))
+        self.assertIn("CURRENTLY IN FORCE", built)
+        self.assertIn("-1.5", built)
+        self.assertIn("as 0", built)
+
+    def test_the_first_plan_is_not_told_it_is_revising_anything(self):
+        built = treatment.plan_prompt(json.dumps({"baseline": {}}))
+        self.assertNotIn("CURRENTLY IN FORCE", built)
+
+
 class BoundaryTests(unittest.TestCase):
     """Nothing crossing from the program assumes what shape it is in.
 

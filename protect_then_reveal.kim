@@ -87,7 +87,11 @@ forall attempt in range(rounds):
     if check keep_going(records, rounds):
         -- One plan: the diagnosis, what to protect and reveal, the moves
         -- for the whole frame, and how many regions need separating.
-        plan := memo gen<Plan>(plan_prompt(evidence, critique), images=[start]) by A
+        -- What is already in force. A round revises the last one; read
+        -- as a fresh recipe, "leave the whole frame unchanged" arrives
+        -- as an empty answer and the frame springs back to untouched.
+        standing := standing_moves(records)
+        plan := memo gen<Plan>(plan_prompt(evidence, critique, standing), images=[start]) by A
         check keep_reasoning(directory, "plan", plan)
 
         -- The branch. Most photographs answer zero and the loop below
@@ -101,7 +105,7 @@ forall attempt in range(rounds):
         -- Assembled here from numbers, not written as prose and hoped to
         -- compile: a live round once produced two operations out of a
         -- page of intent, and three produced none at all.
-        recipe := assemble_recipe(photo, plan, masks)
+        recipe := assemble_recipe(photo, plan, masks, standing)
         if check treatment_usable(recipe):
             render := render_round(photos, photo, recipe, directory, records, proof_edge)
             measured := measure_frame_json(render)
