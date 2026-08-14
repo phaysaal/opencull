@@ -32,22 +32,32 @@ trying, wall it off, and do the work everywhere else. Adams' Zone
 System is the same instinct stated as measurement -- place the tone you
 care about, accept where the others fall.
 
-Stated as an algorithm:
+Stated as an algorithm. It branches: what every photograph is asked is
+asked once, and the expensive part happens only where the photograph
+says it is needed.
 
   1. Read the frame. Locally, for nothing: where the light is, what is
-     clipped, how much of the frame is already black.
-  2. Diagnose. What is this photograph of, what is wrong with it, and
-     what about it is beyond recovery.
-  3. Decide. What must be protected, what must be revealed, in order.
-  4. Structure. Which regions need separate treatment -- and therefore
-     which masks, because a mask is the answer to "these two parts of
-     the frame need opposite things".
-  5. Write it, in the grammar the compiler executes.
-  6. Render it and measure it.
-  7. Look at what happened. Name what improved, name what regressed,
+     clipped, how much of the frame is already black. Render it
+     untouched, because every round is a change to THAT and nothing
+     else is a fair comparison.
+  2. Plan, in one answer: what this photograph is and what about it is
+     beyond recovery; what to protect and what to reveal; the moves for
+     the whole frame, as numbers; and HOW MANY regions of this frame
+     need opposite things -- which is the branch. Zero is a real answer
+     and the usual one.
+  3. For each of those regions, if any: one question about that mask
+     alone, in numbers -- what it is around, where its centre is, how
+     wide, how soft, whether it is inverted, and what happens inside
+     it. Each is asked knowing the ones already placed.
+  4. Assemble the recipe here, from those numbers. Not written as prose
+     and compiled and hoped for: a live round produced two operations
+     out of a page of intent, and three produced none at all.
+  5. Render it and measure it.
+  6. Look at what happened. Name what improved, name what regressed,
      and say what to change -- or say it is finished, and why.
-  8. Repeat 5 to 7 within a budget, because a photographer does not
-     give one frame infinite time.
+  7. Repeat from 2 within a budget, because a photographer does not
+     give one frame infinite time. Each round revises the last: the
+     moves already in force carry, and only what changes is named.
 
 Every round is kept: the recipe, the render, the measurements and the
 critique. Partly as evidence that the process did what it claims, and
@@ -222,17 +232,27 @@ _MASK_MOVES = (
     + ", ".join(MASK_MOVES))
 
 # What rendering taught, which no amount of looking at a JPEG will.
-_LEARNED = """Four things this renderer has been measured doing, which
+_LEARNED = """Five things this renderer has been measured doing, which
 are not obvious:
 
-  • A local lift cannot recover what a global move has already crushed.
-    The whole frame is applied first and the masks after it, so contrast
-    that drives a region to zero has destroyed it before any mask
-    reaches it -- measured: after exposure -1.5 with contrast 35, the
-    bottom tenth of the frame sat at 0.0, and a bottom gradient of +1 EV
-    with shadows +50 moved the lower third from 2.61 to 2.80. To keep a
-    dark region readable ask for less global contrast, or protect it
-    with a mask; do not plan to rescue it afterwards.
+  • Where a veil sits over a dark foreground, the two share a tonal band
+    and clearing the veil costs the foreground. That price is worth
+    paying and being timid about it is the worse mistake. Measured on
+    one frame, in the band the rooftops occupied: untouched, mean 60.4
+    with all of it above black, and the veil covering 58% of the frame;
+    graded hard, mean 15.2 with 39% still above black and the veil down
+    to 6%, which is the version that reads. A cautious pass at -0.45 EV
+    kept the rooftops at 56.7 and left the veil at 35%, no better
+    separated than doing nothing at all. Aim to keep SOME of the
+    foreground above black, not to keep it bright.
+  • Contrast is what makes a region unrecoverable, not exposure. Global
+    moves render before masks, and contrast drives the darkest parts to
+    exactly zero, where no local lift reaches them: at contrast 26-35
+    the lowest tenth of a frame sat at 0.0 and a bottom gradient of +1.5
+    EV left it at 0.0. Exposure scales instead, so -1.5 EV with no
+    contrast left the same region at 11.2 and the gradient took it to
+    23.9. Reach for exposure to place the frame and contrast only as far
+    as the foreground can afford.
   • Contrast pivots at middle grey. On a subject sitting at seven
     percent brightness, positive contrast drives it toward black rather
     than away from it. To lift something dark, use exposure.
@@ -620,15 +640,15 @@ def _render(photos: str, photo: str, recipe_text: str, maximum: float) -> str:
     if not reports:
         raise ValueError(f"no culling report under {layout['Reports']}")
     report = load_report(reports[-1])
-    project_path, _project = load_or_create_folder_project(
+    project_path, _ = load_or_create_folder_project(
         root, report.path.stem,
         report.path.with_suffix(".opencull-project.json"))
     workspace = DevelopmentWorkspace(
         project_path, layout,
         RawSourceStore(
             layout["Reports"] / f"{report.path.stem}.raw-source.json", report))
-    return workspace.render_prepared(
-        str(photo), data(recipe_text) or {}, int(maximum))
+    return str(workspace.render_prepared(
+        str(photo), data(recipe_text) or {}, int(maximum)))
 
 
 def render_round(photos: str, photo: str, recipe_text: str, directory: str,
