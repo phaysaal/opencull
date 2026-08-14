@@ -221,8 +221,16 @@ MOVES = {
 # Not every move can live inside a mask: the engine applies a mask by
 # rendering its effects and blending, and only these are meaningful
 # there.
-MASK_MOVES = ("exposure", "contrast", "brightness", "saturation",
-              "clarity", "structure", "highlights", "temperature")
+# Everything the whole frame can have, because the engine applies a
+# masked effect by running the same global operation and blending it
+# through the mask -- there is nothing it can do outside one that it
+# cannot do inside. An earlier hand-picked subset left out shadows,
+# blacks, whites and dehaze, which are precisely the moves a
+# photographer reaches for on a silhouette: two separate treatments
+# asked for a shadow lift inside a bottom gradient, three rounds each,
+# and every one was dropped on the way to the renderer. The critique
+# then read the unchanged frame correctly and asked again.
+MASK_MOVES = tuple(sorted(MOVES))
 
 _GLOBAL_MOVES = (
     "The whole-frame moves, each a number or left out:\n  "

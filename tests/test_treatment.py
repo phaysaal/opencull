@@ -372,12 +372,30 @@ class DecisionTests(unittest.TestCase):
         self.assertNotIn("mask.radial",
                          [item["op"] for item in recipe["operations"]])
 
-    def test_a_move_a_mask_cannot_carry_is_left_out_of_it(self):
-        """The engine blends a mask's effects; only some are meaningful."""
+    def test_a_mask_carries_every_move_the_whole_frame_can(self):
+        """The engine runs the global operation and blends it through the mask.
+
+        A hand-picked subset here once dropped shadows, blacks, whites
+        and dehaze -- the moves for a silhouette. Measured on one frame:
+        a bottom gradient asking exposure +0.8 with shadows +35 rendered
+        byte-identical to exposure alone, and two treatments spent three
+        rounds each asking again.
+        """
         recipe = json.loads(treatment.assemble_recipe(
             "A.ARW", self.plan(1),
             [{"shape": "linear", "anchor": "bottom",
-              "adjustments": {"exposure": 0.4, "denoise": 80}}]))
+              "adjustments": {"exposure": 0.4, "shadows": 35, "blacks": 20,
+                              "dehaze": 10}}]))
+        effects = recipe["operations"][-1]["value"]["effects"]
+        self.assertEqual(
+            sorted(item["op"] for item in effects),
+            ["detail.dehaze", "tone.black", "tone.exposure", "tone.shadow"])
+
+    def test_a_move_nobody_offered_is_still_dropped_from_a_mask(self):
+        recipe = json.loads(treatment.assemble_recipe(
+            "A.ARW", self.plan(1),
+            [{"shape": "linear", "anchor": "bottom",
+              "adjustments": {"exposure": 0.4, "nostalgia": 7}}]))
         effects = recipe["operations"][-1]["value"]["effects"]
         self.assertEqual([item["op"] for item in effects], ["tone.exposure"])
 
