@@ -35,18 +35,18 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QPushButton,
     QScrollArea,
-    QSlider,
     QVBoxLayout,
     QWidget,
 )
 
-from opencull_gui import adjustments, presets
+from opencull_gui import adjustments, presets, zones
 from opencull_gui.development import DevelopmentWorkspace
 
 from . import theme
 from .develop import PROOF_EDGE, PhotoLabel, Renderer
 from .previews import PreviewLoader
 from .widgets import tooltip
+from .zoneslider import ZoneSlider
 
 PHOTO_ROW = 30
 TREATMENT_ROW = 34
@@ -61,13 +61,23 @@ TICKS = 1000
 
 
 class Control(QWidget):
-    """One compiled operation, and the sentence it came from."""
+    """One compiled operation, and the sentence it came from.
+
+    An absent control -- an operation the recipe never used -- sits at
+    neutral with its checkbox off; ticking it is the ask that inserts
+    the operation. The slider's groove is painted with this frame's
+    advice bands: teal safe, amber artistic, red damage.
+    """
 
     changed = Signal(str, dict)
+    wanted = Signal(str, float)   # an absent op, asked into existence
 
-    def __init__(self, control: dict[str, Any]):
+    def __init__(self, control: dict[str, Any],
+                 bands: dict[str, Any] | None = None):
         super().__init__()
         self.control = control
+        self.bands = bands or {}
+        self.absent = bool(control.get("absent"))
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 4, 0, 4)
         layout.setSpacing(3)
@@ -75,9 +85,12 @@ class Control(QWidget):
         head = QHBoxLayout()
         head.setSpacing(8)
         self.enabled = QCheckBox(control["label"])
-        self.enabled.setChecked(control["enabled"])
+        self.enabled.setChecked(control["enabled"] and not self.absent)
         self.enabled.setFont(theme.body(10))
         self.enabled.setToolTip(tooltip(
+            "Not part of this treatment. Tick it, or move the slider, "
+            "and it becomes a real operation in the recipe."
+            if self.absent else
             "Switch this operation off entirely. What it was asked to do "
             "stays readable."))
         self.enabled.toggled.connect(self._switched)
@@ -91,10 +104,19 @@ class Control(QWidget):
         head.addWidget(self.reading)
         layout.addLayout(head)
 
-        self.slider = QSlider(Qt.Orientation.Horizontal)
+        self.slider = ZoneSlider()
         self.slider.setRange(0, TICKS)
         self.slider.setValue(self._tick(control["value"]))
-        self.slider.setEnabled(control["enabled"])
+        self.slider.setEnabled(control["enabled"] and not self.absent)
+        safe = self.bands.get("safe")
+        artistic = self.bands.get("artistic")
+        if safe and artistic:
+            self.slider.set_zones(control["low"], control["high"],
+                                  tuple(safe), tuple(artistic))
+        self.slider.set_marks(
+            control["low"], control["high"],
+            None if self.absent else float(control["asked"]),
+            float(control.get("neutral", 0.0)))
         self.slider.valueChanged.connect(self._moved)
         layout.addWidget(self.slider)
 
@@ -130,11 +152,26 @@ class Control(QWidget):
         value = self._value(tick)
         self.reading.setText(adjustments.written(value, self.control["unit"]))
         self._retell(value)
+        if self.absent:
+            # Moving the slider is as clear an ask as ticking the box.
+            self.absent = False
+            self.enabled.blockSignals(True)
+            self.enabled.setChecked(True)
+            self.enabled.blockSignals(False)
+            self.slider.setEnabled(True)
+            self.wanted.emit(self.control["op"], value)
+            return
         self.changed.emit(self.control["id"], {"value": value})
 
     def _switched(self, on: bool) -> None:
         self.slider.setEnabled(on)
         self._retell(self.value())
+        if self.absent:
+            if on:
+                # Asked into existence at its current position.
+                self.absent = False
+                self.wanted.emit(self.control["op"], self.value())
+            return
         self.changed.emit(self.control["id"], {"enabled": on})
 
     def _retell(self, value: float) -> None:
@@ -169,6 +206,8 @@ class FineTunePage(QWidget):
         self.recipe: dict[str, Any] = {}
         self.changes: dict[str, dict] = {}
         self.controls: list[Control] = []
+        # Which sections have their absent controls unfolded.
+        self._open_sections: dict[str, bool] = {}
 
         self.renderer = Renderer(workspace, PROOF_EDGE, pool, self)
         self.renderer.done.connect(self._rendered)
@@ -420,32 +459,52 @@ class FineTunePage(QWidget):
 
     def _show_controls(self) -> None:
         self._clear()
-        found = adjustments.controls(self.recipe)
-        self.keep_button.setEnabled(bool(found))
-        self.reset_button.setEnabled(bool(found))
-        if not found:
-            empty = QLabel(
-                "This treatment compiled to no bounded operations, so there "
-                "is nothing here to move. What it asked for is on the "
-                "suggestions page.")
-            empty.setObjectName("hint")
-            empty.setWordWrap(True)
-            empty.setFont(theme.body(9))
-            self.body.addWidget(empty)
-            self.body.addStretch(1)
-            return
-        section = ""
-        for control in found:
-            if control["section"] != section:
-                section = control["section"]
-                heading = QLabel(section.upper())
-                heading.setObjectName("axisName")
-                heading.setFont(theme.display(7))
-                self.body.addWidget(heading)
-            widget = Control(control)
-            widget.changed.connect(self._control_changed)
-            self.controls.append(widget)
-            self.body.addWidget(widget)
+        surface = adjustments.full_surface(self.recipe)
+        compiled = [item for item in surface if not item.get("absent")]
+        self.keep_button.setEnabled(bool(compiled))
+        self.reset_button.setEnabled(bool(compiled))
+        advice = zones.load(
+            Path(str(self.workspace.project.get("source_folder") or ".")),
+            self.current) if self.current else {}
+        # A section holds its compiled controls first, then -- folded
+        # behind its own count -- everything the renderer could also do.
+        # The fold keeps the panel the height of the treatment while the
+        # whole instrument stays one click away.
+        by_section: dict[str, list[dict]] = {}
+        for control in surface:
+            by_section.setdefault(control["section"], []).append(control)
+        for section, members in by_section.items():
+            present = [item for item in members if not item.get("absent")]
+            absent = [item for item in members if item.get("absent")]
+            heading = QLabel(
+                section.upper()
+                + (f"  ·  {len(present)}" if present else ""))
+            heading.setObjectName("axisName")
+            heading.setFont(theme.display(7))
+            self.body.addWidget(heading)
+            for control in present:
+                widget = Control(control, advice.get(control["op"]))
+                widget.changed.connect(self._control_changed)
+                widget.wanted.connect(self._control_wanted)
+                self.controls.append(widget)
+                self.body.addWidget(widget)
+            if absent:
+                if self._open_sections.get(section):
+                    for control in absent:
+                        widget = Control(control, advice.get(control["op"]))
+                        widget.changed.connect(self._control_changed)
+                        widget.wanted.connect(self._control_wanted)
+                        self.controls.append(widget)
+                        self.body.addWidget(widget)
+                more = QPushButton(
+                    f"{'Fewer' if self._open_sections.get(section) else 'More'}"
+                    f" {section.lower()} controls · {len(absent)}")
+                more.setObjectName("ghost")
+                more.setFont(theme.body(8))
+                more.setCursor(Qt.CursorShape.PointingHandCursor)
+                more.clicked.connect(
+                    lambda _=False, s=section: self._toggle_section(s))
+                self.body.addWidget(more)
         for text in adjustments.guardrails(self.recipe):
             rail = QLabel(f"◆ {text}")
             rail.setObjectName("guardrail")
@@ -463,6 +522,27 @@ class FineTunePage(QWidget):
 
     def _control_changed(self, key: str, change: dict) -> None:
         self.changes.setdefault(key, {}).update(change)
+        self.render()
+
+    def _toggle_section(self, section: str) -> None:
+        self._open_sections[section] = not self._open_sections.get(section)
+        self._show_controls()
+
+    def _control_wanted(self, op: str, value: float) -> None:
+        """An absent operation, asked into the recipe by hand.
+
+        The insert rewrites the recipe, so the panel is rebuilt from it:
+        the control crosses from the folded advanced set into its
+        section's compiled controls, exactly as if the treatment had
+        asked for it -- except the asked mark says it did not.
+        """
+        try:
+            self.recipe = adjustments.insert(self.recipe, op, value)
+        except adjustments.AdjustmentError as exc:
+            self._report(str(exc), "alarm")
+            return
+        self._open_sections[adjustments._section_of(op)] = True
+        self._show_controls()
         self.render()
 
     def speak(self) -> None:

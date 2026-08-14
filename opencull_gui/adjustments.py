@@ -142,6 +142,76 @@ def controls(recipe: dict[str, Any]) -> list[dict[str, Any]]:
     return found
 
 
+def full_surface(recipe: dict[str, Any]) -> list[dict[str, Any]]:
+    """Every control the renderer has, whether this recipe used it or not.
+
+    "Advanced" fine tuning means the whole instrument. A control whose
+    operation is absent from the recipe sits at neutral and is marked
+    absent; the page greys it until it is touched, and touching it is
+    what inserts a real operation -- so the recipe stays the single
+    truth and nothing on screen edits state the renderer cannot see.
+    """
+    present = controls(recipe)
+    have = {item["op"] for item in present}
+    for name, (low, high, unit) in RANGES.items():
+        if name in have or name not in LABELS:
+            continue
+        neutral = _NEUTRAL.get(name, 0.0)
+        present.append({
+            "id": name, "op": name,
+            "label": LABELS.get(name, name.split(".")[-1].title()),
+            "section": _section_of(name),
+            "value": neutral, "asked": neutral,
+            "unit": unit, "low": low, "high": high,
+            "enabled": True, "source": "",
+            "absent": True,
+        })
+    present.sort(key=lambda item: _ORDER.get(item["op"], len(_ORDER)))
+    return present
+
+
+def insert(recipe: dict[str, Any], op: str, value: float) -> dict[str, Any]:
+    """A new recipe with one absent operation made real.
+
+    Inserted in the canonical section order, at delta mode from neutral,
+    marked as the photographer's own ask -- the model asked for nothing.
+    """
+    if op not in RANGES:
+        raise AdjustmentError(f"unknown operation: {op}")
+    result = json.loads(json.dumps(recipe))
+    operations = result.setdefault("operations", [])
+    if any(isinstance(item, dict) and item.get("op") == op
+           for item in operations):
+        raise AdjustmentError(f"operation already present: {op}")
+    low, high, unit = RANGES[op]
+    made = {
+        "op": op, "unit": unit, "mode": "delta",
+        "value": max(low, min(high, float(value))),
+        "asked_value": _NEUTRAL.get(op, 0.0),
+        "source": "added by hand",
+    }
+    place = _ORDER.get(op, len(_ORDER))
+    at = len(operations)
+    for index, item in enumerate(operations):
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("op", ""))
+        if name.startswith("mask.") or _ORDER.get(name, len(_ORDER)) > place:
+            at = index
+            break
+    operations.insert(at, made)
+    result["revision"] = int(result.get("revision", 0) or 0) + 1
+    return result
+
+
+# Where each control does nothing. Levels and gamma are not zero-centred.
+_NEUTRAL = {
+    "levels.black_input": 0.0,
+    "levels.white_input": 255.0,
+    "levels.midpoint": 1.0,
+}
+
+
 def guardrails(recipe: dict[str, Any]) -> list[str]:
     """What the treatment promised not to do, which is not up for adjustment."""
     found = []

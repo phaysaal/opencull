@@ -110,10 +110,17 @@ class FineTunePageTests(unittest.TestCase):
         self.assertNotIn(
             "guardrail", [item.control["op"] for item in page.controls])
 
-    def test_a_treatment_with_no_bounded_operations_says_so(self):
+    def test_a_treatment_with_no_bounded_operations_still_offers_the_instrument(self):
+        """It used to say "nothing here to move" and stop. Advanced fine
+        tuning means the whole surface is always there, folded; only the
+        keep button waits for something to actually be in the recipe."""
+        from PySide6.QtWidgets import QPushButton
+
         page = self.page(recipe=json.dumps({"tone": ["make it nicer"]}))
         self.assertEqual(page.controls, [])
-        self.assertIn("nothing here to move", self.text(page))
+        folds = [button.text() for button in page.findChildren(QPushButton)
+                 if button.text().startswith(("More ", "Fewer "))]
+        self.assertIn("More tone controls · 7", folds)
         self.assertFalse(page.keep_button.isEnabled())
 
     # --- moving them ------------------------------------------------------
@@ -258,6 +265,121 @@ class FineTunePageTests(unittest.TestCase):
 
 
 @unittest.skipUnless(QApplication is not None, "PySide6 is not installed")
+class ZoneSliderTests(unittest.TestCase):
+    """The groove that says how far is wise."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.application = QApplication.instance() or QApplication([])
+
+    def slider(self):
+        from opencull_qt.zoneslider import ZoneSlider
+
+        made = ZoneSlider()
+        made.setRange(0, 1000)
+        made.resize(300, 26)
+        return made
+
+    def test_the_bands_cover_the_range_in_order(self):
+        slider = self.slider()
+        slider.set_zones(-5.0, 5.0, (-1.0, 0.7), (-2.5, 1.5))
+        spans = [(round(a, 3), round(b, 3)) for a, b, _c in slider._bands]
+        self.assertEqual(spans[0][0], 0.0)
+        self.assertEqual(spans[-1][1], 1.0)
+        for (before), (after) in zip(spans, spans[1:]):
+            self.assertEqual(before[1], after[0])
+
+    def test_the_safe_band_sits_where_the_numbers_say(self):
+        slider = self.slider()
+        slider.set_zones(-5.0, 5.0, (-1.0, 0.7), (-2.5, 1.5))
+        teal = slider._bands[2]
+        self.assertAlmostEqual(teal[0], ((-1.0) - (-5.0)) / 10.0, places=3)
+        self.assertAlmostEqual(teal[1], (0.7 - (-5.0)) / 10.0, places=3)
+
+    def test_a_control_pinned_at_one_end_has_no_lower_red(self):
+        """Levels' white point: everything below 160 is red, above 216
+        is safe -- the band list must survive zero-width segments."""
+        slider = self.slider()
+        slider.set_zones(0.0, 255.0, (216.0, 255.0), (160.0, 255.0))
+        red_low, amber_low, teal, amber_high, red_high = slider._bands
+        self.assertAlmostEqual(teal[1], 1.0, places=3)
+        self.assertAlmostEqual(amber_high[0], amber_high[1], places=3)
+        self.assertAlmostEqual(red_high[0], red_high[1], places=3)
+
+    def test_marks_land_as_fractions_and_survive_none(self):
+        slider = self.slider()
+        slider.set_marks(-5.0, 5.0, asked=-1.5, neutral=0.0)
+        self.assertAlmostEqual(slider._asked_fraction, 0.35, places=3)
+        self.assertAlmostEqual(slider._neutral_fraction, 0.5, places=3)
+        slider.set_marks(-5.0, 5.0, asked=None, neutral=None)
+        self.assertIsNone(slider._asked_fraction)
+        self.assertIsNone(slider._neutral_fraction)
+
+    def test_it_paints_without_a_backing_window(self):
+        """The whole point is custom paint; it must not need a screen."""
+        from PySide6.QtGui import QImage
+
+        slider = self.slider()
+        slider.set_zones(-5.0, 5.0, (-1.0, 0.7), (-2.5, 1.5))
+        slider.set_marks(-5.0, 5.0, asked=-1.5, neutral=0.0)
+        canvas = QImage(300, 26, QImage.Format.Format_ARGB32)
+        canvas.fill(0)
+        slider.render(canvas)
+        colours = {canvas.pixelColor(x, 13).name() for x in range(8, 292, 4)}
+        self.assertGreater(len(colours), 2)
+
+
+class AbsentControlTests(unittest.TestCase):
+    """The whole instrument on the page, greyed until asked for."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.application = QApplication.instance() or QApplication([])
+
+    def control(self, absent=True):
+        from opencull_qt.finetune import Control
+
+        return Control({
+            "id": "tone.shadow", "op": "tone.shadow", "label": "Shadows",
+            "section": "Tone", "value": 0.0, "asked": 0.0,
+            "unit": "percent", "low": -100.0, "high": 100.0,
+            "enabled": True, "source": "", "absent": absent,
+        }, {"safe": (-15.0, 40.0), "artistic": (-40.0, 80.0)})
+
+    def test_an_absent_control_arrives_unchecked_and_still(self):
+        made = self.control()
+        self.assertFalse(made.enabled.isChecked())
+        self.assertFalse(made.slider.isEnabled())
+
+    def test_ticking_it_asks_it_into_existence(self):
+        made = self.control()
+        heard = []
+        made.wanted.connect(lambda op, value: heard.append((op, value)))
+        made.enabled.setChecked(True)
+        self.assertEqual(heard, [("tone.shadow", 0.0)])
+        self.assertFalse(made.absent)
+
+    def test_moving_the_slider_is_the_same_ask(self):
+        made = self.control()
+        made.slider.setEnabled(True)
+        heard = []
+        made.wanted.connect(lambda op, value: heard.append(op))
+        changed = []
+        made.changed.connect(lambda key, change: changed.append(change))
+        made.slider.setValue(700)
+        self.assertEqual(heard, ["tone.shadow"])
+        self.assertEqual(changed, [])
+        self.assertTrue(made.enabled.isChecked())
+
+    def test_a_present_control_never_emits_wanted(self):
+        made = self.control(absent=False)
+        heard = []
+        made.wanted.connect(lambda op, value: heard.append(op))
+        made.slider.setValue(700)
+        made.enabled.setChecked(False)
+        self.assertEqual(heard, [])
+
+
 class AdjustedRenderTests(FineTunePageTests):
     """An adjusted rendering must never be mistaken for the treatment."""
 
