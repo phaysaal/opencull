@@ -667,9 +667,13 @@ class WhatThePanelIsAskedTests(unittest.TestCase):
         claim reading "it did what it said" beside those is a
         contradiction, and two independent families went 0-5 on it."""
         policy = treatment.treatment_policy(json.dumps({"about": ""}))
-        self.assertIn("bounded search", policy)
+        self.assertIn("bounded staged development", policy)
         self.assertIn("remaining faults", policy)
         self.assertIn("not recovery", policy)
+        # The instrument gives a judge 256 tokens to walk the claim and
+        # still land a final YES/NO line; a claim that reads like a
+        # contract page silences its own verifiers.
+        self.assertLess(len(policy.split()), 110)
 
     def test_the_panel_sees_the_offered_operations_not_a_count(self):
         report = json.dumps({
@@ -885,7 +889,7 @@ class GateTests(unittest.TestCase):
 
     def test_the_panel_is_told_leaving_it_alone_is_an_outcome(self):
         policy = treatment.treatment_policy(json.dumps({"about": ""}))
-        self.assertIn("left it alone", policy)
+        self.assertIn("left alone", policy)
 
 
 class ZoneTests(unittest.TestCase):
