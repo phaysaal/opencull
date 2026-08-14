@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 try:
+    from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QApplication, QLabel, QWidget
 except ImportError:  # pragma: no cover - exercised only without PySide6
     QApplication = None
@@ -479,6 +480,129 @@ class InsertRenderTests(unittest.TestCase):
         self.assertEqual(
             [item["op"] for item in twice["operations"]].count("tone.shadow"),
             1)
+
+
+class HoldTests(FineTunePageTests):
+    """Press-and-hold: the judgement happens in one place at one size."""
+
+    def page_with_frames(self):
+        from PySide6.QtGui import QPixmap
+
+        page = self.page()
+        adjusted = QPixmap(60, 40); adjusted.fill(Qt.GlobalColor.darkBlue)
+        shot = QPixmap(60, 40); shot.fill(Qt.GlobalColor.darkRed)
+        page._plain_pixmap = adjusted
+        page._as_shot_pixmap = shot
+        page.frame.set_source(adjusted)
+        return page, adjusted, shot
+
+    def test_holding_shows_as_shot_and_letting_go_returns(self):
+        page, adjusted, shot = self.page_with_frames()
+        page.hold(True)
+        self.assertTrue(page._holding)
+        self.assertEqual(page.caption.text(), "AS SHOT")
+        page.hold(False)
+        self.assertFalse(page._holding)
+        self.assertIn(page.caption.text(), ("AS SUGGESTED", "AS ADJUSTED"))
+
+    def test_the_b_key_is_the_hold(self):
+        from PySide6.QtCore import QEvent
+        from PySide6.QtGui import QKeyEvent
+
+        page, _adjusted, _shot = self.page_with_frames()
+        press = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_B,
+                          Qt.KeyboardModifier.NoModifier)
+        release = QKeyEvent(QEvent.Type.KeyRelease, Qt.Key.Key_B,
+                            Qt.KeyboardModifier.NoModifier)
+        page.keyPressEvent(press)
+        self.assertTrue(page._holding)
+        page.keyReleaseEvent(release)
+        self.assertFalse(page._holding)
+
+    def test_a_render_arriving_during_a_hold_does_not_steal_the_frame(self):
+        from PySide6.QtGui import QPixmap
+
+        page, _adjusted, shot = self.page_with_frames()
+        page.current, page.treatment = page.current or "A.JPG", page.treatment or "t"
+        page.hold(True)
+        fresh = QPixmap(60, 40); fresh.fill(Qt.GlobalColor.black)
+        page._rendered(page.current, page.treatment, fresh)
+        # The new render is kept for the release, but the hold still
+        # shows the frame as shot.
+        self.assertIs(page._plain_pixmap, fresh)
+        self.assertTrue(page._holding)
+
+    def test_changing_photo_forgets_both_frames(self):
+        page, _adjusted, _shot = self.page_with_frames()
+        page.show_photo(page.photos[0])
+        self.assertIsNone(page._as_shot_pixmap)
+        self.assertIsNone(page._plain_pixmap)
+
+
+class RecipeFileTests(FineTunePageTests):
+    """What leaves this machine must come back and render the same."""
+
+    def test_the_file_round_trips_through_the_import(self):
+        import tempfile as temporary_files
+
+        from opencull_gui import adjustments
+
+        page = self.page()
+        page.changes = {"+insert": [{"op": "detail.dehaze", "value": 12.0}]}
+        applied = adjustments.apply(page.recipe, page.changes)
+        with temporary_files.TemporaryDirectory() as temporary:
+            target = Path(temporary) / "look.recipe.json"
+            with unittest.mock.patch(
+                    "PySide6.QtWidgets.QFileDialog.getSaveFileName",
+                    return_value=(str(target), "")):
+                page.save_recipe_file()
+            self.assertTrue(target.is_file())
+            written = json.loads(target.read_text())
+            self.assertEqual(written["format"],
+                             "darkimiya-portable-recipe-v1")
+            self.assertEqual(written["recipe"]["operations"],
+                             applied["operations"])
+            # And the develop page's import accepts it.
+            kept = page.workspace.import_recipe(target)
+            self.assertEqual(kept["recipe"]["recipe"]["operations"],
+                             applied["operations"])
+
+    def test_declining_the_dialog_writes_nothing(self):
+        page = self.page()
+        with unittest.mock.patch(
+                "PySide6.QtWidgets.QFileDialog.getSaveFileName",
+                return_value=("", "")):
+            page.save_recipe_file()   # must simply return
+
+
+class KeyStepTests(unittest.TestCase):
+    """One arrow key, one honest unit."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.application = QApplication.instance() or QApplication([])
+
+    def test_an_ev_slider_steps_a_hundredth(self):
+        from opencull_qt.finetune import Control
+
+        made = Control({"id": "tone.exposure", "op": "tone.exposure",
+                        "label": "Exposure", "section": "Tone",
+                        "value": 0.0, "asked": 0.0, "unit": "EV",
+                        "low": -5.0, "high": 5.0, "enabled": True,
+                        "source": ""})
+        self.assertEqual(made.slider.singleStep(), 1)      # 0.01 of 10 EV
+        self.assertEqual(made.slider.pageStep(), 10)
+
+    def test_a_percent_slider_steps_a_percent(self):
+        from opencull_qt.finetune import Control
+
+        made = Control({"id": "tone.shadow", "op": "tone.shadow",
+                        "label": "Shadows", "section": "Tone",
+                        "value": 0.0, "asked": 0.0, "unit": "percent",
+                        "low": -100.0, "high": 100.0, "enabled": True,
+                        "source": ""})
+        self.assertEqual(made.slider.singleStep(), 5)      # 1% of 200
+        self.assertEqual(made.slider.pageStep(), 50)
 
 
 class AdjustedRenderTests(FineTunePageTests):

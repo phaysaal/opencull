@@ -109,6 +109,15 @@ class Control(QWidget):
         self.slider.setRange(0, TICKS)
         self.slider.setValue(self._tick(control["value"]))
         self.slider.setEnabled(control["enabled"] and not self.absent)
+        # An arrow key moves one of the unit's own steps -- +1%, +0.01 EV,
+        # +10 K -- not one thousandth of the range; page keys take ten.
+        span = control["high"] - control["low"]
+        if span > 0:
+            per_step = max(
+                1, round(adjustments.step_for(control["unit"])
+                         / span * TICKS))
+            self.slider.setSingleStep(per_step)
+            self.slider.setPageStep(per_step * 10)
         safe = self.bands.get("safe")
         artistic = self.bands.get("artistic")
         if safe and artistic:
@@ -208,6 +217,11 @@ class GeometrySlider(QWidget):
         self.slider.setRange(0, TICKS)
         self.slider.setValue(
             int((value - low) / (high - low) * TICKS) if high > low else 0)
+        if high > low:
+            # Geometry reads in whole percents; one key, one percent.
+            per_step = max(1, round(TICKS / (high - low)))
+            self.slider.setSingleStep(per_step)
+            self.slider.setPageStep(per_step * 10)
         self.slider.valueChanged.connect(self._moved)
         row.addWidget(self.slider, 1)
         self.reading = QLabel(f"{value:.0f}{unit}")
@@ -358,6 +372,10 @@ class FineTunePage(QWidget):
         # pixmap underneath it.
         self._overlay_for = ""
         self._plain_pixmap = None
+        # The frame as shot, for the press-and-hold comparison, and
+        # whether the hold is down right now.
+        self._as_shot_pixmap = None
+        self._holding = False
 
         self.renderer = Renderer(workspace, PROOF_EDGE, pool, self)
         self.renderer.done.connect(self._rendered)
@@ -390,10 +408,18 @@ class FineTunePage(QWidget):
         column = QVBoxLayout(stage)
         column.setContentsMargins(14, 12, 14, 12)
         column.setSpacing(8)
+        head = QHBoxLayout()
+        head.setSpacing(12)
         self.caption = QLabel("AS ADJUSTED")
         self.caption.setObjectName("paneCaption")
         self.caption.setFont(theme.display(8))
-        column.addWidget(self.caption)
+        head.addWidget(self.caption)
+        head.addStretch(1)
+        hint = QLabel("hold B: as shot")
+        hint.setObjectName("paneHint")
+        hint.setFont(theme.body(9))
+        head.addWidget(hint)
+        column.addLayout(head)
         self.frame = PhotoLabel()
         self.frame.setObjectName("paneImage")
         column.addWidget(self.frame, 1)
@@ -494,6 +520,16 @@ class FineTunePage(QWidget):
             "where its subject is."))
         self.preset_button.clicked.connect(self.save_preset)
         actions.addWidget(self.preset_button)
+        self.recipe_button = QPushButton("Recipe file…")
+        self.recipe_button.setObjectName("ghost")
+        self.recipe_button.setFont(theme.body(10))
+        self.recipe_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.recipe_button.setToolTip(tooltip(
+            "Write this version as a portable recipe file -- the same "
+            "format the develop page imports -- masks and all, so it "
+            "renders identically anywhere."))
+        self.recipe_button.clicked.connect(self.save_recipe_file)
+        actions.addWidget(self.recipe_button)
         layout.addLayout(actions)
 
         self.keep_button = QPushButton("Keep this version")
@@ -546,9 +582,14 @@ class FineTunePage(QWidget):
         if 0 <= row < len(self.photos):
             self.show_photo(self.photos[row])
 
+    def _forget_frame(self) -> None:
+        self._as_shot_pixmap = None
+        self._plain_pixmap = None
+
     def show_photo(self, photo: str) -> None:
         self.current = photo
         self.changes = {}
+        self._forget_frame()
         self.progress.setText(photo)
         # The baseline compiles to no operations at all, so there is nothing
         # in it to move: it is left out rather than offered and found empty.
@@ -685,6 +726,7 @@ class FineTunePage(QWidget):
         self.controls = []
         self._mask_cards = []
         self._overlay_for = ""
+        self._holding = False
         while self.body.count():
             item = self.body.takeAt(0)
             widget = item.widget()
@@ -897,9 +939,38 @@ class FineTunePage(QWidget):
         if photo != self.current or treatment != self.treatment:
             return
         self._plain_pixmap = pixmap
-        self.frame.set_source(pixmap)
-        if self._overlay_for:
-            self._paint_overlay()
+        if self._as_shot_pixmap is None:
+            try:
+                from .colour import load_for_screen
+
+                self._as_shot_pixmap = load_for_screen(
+                    self.workspace._as_shot_preview(photo, PROOF_EDGE))
+            except Exception:                        # noqa: BLE001 - no hold
+                self._as_shot_pixmap = None
+        if not self._holding:
+            self.frame.set_source(pixmap)
+            if self._overlay_for:
+                self._paint_overlay()
+
+    def hold(self, holding: bool) -> None:
+        """The frame as shot, for as long as the key is down.
+
+        The judgement a slider asks for is "better than what the camera
+        gave me?", and that question is answered in one place at one
+        size -- not by memory of another page.
+        """
+        if holding == self._holding:
+            return
+        self._holding = holding
+        if holding and self._as_shot_pixmap is not None:
+            self.caption.setText("AS SHOT")
+            self.frame.set_source(self._as_shot_pixmap)
+        elif self._plain_pixmap is not None:
+            self.caption.setText(
+                "AS ADJUSTED" if self.changes else "AS SUGGESTED")
+            self.frame.set_source(self._plain_pixmap)
+            if self._overlay_for:
+                self._paint_overlay()
 
     def _render_failed(self, photo: str, reason: str) -> None:
         self._report(f"{photo} could not be rendered: {reason}", "alarm")
@@ -965,6 +1036,46 @@ class FineTunePage(QWidget):
             f"Kept as the preset “{kept['name']}”. It is on every "
             "photograph's treatment list, under Presets.", "ok")
 
+    def save_recipe_file(self) -> None:
+        """Write this version as a portable recipe file.
+
+        The same format the import button reads, so what leaves this
+        machine can arrive on another one -- or come back to this one --
+        and render identically. The whole recipe travels, masks and
+        all; a preset deliberately carries only the portable moves.
+        """
+        import json as json_module
+
+        from PySide6.QtWidgets import QFileDialog
+
+        if not self.recipe:
+            return
+        applied = adjustments.apply(self.recipe, self.changes)
+        suggested = str(
+            Path.home() / f"{Path(self.current).stem}-"
+            f"{self._treatment_name().lower().replace(' ', '-')}.recipe.json")
+        chosen, _filter = QFileDialog.getSaveFileName(
+            self, "Save as recipe file", suggested,
+            "Darkimiya recipe (*.json)")
+        if not chosen:
+            return
+        payload = {
+            "format": "darkimiya-portable-recipe-v1",
+            "name": f"{self._treatment_name()} — {Path(self.current).stem}",
+            "photo": "",
+            "recipe": applied,
+        }
+        try:
+            Path(chosen).write_text(
+                json_module.dumps(payload, indent=2, sort_keys=True),
+                encoding="utf-8")
+        except OSError as exc:
+            self._report(f"That could not be written: {exc}", "alarm")
+            return
+        self._report(
+            f"Written to {Path(chosen).name}. Any Darkimiya can import it "
+            "from the develop page, and it renders exactly this.", "ok")
+
     def ask_preset_name(self) -> tuple[str, bool]:
         suggested = f"{self._treatment_name()} — {Path(self.current).stem}"
         return QInputDialog.getText(
@@ -991,12 +1102,20 @@ class FineTunePage(QWidget):
         key = event.key()
         if key == Qt.Key.Key_Escape:
             self.closed.emit()
+        elif key == Qt.Key.Key_B and not event.isAutoRepeat():
+            self.hold(True)
         elif key in (Qt.Key.Key_Down, Qt.Key.Key_J):
             self.step(1)
         elif key in (Qt.Key.Key_Up, Qt.Key.Key_K):
             self.step(-1)
         else:
             super().keyPressEvent(event)
+
+    def keyReleaseEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        if event.key() == Qt.Key.Key_B and not event.isAutoRepeat():
+            self.hold(False)
+        else:
+            super().keyReleaseEvent(event)
 
     def shutdown(self) -> None:
         self.renderer.shutdown()
