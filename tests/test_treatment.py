@@ -584,6 +584,46 @@ class LostAnswerTests(unittest.TestCase):
         self.assertIn("EVERY FIELD PRESENT", built)
 
 
+class WhatThePanelIsAskedTests(unittest.TestCase):
+    """One photographic question, not five clauses joined by semicolons.
+
+    The claim used to include where the measurements sit and how the
+    round was chosen. Those are facts about the report file, true by
+    inspection; a panel asked to certify them refused the conjunction
+    and there was no telling which clause it disliked. They are checked
+    now, and what is put to the panel is the judgement.
+    """
+
+    def report(self, chosen, separations=(17.3, 17.2, 16.7)):
+        rounds = [{
+            "round": n + 1, "sections": "protect the core",
+            "render": f"round-{n + 1}.jpg",
+            "recipe": {"operations": [{"op": "tone.exposure", "value": -1.2}]},
+            "measurements": {"subject_separation": value},
+            "critique": {"finished": False},
+        } for n, value in enumerate(separations)]
+        return json.dumps({
+            "format": "darkimiya-treatment-v1", "photo": "A.ARW",
+            "evidence": {"baseline": {}}, "reasoning": "protect the core",
+            "rounds": rounds, "chosen_round": chosen})
+
+    def test_offering_the_best_measuring_round_is_checked_not_judged(self):
+        self.assertTrue(treatment.treatment_valid(self.report(1)))
+
+    def test_offering_a_worse_round_fails_the_check(self):
+        self.assertFalse(treatment.treatment_valid(self.report(3)))
+
+    def test_a_round_with_no_measurements_fails_the_check(self):
+        self.assertFalse(treatment.treatment_valid(
+            self.report(1, separations=(17.3, None))))
+
+    def test_the_claim_is_one_question_about_the_photograph(self):
+        policy = treatment.treatment_policy(json.dumps({"about": ""}))
+        self.assertIn("beyond recovery", policy)
+        self.assertNotIn("measurements are reported", policy)
+        self.assertLessEqual(policy.count(";"), 1)
+
+
 class ContactSheetTests(unittest.TestCase):
     """Every round on one sheet, so the argument can be looked at."""
 
@@ -770,7 +810,7 @@ class WarrantTests(unittest.TestCase):
     def test_the_policy_says_it_must_not_chase_the_irrecoverable(self):
         policy = treatment.treatment_policy(
             json.dumps({"about": "a partial solar eclipse"}))
-        self.assertIn("irrecoverable", policy)
+        self.assertIn("beyond recovery", policy)
         self.assertIn("solar eclipse", policy)
 
     def test_an_abstention_keeps_the_evidence(self):

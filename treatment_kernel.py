@@ -710,7 +710,9 @@ def contact_sheet(directory: str, records: list[str], chosen: int) -> str:
         render = str(record.get("render") or "")
         if render and Path(render).is_file():
             number = int(record.get("round", 0))
-            mark = "  ← offered" if number == int(chosen) else ""
+            # ASCII: the sheet is drawn with PIL's built-in bitmap font,
+            # which has no arrow and draws a blank box instead.
+            mark = "  (offered)" if number == int(chosen) else ""
             frames.append((f"round {number}{mark}", Path(render)))
     frames = [(label, path) for label, path in frames if path.is_file()]
     if len(frames) < 2:
@@ -1006,7 +1008,22 @@ def treatment_valid(report_text: str) -> bool:
     # The plan is kept on each round rather than once at the top: a
     # revision may change the structure, and a treatment that says only
     # what it first thought is not a record of what it did.
-    return any(str(item.get("sections", "")).strip() for item in rounds)
+    if not any(str(item.get("sections", "")).strip() for item in rounds):
+        return False
+    # Every round carries the measurements of the render beside it, and
+    # the round being offered is the best-measuring one rather than the
+    # last one tried. These were once clauses in the claim put to the
+    # panel, which is a category error: they are facts about this file,
+    # true or false by inspection, and a model asked to certify them can
+    # only add noise. What is left for the panel is the photographic
+    # judgement, which is the part a program cannot check.
+    scored = [(int(item.get("round", 0)),
+               (item.get("measurements") or {}).get("subject_separation"))
+              for item in rounds if item.get("render")]
+    if any(value is None for _, value in scored):
+        return False
+    chosen = int(report.get("chosen_round", 0))
+    return bool(scored) and chosen == max(scored, key=lambda pair: pair[1])[0]
 
 
 def treatment_evidence(report_text: str) -> str:
@@ -1053,15 +1070,17 @@ def treatment_policy(evidence_text: str) -> str:
     evidence = data(evidence_text) or {}
     subject = str(evidence.get("about") or "").strip()
     said = f" The photographer says the shoot is: “{subject}”." if subject else ""
+    # One question, not five joined by semicolons. The clauses about
+    # where the measurements sit and how the round was chosen are
+    # checked in treatment_valid, where they belong; a conjunction that
+    # long is refused on whichever clause the reader likes least, and a
+    # refusal that cannot be attributed teaches nobody anything.
     return (
-        "a read-only staged development of one photograph under the "
-        "protect-then-reveal method: the diagnosis names what is "
-        "irrecoverable in the frame; the strategy says what to protect "
-        "and what to reveal; the recipe as rendered does not attempt to "
-        "recover what the diagnosis called irrecoverable; each round's "
-        "measurements are reported beside the round that produced them; "
-        "and the chosen round is the one whose measurements best serve "
-        "the stated strategy rather than merely the last one tried." + said)
+        "a staged development of one photograph in which the treatment "
+        "spent itself on what it said it would: it named something in "
+        "the frame as beyond recovery, and the recipe it settled on "
+        "does not try to recover that thing, but works on what it said "
+        "it would protect and reveal instead." + said)
 
 
 def treatment_abstention(warrant: str) -> str:
