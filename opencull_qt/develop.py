@@ -772,6 +772,9 @@ class DevelopPage(QWidget):
         # was written for the frame should not scroll past nine looks to
         # reach the camera's own rendering.
         self.presets_open = False
+        # The frames whose treatment runs were active at the last poll,
+        # so a completion is an event rather than a state nobody reads.
+        self._treating_last: set[str] = set()
         self.rendered: dict[tuple[str, str], QPixmap] = {}
 
         # One pool for both renderers. A render saturates the machine on
@@ -963,6 +966,29 @@ class DevelopPage(QWidget):
         self.treatments.itemClicked.connect(self._clicked_treatment)
         layout.addWidget(self.treatments)
 
+        # Directly under the list it feeds: this is where a missing answer
+        # is noticed, and the entry the run produces appears just above.
+        self.treat_button = QPushButton("Kimiya Treatment…")
+        self.treat_button.setObjectName("ghost")
+        self.treat_button.setFont(theme.body(10))
+        self.treat_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.treat_button.setToolTip(tooltip(
+            "Develop this frame in rounds: a model plans, renders, "
+            "measures its own result and revises, within a budget you "
+            "set. Every round is kept beside the photographs, and the "
+            "finished treatment appears in the list above once a panel "
+            "has vouched for it. Each round costs several model calls."))
+        self.treat_button.clicked.connect(self.treat_current)
+        layout.addWidget(self.treat_button)
+
+        # What a treatment run for this frame is doing right now.
+        self.treating = QLabel("")
+        self.treating.setObjectName("hint")
+        self.treating.setWordWrap(True)
+        self.treating.setFont(theme.body(9))
+        self.treating.setVisible(False)
+        layout.addWidget(self.treating)
+
         self.intent = QLabel("")
         self.intent.setObjectName("hint")
         self.intent.setWordWrap(True)
@@ -1058,19 +1084,6 @@ class DevelopPage(QWidget):
             "it would, without losing the subject."))
         self.verify_button.clicked.connect(self.verify_current)
         layout.addWidget(self.verify_button)
-
-        self.treat_button = QPushButton("Kimiya Treatment…")
-        self.treat_button.setObjectName("ghost")
-        self.treat_button.setFont(theme.body(10))
-        self.treat_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.treat_button.setToolTip(tooltip(
-            "Develop this frame in rounds: a model plans, renders, "
-            "measures its own result and revises, within a budget you "
-            "set. Every round is kept beside the photographs, and the "
-            "finished treatment appears in this list once a panel has "
-            "vouched for it. Each round costs several model calls."))
-        self.treat_button.clicked.connect(self.treat_current)
-        layout.addWidget(self.treat_button)
 
         # A full-size render takes a minute and a half of somebody's
         # evening. A disabled button says only that it is unavailable.
@@ -1329,6 +1342,41 @@ class DevelopPage(QWidget):
         chosen = self.treatments.item(row).data(Qt.ItemDataRole.UserRole)
         return next(
             (item for item in self.available if item["id"] == chosen), None)
+
+    def treatment_jobs(self, jobs: list[dict]) -> None:
+        """What the queue says about treatments of this folder's frames.
+
+        Pushed by the launcher on its poll tick. Two duties: say that a
+        frame is being treated while it is, and notice the moment a run
+        finishes -- the moment the finished treatment should appear in
+        the list above without anyone reopening the page.
+        """
+        active = {}
+        for job in jobs:
+            if job.get("status") in {"queued", "running", "stopping",
+                                     "detached"}:
+                active[str(job.get("photo") or "")] = str(
+                    job.get("status") or "queued")
+        finished = {
+            str(job.get("photo") or "")
+            for job in jobs if job.get("status") == "completed"}
+        arrived = finished & self._treating_last
+        self._treating_last = set(active)
+        busy = self.current in active
+        self.treat_button.setEnabled(not busy)
+        if busy:
+            state = active[self.current]
+            self.treating.setText(
+                "Treating this frame now -- the rounds land under "
+                ".darkimiya/Treatments as they happen."
+                if state == "running" else
+                "A treatment of this frame is waiting in the queue.")
+        self.treating.setVisible(busy)
+        if arrived:
+            # A run just ended. If it committed, its report is registered
+            # and the list rebuild will offer it; if it abstained, the
+            # rebuild changes nothing and the rounds are still on disk.
+            self._fill_treatments()
 
     def treat_current(self) -> None:
         """Ask for a Kimiya Treatment of this frame, budget stated first."""

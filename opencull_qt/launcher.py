@@ -1087,6 +1087,10 @@ class Launcher(QMainWindow):
                 shell.rebuild(phases.SUGGESTIONS)
         elif suggest_page is not None and suggesting is not None:
             shell.rebuild(phases.SUGGESTIONS)
+        develop_page = shell.page_for(phases.DEVELOPMENT)
+        if isinstance(develop_page, DevelopPage):
+            develop_page.treatment_jobs(self._treatment_jobs(
+                str(current.get("photos", ""))))
 
     def folder_contents(self, project: dict) -> dict:
         """Classify a folder's photographs, walking it at most once."""
@@ -1308,6 +1312,17 @@ class Launcher(QMainWindow):
         return [
             job for job in queue
             if job.get("kind") == "professional_shortlist"
+            and str(job.get("photos") or "")
+            and Path(str(job["photos"])) == Path(photos)]
+
+    def _treatment_jobs(self, photos: str) -> list[dict]:
+        try:
+            queue = self.services.jobs.public()["jobs"]
+        except Exception:                            # noqa: BLE001 - transient
+            return []
+        return [
+            job for job in queue
+            if job.get("kind") == "treatment"
             and str(job.get("photos") or "")
             and Path(str(job["photos"])) == Path(photos)]
 

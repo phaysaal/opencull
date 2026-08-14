@@ -320,6 +320,86 @@ class TreatmentEntryTests(unittest.TestCase):
             [item for item in offered if item["kind"] == "treatment"], [])
 
 
+class TreatmentMarkerTests(unittest.TestCase):
+    """The page says a frame is being treated, and notices the arrival."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.application = QApplication.instance() or QApplication([])
+
+    def setUp(self):
+        self._temporary = tempfile.TemporaryDirectory()
+        root = Path(self._temporary.name)
+        self.report_path, self.photos_path = build_shoot(root)
+        self.report = load_report(self.report_path)
+        self.photos = PhotoStore(self.photos_path, root / "cache")
+        self.addCleanup(self._temporary.cleanup)
+
+    def page(self):
+        from opencull_qt.develop import DevelopPage, workspace_for
+        from opencull_qt.previews import PreviewLoader
+
+        loader = PreviewLoader(self.photos)
+        self.workspace = workspace_for(
+            self.report, self.photos.root, decoders=set())
+        page = DevelopPage(self.report, self.workspace, loader)
+        page.resize(900, 600)
+        page.show()
+        self.addCleanup(page.shutdown)
+        self.addCleanup(loader.shutdown)
+        self.addCleanup(page.deleteLater)
+        return page
+
+    def job(self, photo, status):
+        return {"kind": "treatment", "photo": photo, "status": status}
+
+    def test_the_button_sits_under_the_list_it_feeds(self):
+        page = self.page()
+        column = page.treat_button.parentWidget().layout()
+        positions = {column.itemAt(i).widget(): i
+                     for i in range(column.count())
+                     if column.itemAt(i).widget() is not None}
+        self.assertEqual(positions[page.treat_button],
+                         positions[page.treatments] + 1)
+        self.assertLess(positions[page.treat_button],
+                        positions[page.develop_button])
+
+    def test_a_running_treatment_marks_the_frame_and_holds_the_button(self):
+        page = self.page()
+        page.treatment_jobs([self.job(page.current, "running")])
+        self.assertFalse(page.treat_button.isEnabled())
+        self.assertTrue(page.treating.isVisible())
+        self.assertIn("Treating this frame now", page.treating.text())
+
+    def test_a_queued_treatment_says_it_is_waiting(self):
+        page = self.page()
+        page.treatment_jobs([self.job(page.current, "queued")])
+        self.assertIn("waiting in the queue", page.treating.text())
+
+    def test_someone_elses_treatment_does_not_hold_this_frames_button(self):
+        page = self.page()
+        page.treatment_jobs([self.job(NAMES[2], "running")])
+        self.assertTrue(page.treat_button.isEnabled())
+        self.assertFalse(page.treating.isVisible())
+
+    def test_the_moment_a_run_finishes_the_list_is_rebuilt(self):
+        page = self.page()
+        page.treatment_jobs([self.job(page.current, "running")])
+        heard = []
+        page._fill_treatments = lambda: heard.append(True)
+        page.treatment_jobs([self.job(page.current, "completed")])
+        self.assertEqual(heard, [True])
+        self.assertTrue(page.treat_button.isEnabled())
+        self.assertFalse(page.treating.isVisible())
+
+    def test_a_run_that_was_already_over_is_not_an_event(self):
+        page = self.page()
+        heard = []
+        page._fill_treatments = lambda: heard.append(True)
+        page.treatment_jobs([self.job(page.current, "completed")])
+        self.assertEqual(heard, [])
+
+
 class VerificationTests(unittest.TestCase):
     """Checking that a rendering did what its treatment said it would."""
 
