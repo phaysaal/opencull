@@ -26,7 +26,7 @@ ENGINE_FORMAT = "opencull-development-render-v1"
 # changes when the engine's own arithmetic does -- so without this, an
 # improvement to the renderer is invisible on every frame already looked
 # at, which is exactly the frames somebody is judging it by.
-RECIPE_ENGINE_REVISION = 7
+RECIPE_ENGINE_REVISION = 8
 
 
 class DevelopmentError(ValueError):
@@ -633,7 +633,16 @@ def _spatial_mask(rgb: np.ndarray, shape: str, value: dict[str, Any]) -> np.ndar
         aspect = width / max(height, 1)
         distance = np.sqrt(
             ((xx - centre_x) * aspect) ** 2 + (yy - centre_y) ** 2) / reach
-        mask = np.clip(1 - distance, 0, 1)
+        # Feather: what fraction of the radius the falloff occupies. At
+        # 1.0 the weight falls across the whole radius, which is exactly
+        # the old behaviour -- clip((1-d)/1) == clip(1-d) -- so recipes
+        # rendered before feather was read do not change at full
+        # feather. Below it, an inner core holds full weight and the
+        # transition narrows toward the rim. It was promised by every
+        # mask's schema and read by nothing until now.
+        feather = float(value.get("feather", 1.0) or 1.0)
+        feather = min(max(feather, 0.05), 1.0)
+        mask = np.clip((1 - distance) / feather, 0, 1)
         # Smoothstep: no visible edge where the mask runs out, which is
         # the whole difference between a local adjustment and a halo.
         mask = mask * mask * (3.0 - 2.0 * mask)

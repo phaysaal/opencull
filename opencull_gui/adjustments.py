@@ -212,6 +212,137 @@ _NEUTRAL = {
 }
 
 
+# --- masks: where an adjustment lands, made movable ----------------------
+#
+# A mask operation's geometry lives in its anchor sentence, because the
+# engine reads sentences. These two functions are the only place the
+# sentence is parsed or written, so a slider moving "radius" cannot
+# drift from what the renderer will do with the words.
+
+EDGES = ("bottom", "top", "left", "right")
+BANDS = ("shadows", "midtones", "highlights")
+
+_MASK_EFFECT_RANGE = 1e-9  # effects reuse RANGES; sentinel for clarity
+
+
+def _parse_anchor(shape: str, anchor: str) -> dict[str, Any]:
+    import re
+
+    text = str(anchor or "").casefold()
+    found: dict[str, Any] = {"inverted": ("invert" in text
+                                          or "outside" in text
+                                          or "except" in text)}
+    if shape == "radial":
+        placed = re.search(
+            r"at\s*(\d+(?:\.\d+)?)\s*%[,\s]+(\d+(?:\.\d+)?)\s*%", text)
+        found["centre_x"] = float(placed.group(1)) if placed else 50.0
+        found["centre_y"] = float(placed.group(2)) if placed else 50.0
+        stated = re.search(r"radius\s*(\d+(?:\.\d+)?)\s*%", text)
+        found["radius"] = float(stated.group(1)) if stated else 50.0
+        found["on_sun"] = placed is None and (
+            "bright" in text or "sun" in text)
+    elif shape == "linear":
+        found["edge"] = next(
+            (edge for edge in EDGES if edge in text), "bottom")
+        reach = re.search(r"up\s*to\s*(\d+(?:\.\d+)?)\s*%", text)
+        found["reach"] = float(reach.group(1)) if reach else 100.0
+    elif shape == "luma":
+        found["band"] = next(
+            (band for band in BANDS
+             if band.rstrip("s") in text or band in text), "shadows")
+    return found
+
+
+def _build_anchor(shape: str, geometry: dict[str, Any]) -> str:
+    parts = [f"{shape} gradient"]
+    if shape == "radial":
+        if geometry.get("on_sun"):
+            parts.append("on the sun")
+        else:
+            parts.append(
+                f"at {float(geometry.get('centre_x', 50)):.0f}%, "
+                f"{float(geometry.get('centre_y', 50)):.0f}%")
+        parts.append(f"radius {float(geometry.get('radius', 50)):.0f}%")
+    elif shape == "linear":
+        edge = str(geometry.get("edge", "bottom"))
+        parts.append(f"from the {edge if edge in EDGES else 'bottom'}")
+        reach = float(geometry.get("reach", 100))
+        if 0 < reach < 100:
+            parts.append(f"up to {reach:.0f}%")
+    elif shape == "luma":
+        band = str(geometry.get("band", "shadows"))
+        parts.append(band if band in BANDS else "shadows")
+    if geometry.get("inverted"):
+        parts.append("inverted")
+    return ", ".join(parts)
+
+
+def masks(recipe: dict[str, Any]) -> list[dict[str, Any]]:
+    """Every mask in one recipe, its geometry parsed and its effects bounded.
+
+    A mask's id is its ordinal among masks -- "mask:1" is the first --
+    which stays stable when whole-frame operations are inserted above.
+    """
+    found = []
+    ordinal = 0
+    for operation in recipe.get("operations", []) or []:
+        if not isinstance(operation, dict):
+            continue
+        name = str(operation.get("op", ""))
+        if not name.startswith("mask.") or name == "mask.vignette":
+            continue
+        value = operation.get("value")
+        if not isinstance(value, dict):
+            continue
+        ordinal += 1
+        shape = name[5:]
+        geometry = _parse_anchor(shape, str(value.get("anchor") or ""))
+        geometry["feather"] = round(
+            float(value.get("feather", 1.0) or 1.0) * 100)
+        geometry["opacity"] = round(
+            float(value.get("opacity", 1.0) or 1.0) * 100)
+        effects = []
+        for effect in value.get("effects", []) or []:
+            if not isinstance(effect, dict):
+                continue
+            effect_op = str(effect.get("op", ""))
+            amount = effect.get("value")
+            if effect_op not in RANGES or not isinstance(
+                    amount, (int, float)) or isinstance(amount, bool):
+                continue
+            low, high, unit = RANGES[effect_op]
+            asked = effect.get("asked_value")
+            effects.append({
+                "id": f"mask:{ordinal}/{effect_op}",
+                "op": effect_op,
+                "label": LABELS.get(effect_op,
+                                    effect_op.split(".")[-1].title()),
+                "section": "Mask",
+                "value": float(amount),
+                "asked": float(asked if isinstance(asked, (int, float))
+                               else amount),
+                "unit": unit, "low": low, "high": high,
+                "enabled": True, "source": "",
+            })
+        found.append({
+            "id": f"mask:{ordinal}",
+            "shape": shape,
+            "label": str(operation.get("source") or f"mask {ordinal}"),
+            "geometry": geometry,
+            "enabled": operation.get("enabled", True) is not False,
+            "effects": effects,
+        })
+    return found
+
+
+def _mask_operations(recipe: dict[str, Any]) -> list[dict[str, Any]]:
+    return [operation for operation in recipe.get("operations", []) or []
+            if isinstance(operation, dict)
+            and str(operation.get("op", "")).startswith("mask.")
+            and str(operation.get("op", "")) != "mask.vignette"
+            and isinstance(operation.get("value"), dict)]
+
+
 def guardrails(recipe: dict[str, Any]) -> list[str]:
     """What the treatment promised not to do, which is not up for adjustment."""
     found = []
@@ -244,8 +375,120 @@ def apply(recipe: dict[str, Any], changes: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(recipe, dict):
         raise AdjustmentError("recipe must be an object")
     result = json.loads(json.dumps(recipe))
-    by_id = {item["id"]: item for item in controls(result)}
     recorded = []
+
+    # Operations the photographer asked into existence. Applied first,
+    # so a later change to one of them lands on a real operation. This
+    # is also what makes an added control actually render: the changes
+    # dict is the only payload the render path carries.
+    for item in changes.get("+insert", []) or []:
+        if not isinstance(item, dict):
+            continue
+        op = str(item.get("op", ""))
+        if any(isinstance(existing, dict) and existing.get("op") == op
+               for existing in result.get("operations", []) or []):
+            continue
+        result = insert(result, op, float(item.get("value", 0.0)))
+        recorded.append({"id": op, "op": op,
+                         "asked": _NEUTRAL.get(op, 0.0),
+                         "set": float(item.get("value", 0.0)),
+                         "enabled": True,
+                         "unit": RANGES[op][2], "inserted": True})
+
+    # New masks, appended after everything, which is where the engine
+    # blends them anyway.
+    for item in changes.get("+mask", []) or []:
+        if not isinstance(item, dict):
+            continue
+        shape = str(item.get("shape", "radial"))
+        if shape not in {"radial", "linear", "luma"}:
+            shape = "radial"
+        geometry = dict(item.get("geometry") or {})
+        result.setdefault("operations", []).append({
+            "op": f"mask.{shape}", "unit": "mask", "mode": "absolute",
+            "source": str(item.get("label") or "added by hand"),
+            "value": {
+                "anchor": _build_anchor(shape, geometry),
+                "opacity": float(geometry.get("opacity", 100)) / 100.0,
+                "feather": float(geometry.get("feather", 100)) / 100.0,
+                "effects": [
+                    {"op": str(effect.get("op")),
+                     "value": max(RANGES[str(effect.get("op"))][0],
+                                  min(RANGES[str(effect.get("op"))][1],
+                                      float(effect.get("value", 0.0)))),
+                     "unit": RANGES[str(effect.get("op"))][2],
+                     "mode": "delta", "asked_value": 0.0}
+                    for effect in item.get("effects", []) or []
+                    if isinstance(effect, dict)
+                    and str(effect.get("op")) in RANGES
+                ],
+            },
+        })
+        recorded.append({"id": f"mask.{shape}", "op": f"mask.{shape}",
+                         "asked": 0.0, "set": 0.0, "enabled": True,
+                         "unit": "mask", "inserted": True})
+
+    # Changes to the masks already there: geometry rebuilt into the
+    # anchor sentence (the only thing the engine reads), effects moved
+    # inside the compiler's bounds, a disabled effect removed from the
+    # list because the engine applies whatever the list holds.
+    placed = _mask_operations(result)
+    for key, change in changes.items():
+        if not str(key).startswith("mask:") or not isinstance(change, dict):
+            continue
+        head, _, effect_op = str(key).partition("/")
+        try:
+            ordinal = int(head.split(":", 1)[1])
+        except ValueError:
+            continue
+        if not 1 <= ordinal <= len(placed):
+            continue
+        operation = placed[ordinal - 1]
+        value = operation["value"]
+        shape = str(operation["op"])[5:]
+        if effect_op:
+            for effect in list(value.get("effects", []) or []):
+                if not isinstance(effect, dict) or str(
+                        effect.get("op")) != effect_op:
+                    continue
+                low, high, _unit = RANGES.get(effect_op, (0, 0, ""))
+                previous = float(effect.get("value", 0.0))
+                if "value" in change:
+                    effect.setdefault("asked_value", previous)
+                    effect["value"] = max(low, min(high,
+                                                   float(change["value"])))
+                if change.get("enabled") is False:
+                    value["effects"].remove(effect)
+                recorded.append({
+                    "id": key, "op": effect_op,
+                    "asked": float(effect.get("asked_value", previous)),
+                    "set": float(effect.get("value", previous)),
+                    "enabled": change.get("enabled", True) is not False,
+                    "unit": RANGES.get(effect_op, (0, 0, ""))[2],
+                })
+            continue
+        if "geometry" in change and isinstance(change["geometry"], dict):
+            geometry = _parse_anchor(shape, str(value.get("anchor") or ""))
+            geometry.update(change["geometry"])
+            if "centre_x" in change["geometry"] or "radius" in \
+                    change["geometry"] or "centre_y" in change["geometry"]:
+                geometry["on_sun"] = False
+            value["anchor"] = _build_anchor(shape, geometry)
+            if "feather" in change["geometry"]:
+                value["feather"] = float(
+                    change["geometry"]["feather"]) / 100.0
+            if "opacity" in change["geometry"]:
+                value["opacity"] = float(
+                    change["geometry"]["opacity"]) / 100.0
+        if "enabled" in change:
+            operation["enabled"] = bool(change["enabled"])
+        recorded.append({"id": key, "op": operation["op"],
+                         "asked": 0.0, "set": 0.0,
+                         "enabled": operation.get("enabled", True)
+                         is not False,
+                         "unit": "mask"})
+
+    by_id = {item["id"]: item for item in controls(result)}
     for operation in result.get("operations", []) or []:
         if not isinstance(operation, dict):
             continue

@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 try:
-    from PySide6.QtWidgets import QApplication, QLabel
+    from PySide6.QtWidgets import QApplication, QLabel, QWidget
 except ImportError:  # pragma: no cover - exercised only without PySide6
     QApplication = None
 
@@ -378,6 +378,107 @@ class AbsentControlTests(unittest.TestCase):
         made.slider.setValue(700)
         made.enabled.setChecked(False)
         self.assertEqual(heard, [])
+
+
+class MaskCardTests(unittest.TestCase):
+    """One mask as a card: geometry, effects and the tint request."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.application = QApplication.instance() or QApplication([])
+
+    def card(self, shape="radial"):
+        from opencull_qt.finetune import MaskCard
+
+        mask = {
+            "id": "mask:1", "shape": shape, "label": "the surroundings",
+            "enabled": True,
+            "geometry": {"centre_x": 49.0, "centre_y": 52.0,
+                         "radius": 36.0, "feather": 80, "opacity": 100,
+                         "inverted": True, "edge": "bottom",
+                         "reach": 35.0, "band": "shadows"},
+            "effects": [{
+                "id": "mask:1/tone.exposure", "op": "tone.exposure",
+                "label": "Exposure", "section": "Mask", "value": 0.8,
+                "asked": 0.8, "unit": "EV", "low": -5.0, "high": 5.0,
+                "enabled": True, "source": ""}],
+        }
+        return MaskCard(mask)
+
+    def test_moving_the_radius_emits_the_changes_key_apply_reads(self):
+        card = self.card()
+        heard = []
+        card.changed.connect(lambda key, change: heard.append((key, change)))
+        slider = next(child for child in card.findChildren(QWidget)
+                      if getattr(child, "key", "") == "radius")
+        slider.slider.setValue(200)
+        self.assertEqual(heard[-1][0], "mask:1")
+        self.assertIn("geometry", heard[-1][1])
+        self.assertAlmostEqual(
+            heard[-1][1]["geometry"]["radius"], 1 + 99 * 0.2, places=1)
+
+    def test_an_effect_rides_the_same_control_as_the_whole_frame(self):
+        card = self.card()
+        heard = []
+        card.effect_changed.connect(
+            lambda key, change: heard.append((key, change)))
+        control = next(item for item in card.findChildren(QWidget)
+                       if getattr(item, "control", {}).get("id")
+                       == "mask:1/tone.exposure")
+        control.slider.setValue(900)
+        self.assertEqual(heard[-1][0], "mask:1/tone.exposure")
+        self.assertIn("value", heard[-1][1])
+
+    def test_the_show_button_asks_for_this_masks_tint(self):
+        card = self.card()
+        heard = []
+        card.show_me.connect(lambda key, on: heard.append((key, on)))
+        card.show_button.setChecked(True)
+        card.show_button.setChecked(False)
+        self.assertEqual(heard, [("mask:1", True), ("mask:1", False)])
+
+    def test_a_linear_card_offers_edge_and_reach_not_centres(self):
+        card = self.card("linear")
+        keys = [getattr(child, "key", "")
+                for child in card.findChildren(QWidget)]
+        self.assertIn("reach", keys)
+        self.assertNotIn("centre_x", keys)
+        self.assertEqual(card.edge.currentText(), "bottom")
+
+
+class InsertRenderTests(unittest.TestCase):
+    """What phase one got wrong: an added control must reach the render.
+
+    The page rewrote only its own copy of the recipe; the renderer
+    recompiles from the treatment id and folds in the changes dict, so
+    every hand-added operation was quietly ignored. The insert rides
+    the changes dict now, and this is the seam that proves it.
+    """
+
+    def test_apply_carries_the_insert_to_the_renderer(self):
+        from opencull_gui import adjustments
+
+        recipe = {"format": "opencull-development-recipe-v1",
+                  "operations": [{"op": "tone.exposure", "value": -1.0,
+                                  "unit": "EV", "mode": "delta"}]}
+        changes = {"+insert": [{"op": "tone.shadow", "value": 25.0}]}
+        rendered = adjustments.apply(recipe, changes)
+        self.assertIn("tone.shadow",
+                      [item["op"] for item in rendered["operations"]])
+
+    def test_the_insert_is_idempotent_across_rerenders(self):
+        """The same changes dict is applied on every render; the second
+        application must not double the operation."""
+        from opencull_gui import adjustments
+
+        recipe = {"format": "opencull-development-recipe-v1",
+                  "operations": []}
+        changes = {"+insert": [{"op": "tone.shadow", "value": 25.0}]}
+        once = adjustments.apply(recipe, changes)
+        twice = adjustments.apply(once, changes)
+        self.assertEqual(
+            [item["op"] for item in twice["operations"]].count("tone.shadow"),
+            1)
 
 
 class AdjustedRenderTests(FineTunePageTests):

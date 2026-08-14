@@ -26,6 +26,7 @@ from typing import Any
 from PySide6.QtCore import QSize, Qt, QThreadPool, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QFrame,
     QHBoxLayout,
     QInputDialog,
@@ -186,6 +187,150 @@ class Control(QWidget):
         self.provenance.style().polish(self.provenance)
 
 
+class GeometrySlider(QWidget):
+    """One geometric fact about a mask: a name, a ZoneSlider, a reading."""
+
+    changed = Signal(str, float)
+
+    def __init__(self, key: str, label: str, low: float, high: float,
+                 value: float, unit: str = "%"):
+        super().__init__()
+        self.key = key
+        self.low, self.high, self.unit = low, high, unit
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(8)
+        name = QLabel(label)
+        name.setFont(theme.body(9))
+        name.setFixedWidth(64)
+        row.addWidget(name)
+        self.slider = ZoneSlider()
+        self.slider.setRange(0, TICKS)
+        self.slider.setValue(
+            int((value - low) / (high - low) * TICKS) if high > low else 0)
+        self.slider.valueChanged.connect(self._moved)
+        row.addWidget(self.slider, 1)
+        self.reading = QLabel(f"{value:.0f}{unit}")
+        self.reading.setObjectName("reading")
+        self.reading.setFont(theme.mono(9))
+        self.reading.setFixedWidth(48)
+        row.addWidget(self.reading)
+
+    def _moved(self, tick: int) -> None:
+        value = self.low + (self.high - self.low) * tick / TICKS
+        self.reading.setText(f"{value:.0f}{self.unit}")
+        self.changed.emit(self.key, value)
+
+
+class MaskCard(QFrame):
+    """One mask: where it lands, and what happens inside it.
+
+    Geometry rides sliders, the shape's discrete facts ride combos, and
+    the effects reuse the same Control the whole-frame operations use,
+    advice bands included. Every change is emitted as the changes-dict
+    keys apply() reads, so the card cannot say anything the renderer
+    will not do.
+    """
+
+    changed = Signal(str, dict)        # "mask:N" -> {"geometry"/"enabled"}
+    effect_changed = Signal(str, dict)  # "mask:N/op" -> {"value"/"enabled"}
+    show_me = Signal(str, bool)        # mask id, overlay on or off
+
+    def __init__(self, mask: dict[str, Any],
+                 advice: dict[str, dict] | None = None):
+        super().__init__()
+        self.setObjectName("panelCard")
+        self.mask = mask
+        geometry = dict(mask["geometry"])
+        column = QVBoxLayout(self)
+        column.setContentsMargins(10, 8, 10, 8)
+        column.setSpacing(4)
+
+        head = QHBoxLayout()
+        head.setSpacing(8)
+        self.enabled = QCheckBox(
+            f"Mask · {mask['shape']}")
+        self.enabled.setChecked(mask["enabled"])
+        self.enabled.setFont(theme.body(10))
+        self.enabled.setToolTip(tooltip(
+            "Switch this mask off entirely; everything inside it stops."))
+        self.enabled.toggled.connect(
+            lambda on: self.changed.emit(self.mask["id"], {"enabled": on}))
+        head.addWidget(self.enabled)
+        head.addStretch(1)
+        self.show_button = QPushButton("Show")
+        self.show_button.setObjectName("ghost")
+        self.show_button.setFont(theme.body(8))
+        self.show_button.setCheckable(True)
+        self.show_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.show_button.setToolTip(tooltip(
+            "Tint the picture where this mask lands, from the renderer's "
+            "own weights. What you see is what will be blended."))
+        self.show_button.toggled.connect(
+            lambda on: self.show_me.emit(self.mask["id"], on))
+        head.addWidget(self.show_button)
+        column.addLayout(head)
+
+        where = QLabel(mask["label"])
+        where.setObjectName("rowPath")
+        where.setWordWrap(True)
+        where.setFont(theme.body(8))
+        column.addWidget(where)
+
+        shape = mask["shape"]
+        if shape == "radial":
+            for key, label, low, high in (
+                    ("centre_x", "Centre X", 0.0, 100.0),
+                    ("centre_y", "Centre Y", 0.0, 100.0),
+                    ("radius", "Radius", 1.0, 100.0),
+                    ("feather", "Feather", 5.0, 100.0)):
+                slider = GeometrySlider(
+                    key, label, low, high, float(geometry.get(key, 50)))
+                slider.changed.connect(self._geometry_moved)
+                column.addWidget(slider)
+            self.inverted = QCheckBox("Inverted — everything except it")
+            self.inverted.setChecked(bool(geometry.get("inverted")))
+            self.inverted.setFont(theme.body(9))
+            self.inverted.toggled.connect(
+                lambda on: self._geometry_moved("inverted", bool(on)))
+            column.addWidget(self.inverted)
+        elif shape == "linear":
+            self.edge = QComboBox()
+            self.edge.addItems(list(adjustments.EDGES))
+            self.edge.setCurrentText(str(geometry.get("edge", "bottom")))
+            self.edge.setFont(theme.body(9))
+            self.edge.currentTextChanged.connect(
+                lambda text: self._geometry_moved("edge", text))
+            column.addWidget(self.edge)
+            reach = GeometrySlider(
+                "reach", "Reach", 5.0, 100.0,
+                float(geometry.get("reach", 100)))
+            reach.changed.connect(self._geometry_moved)
+            column.addWidget(reach)
+        elif shape == "luma":
+            self.band = QComboBox()
+            self.band.addItems(list(adjustments.BANDS))
+            self.band.setCurrentText(str(geometry.get("band", "shadows")))
+            self.band.setFont(theme.body(9))
+            self.band.currentTextChanged.connect(
+                lambda text: self._geometry_moved("band", text))
+            column.addWidget(self.band)
+
+        for effect in mask["effects"]:
+            widget = Control(effect,
+                             (advice or {}).get(effect["op"]))
+            widget.changed.connect(self.effect_changed.emit)
+            column.addWidget(widget)
+        if not mask["effects"]:
+            idle = QLabel("This mask carries no effects; it does nothing.")
+            idle.setObjectName("hint")
+            idle.setFont(theme.body(8))
+            column.addWidget(idle)
+
+    def _geometry_moved(self, key: str, value) -> None:
+        self.changed.emit(self.mask["id"], {"geometry": {key: value}})
+
+
 class FineTunePage(QWidget):
     """The operations behind one treatment, and the proof of moving them."""
 
@@ -208,6 +353,11 @@ class FineTunePage(QWidget):
         self.controls: list[Control] = []
         # Which sections have their absent controls unfolded.
         self._open_sections: dict[str, bool] = {}
+        self._mask_cards: list[MaskCard] = []
+        # Which mask is being shown as a tint, if any, and the plain
+        # pixmap underneath it.
+        self._overlay_for = ""
+        self._plain_pixmap = None
 
         self.renderer = Renderer(workspace, PROOF_EDGE, pool, self)
         self.renderer.done.connect(self._rendered)
@@ -448,8 +598,93 @@ class FineTunePage(QWidget):
         self._show_controls()
         self.render()
 
+    def _mask_changed(self, key: str, change: dict) -> None:
+        held = self.changes.setdefault(key, {})
+        if "geometry" in change:
+            held.setdefault("geometry", {}).update(change["geometry"])
+        if "enabled" in change:
+            held["enabled"] = change["enabled"]
+        # The recipe the overlay reads must be the recipe being rendered.
+        self.recipe = adjustments.apply(self.recipe, {key: change})
+        self.changes[key] = held
+        if self._overlay_for == key:
+            self._paint_overlay()
+        self.render()
+
+    def _add_mask(self) -> None:
+        shapes = ["radial — around a point",
+                  "linear — from an edge",
+                  "luma — a band of brightness"]
+        chosen, agreed = QInputDialog.getItem(
+            self, "Add a mask", "What is this mask the answer to?",
+            shapes, 0, False)
+        if not agreed:
+            return
+        shape = chosen.split(" ", 1)[0]
+        made = {"shape": shape,
+                "geometry": {"centre_x": 50.0, "centre_y": 50.0,
+                             "radius": 30.0, "feather": 100,
+                             "reach": 40.0},
+                "effects": [{"op": "tone.exposure", "value": 0.0}]}
+        self.changes.setdefault("+mask", []).append(made)
+        self.recipe = adjustments.apply(self.recipe, {"+mask": [made]})
+        self._show_controls()
+        self.render()
+
+    def _show_mask(self, key: str, on: bool) -> None:
+        """Tint the proof where one mask lands, from the engine's weights."""
+        for card in self._mask_cards:
+            if card.mask["id"] != key and card.show_button.isChecked():
+                card.show_button.blockSignals(True)
+                card.show_button.setChecked(False)
+                card.show_button.blockSignals(False)
+        self._overlay_for = key if on else ""
+        if on:
+            self._paint_overlay()
+        elif self._plain_pixmap is not None:
+            self.frame.set_source(self._plain_pixmap)
+
+    def _paint_overlay(self) -> None:
+        from PySide6.QtGui import QPainter, QPixmap
+
+        from opencull_gui import maskpaint
+
+        if self._plain_pixmap is None or not self._overlay_for:
+            return
+        placed = {item["id"]: item for item in adjustments.masks(self.recipe)}
+        mask = placed.get(self._overlay_for)
+        if mask is None:
+            return
+        # The value dict, straight off the recipe by ordinal.
+        ordinal = int(self._overlay_for.split(":", 1)[1])
+        values = [item["value"] for item in
+                  self.recipe.get("operations", [])
+                  if isinstance(item, dict)
+                  and str(item.get("op", "")).startswith("mask.")
+                  and str(item.get("op", "")) != "mask.vignette"
+                  and isinstance(item.get("value"), dict)]
+        if not 1 <= ordinal <= len(values):
+            return
+        try:
+            reference = self.workspace._as_shot_preview(
+                self.current, PROOF_EDGE)
+            png = maskpaint.overlay_png(
+                reference, mask["shape"], values[ordinal - 1])
+        except Exception as exc:                     # noqa: BLE001 - shown
+            self._report(f"The mask could not be shown: {exc}", "alarm")
+            return
+        wash = QPixmap()
+        wash.loadFromData(png)
+        composed = QPixmap(self._plain_pixmap)
+        painter = QPainter(composed)
+        painter.drawPixmap(composed.rect(), wash, wash.rect())
+        painter.end()
+        self.frame.set_source(composed)
+
     def _clear(self) -> None:
         self.controls = []
+        self._mask_cards = []
+        self._overlay_for = ""
         while self.body.count():
             item = self.body.takeAt(0)
             widget = item.widget()
@@ -505,6 +740,30 @@ class FineTunePage(QWidget):
                 more.clicked.connect(
                     lambda _=False, s=section: self._toggle_section(s))
                 self.body.addWidget(more)
+        placed = adjustments.masks(self.recipe)
+        if placed or True:
+            heading = QLabel(
+                f"MASKS  ·  {len(placed)}" if placed else "MASKS")
+            heading.setObjectName("axisName")
+            heading.setFont(theme.display(7))
+            self.body.addWidget(heading)
+        for mask in placed:
+            card = MaskCard(mask, advice)
+            card.changed.connect(self._mask_changed)
+            card.effect_changed.connect(self._control_changed)
+            card.show_me.connect(self._show_mask)
+            self._mask_cards.append(card)
+            self.body.addWidget(card)
+        add_mask = QPushButton("Add a mask…")
+        add_mask.setObjectName("ghost")
+        add_mask.setFont(theme.body(8))
+        add_mask.setCursor(Qt.CursorShape.PointingHandCursor)
+        add_mask.setToolTip(tooltip(
+            "A mask is the answer to two parts of the frame needing "
+            "opposite things: radial around a point, linear from an "
+            "edge, luma across a band of brightness."))
+        add_mask.clicked.connect(self._add_mask)
+        self.body.addWidget(add_mask)
         for text in adjustments.guardrails(self.recipe):
             rail = QLabel(f"◆ {text}")
             rail.setObjectName("guardrail")
@@ -521,6 +780,18 @@ class FineTunePage(QWidget):
     # --- moving them ------------------------------------------------------
 
     def _control_changed(self, key: str, change: dict) -> None:
+        inserted = next(
+            (item for item in self.changes.get("+insert", [])
+             if item.get("op") == key), None)
+        if inserted is not None and "value" in change:
+            # The control was asked in by hand; its value lives on the
+            # insert entry, not in a second change that apply() would
+            # race it with.
+            inserted["value"] = change["value"]
+            if change.get("enabled") is False:
+                self.changes["+insert"].remove(inserted)
+            self.render()
+            return
         self.changes.setdefault(key, {}).update(change)
         self.render()
 
@@ -531,16 +802,21 @@ class FineTunePage(QWidget):
     def _control_wanted(self, op: str, value: float) -> None:
         """An absent operation, asked into the recipe by hand.
 
-        The insert rewrites the recipe, so the panel is rebuilt from it:
-        the control crosses from the folded advanced set into its
-        section's compiled controls, exactly as if the treatment had
-        asked for it -- except the asked mark says it did not.
+        The ask rides the changes dict -- the only payload the render
+        path carries -- so the renderer, the cache identity and the
+        full-size keep all see the same insertion. An earlier shape
+        rewrote only this page's copy of the recipe, and the render
+        quietly ignored every added control.
         """
-        try:
-            self.recipe = adjustments.insert(self.recipe, op, value)
-        except adjustments.AdjustmentError as exc:
-            self._report(str(exc), "alarm")
-            return
+        inserts = self.changes.setdefault("+insert", [])
+        if not any(item.get("op") == op for item in inserts):
+            inserts.append({"op": op, "value": value})
+        else:
+            for item in inserts:
+                if item.get("op") == op:
+                    item["value"] = value
+        self.recipe = adjustments.apply(
+            self.recipe, {"+insert": [{"op": op, "value": value}]})
         self._open_sections[adjustments._section_of(op)] = True
         self._show_controls()
         self.render()
@@ -620,7 +896,10 @@ class FineTunePage(QWidget):
     def _rendered(self, photo: str, treatment: str, pixmap) -> None:
         if photo != self.current or treatment != self.treatment:
             return
+        self._plain_pixmap = pixmap
         self.frame.set_source(pixmap)
+        if self._overlay_for:
+            self._paint_overlay()
 
     def _render_failed(self, photo: str, reason: str) -> None:
         self._report(f"{photo} could not be rendered: {reason}", "alarm")
