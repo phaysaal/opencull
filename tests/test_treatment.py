@@ -497,21 +497,44 @@ class CarriedMovesTests(unittest.TestCase):
     59.4, twice in one run.
     """
 
-    def round(self, **moves):
+    def round(self, number=1, separation=50.0, **moves):
         plan = {"mask_count": 0, "global_adjustments": moves}
         return json.dumps({
-            "round": 1,
+            "round": number, "render": f"{number}.jpg",
+            "measurements": {"subject_separation": separation},
             "recipe": json.loads(treatment.assemble_recipe("A.ARW", plan, [])),
         })
 
+    def moves_of(self, records):
+        return json.loads(treatment.standing_moves(records)).get("moves", {})
+
     def test_what_was_applied_is_what_carries(self):
-        held = json.loads(treatment.standing_moves(
-            [self.round(exposure=-1.5, contrast=35)]))
+        held = self.moves_of([self.round(exposure=-1.5, contrast=35)])
         self.assertEqual(held, {"exposure": -1.5, "contrast": 35.0})
 
     def test_a_move_carries_at_the_value_the_renderer_took_not_the_one_asked(self):
-        held = json.loads(treatment.standing_moves([self.round(exposure=-40)]))
+        held = self.moves_of([self.round(exposure=-40)])
         self.assertEqual(held["exposure"], -5.0)
+
+    def test_the_moves_in_force_are_the_best_rounds_not_the_latest(self):
+        """A loop that builds on its latest attempt builds on regressions."""
+        carried = json.loads(treatment.standing_moves([
+            self.round(1, separation=22.0, exposure=-1.5),
+            self.round(2, separation=13.2, exposure=-0.2),
+        ]))
+        self.assertEqual(carried["round"], 1)
+        self.assertEqual(carried["moves"]["exposure"], -1.5)
+        self.assertIn("set aside", carried["set_aside"])
+
+    def test_the_plan_hears_which_rounds_were_set_aside(self):
+        standing = treatment.standing_moves([
+            self.round(1, separation=22.0, exposure=-1.5),
+            self.round(2, separation=13.2, exposure=-0.2),
+        ])
+        built = treatment.plan_prompt(
+            json.dumps({"baseline": {}}), {"next_change": "x"}, standing)
+        self.assertIn("from round 1, the best measured so far", built)
+        self.assertIn("revising the best round, not the latest", built)
 
     def test_saying_nothing_keeps_the_frame_where_it_was(self):
         standing = treatment.standing_moves([self.round(exposure=-1.5)])
@@ -536,20 +559,20 @@ class CarriedMovesTests(unittest.TestCase):
     def test_a_mask_is_not_mistaken_for_a_whole_frame_move(self):
         """Its source line is the region it is around, not 'name number'."""
         plan = {"mask_count": 1, "global_adjustments": {"exposure": -1.5}}
-        made = json.dumps({"round": 1, "recipe": json.loads(
+        made = json.dumps({"round": 1, "render": "1.jpg",
+                           "measurements": {"subject_separation": 50},
+                           "recipe": json.loads(
             treatment.assemble_recipe("A.ARW", plan, [
                 {"region": "the rooftop and tree line", "shape": "linear",
                  "anchor": "bottom", "adjustments": {"exposure": 0.3}}]))})
-        self.assertEqual(json.loads(treatment.standing_moves([made])),
-                         {"exposure": -1.5})
+        self.assertEqual(self.moves_of([made]), {"exposure": -1.5})
 
     def test_nothing_stands_before_the_first_round(self):
         self.assertEqual(treatment.standing_moves([]), "{}")
 
     def test_a_round_that_never_rendered_is_skipped(self):
         empty = json.dumps({"round": 2, "recipe": {"operations": []}})
-        held = json.loads(treatment.standing_moves(
-            [self.round(exposure=-1.5), empty]))
+        held = self.moves_of([self.round(exposure=-1.5), empty])
         self.assertEqual(held, {"exposure": -1.5})
 
     def test_the_plan_is_told_what_it_is_revising(self):
@@ -678,6 +701,75 @@ class UnculledFolderTests(unittest.TestCase):
             "keep": [{"cluster_id": "c1", "photos": ["DSCF1221.RAF"]}]}))
         roster = treatment._roster(self.root, self.layout, "DSCF1221.RAF")
         self.assertEqual(roster.path, report)
+
+
+class GoalsTests(unittest.TestCase):
+    """The treatment's contract, declared once and scored by the harness.
+
+    Which round leads used to follow one hard-wired metric, and it
+    offered a posterised sky that happened to score well on it. Now the
+    plan says which numbers its strategy is about, and the offered
+    round is the one that moved them the declared way.
+    """
+
+    def round(self, number, **measured):
+        return json.dumps({"round": number, "render": f"{number}.jpg",
+                           "goals": {}, "measurements": measured})
+
+    def test_the_declared_goals_outrank_the_tie_break(self):
+        rounds = [
+            json.dumps({"round": 1, "render": "1.jpg",
+                        "goals": {"veil_percent": "down"},
+                        "measurements": {"subject_separation": 40.6,
+                                         "veil_percent": 30.9}}),
+            json.dumps({"round": 2, "render": "2.jpg",
+                        "measurements": {"subject_separation": 39.8,
+                                         "veil_percent": 20.8}}),
+        ]
+        baseline = json.dumps({"subject_separation": 37.1, "veil_percent": 27.1})
+        self.assertEqual(treatment.best_round(rounds, baseline), 2)
+
+    def test_with_no_goals_the_choice_is_what_it_always_was(self):
+        rounds = [self.round(1, subject_separation=70),
+                  self.round(2, subject_separation=92),
+                  self.round(3, subject_separation=81)]
+        self.assertEqual(treatment.best_round(rounds, "{}"), 2)
+
+    def test_the_contract_is_the_first_declared_not_the_latest(self):
+        """A plan that rewrites its goals to fit the round has lowered them."""
+        rounds = [
+            json.dumps({"round": 1, "render": "1.jpg",
+                        "goals": {"veil_percent": "down"}, "measurements": {}}),
+            json.dumps({"round": 2, "render": "2.jpg",
+                        "goals": {"grain": "down"}, "measurements": {}}),
+        ]
+        self.assertEqual(treatment.declared_goals(rounds),
+                         {"veil_percent": "down"})
+
+    def test_a_goal_nobody_measured_is_dropped_not_scored(self):
+        kept = json.loads(treatment.round_record(
+            Path(tempfile.mkdtemp()), [], "{}",
+            {"goals": json.dumps({"veil_percent": "down", "vibes": "up",
+                                  "grain": "sideways"})}))
+        self.assertEqual(kept["goals"], {"veil_percent": "down"})
+
+    def test_the_warrant_shows_the_contract_and_who_met_it(self):
+        report = json.dumps({
+            "format": "darkimiya-treatment-v1", "photo": "A.ARW",
+            "evidence": {"baseline": {"veil_percent": 27.1,
+                                      "subject_separation": 37.1}},
+            "reasoning": "r",
+            "rounds": [json.loads(self.round(
+                1, subject_separation=40.0, veil_percent=20.0))],
+            "chosen_round": 1})
+        warrant = treatment.treatment_evidence(report)
+        self.assertIn("goals_declared", warrant)
+        self.assertIn("goals_met", warrant)
+
+    def test_the_plan_is_asked_for_its_contract(self):
+        built = treatment.plan_prompt(json.dumps({"baseline": {}}))
+        self.assertIn("GOALS", built)
+        self.assertIn("banding_percent", built)
 
 
 class GateTests(unittest.TestCase):
@@ -1073,16 +1165,21 @@ class KeepingTheWorkingTests(unittest.TestCase):
     def test_the_round_offered_is_the_one_that_measured_best(self):
         """Not merely the last one tried."""
         rounds = [
-            json.dumps({"round": 1, "measurements": {"subject_separation": 70}}),
-            json.dumps({"round": 2, "measurements": {"subject_separation": 92}}),
-            json.dumps({"round": 3, "measurements": {"subject_separation": 81}}),
+            json.dumps({"round": 1, "render": "1.jpg",
+                        "measurements": {"subject_separation": 70}}),
+            json.dumps({"round": 2, "render": "2.jpg",
+                        "measurements": {"subject_separation": 92}}),
+            json.dumps({"round": 3, "render": "3.jpg",
+                        "measurements": {"subject_separation": 81}}),
         ]
         self.assertEqual(treatment.best_round(rounds), 2)
 
     def test_a_tie_goes_to_the_round_that_heard_more_criticism(self):
         rounds = [
-            json.dumps({"round": 1, "measurements": {"subject_separation": 88}}),
-            json.dumps({"round": 2, "measurements": {"subject_separation": 88}}),
+            json.dumps({"round": 1, "render": "1.jpg",
+                        "measurements": {"subject_separation": 88}}),
+            json.dumps({"round": 2, "render": "2.jpg",
+                        "measurements": {"subject_separation": 88}}),
         ]
         self.assertEqual(treatment.best_round(rounds), 2)
 

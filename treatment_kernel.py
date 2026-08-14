@@ -79,6 +79,14 @@ from PIL import Image, ImageDraw, ImageFilter
 from recipe_compiler import PRESET_STYLE, RecipeCompileError, compile_recipe
 
 TREATMENT_FORMAT = "darkimiya-treatment-v1"
+
+# The numbers a treatment may declare as its contract. Anything else a
+# model invents is dropped rather than scored against nothing.
+GOAL_METRICS = frozenset({
+    "subject_separation", "veil_percent", "black_percent",
+    "silhouette_percent", "grain", "banding_percent", "clipped_percent",
+    "mean", "saturation_percent",
+})
 STRATEGY = "protect-then-reveal"
 
 # What a photographer would give one frame. Each round past the first
@@ -376,12 +384,20 @@ def plan_prompt(evidence_text: str, critique: Any = "",
                 standing: Any = "") -> str:
     """Everything that always applies, asked at once -- including the branch."""
     evidence = data(evidence_text) or {}
-    held = data(standing) or {}
+    carried = data(standing) or {}
+    held = carried.get("moves", carried) if isinstance(carried, dict) else {}
+    origin_round = (carried.get("round")
+                    if isinstance(carried, dict) else None)
+    set_aside = (str(carried.get("set_aside") or "")
+                 if isinstance(carried, dict) else "")
     revision = ([
         "THE LAST ATTEMPT WAS RENDERED AND MEASURED. What it showed, and "
         f"what you said to change:\n{said(data(critique))}",
-        "THE WHOLE-FRAME MOVES CURRENTLY IN FORCE:\n"
+        "THE WHOLE-FRAME MOVES CURRENTLY IN FORCE"
+        + (f" (from round {int(origin_round)}, the best measured so far)"
+           if origin_round else "") + ":\n"
         + json.dumps(held, indent=2, sort_keys=True)
+        + (f"\n{set_aside}" if set_aside else "")
         + "\nThese stay unless you say otherwise. Name only what changes; "
         "a move you do not mention keeps the value above. To take one "
         "away, ask for it as 0. You do not need to restate the frame.",
@@ -409,13 +425,22 @@ def plan_prompt(evidence_text: str, critique: Any = "",
         "thing you would otherwise have corrected and say why it is "
         "already right. Put that in 'verdict'. If yes, 'verdict' says "
         "what specifically is wrong that an edit can fix.",
-        "4. SEPARATE. Do two parts of this frame need opposite things? If "
+        "4. GOALS. The treatment's contract: which of the measured "
+        "numbers should move, and which way. Give 'goals' as JSON, one "
+        "to three entries, metric to direction -- from: "
+        "subject_separation, veil_percent, black_percent, "
+        "silhouette_percent, grain, banding_percent, clipped_percent, "
+        "mean, saturation_percent -- each \"up\" or \"down\". The round "
+        "offered at the end is the one that meets these, so name what "
+        "the strategy is actually about and nothing else. If needs_edit "
+        "is false, give {}.",
+        "5. SEPARATE. Do two parts of this frame need opposite things? If "
         "they do, that is a mask, and you will be asked about each one "
         "separately afterwards. Say how many -- 0, 1, 2 or 3. Zero is a "
         "real answer and the usual one: most photographs want one set of "
         "adjustments applied to all of them. Only ask for a mask where you "
         "can name the region and say what it needs that the rest does not.",
-        "5. THE WHOLE FRAME. The adjustments that apply everywhere, before "
+        "6. THE WHOLE FRAME. The adjustments that apply everywhere, before "
         "any mask. Give them as numbers.",
         _GLOBAL_MOVES,
         _LEARNED,
@@ -552,8 +577,14 @@ def _anchor_for(mask: dict[str, Any]) -> str:
     return ", ".join(parts)
 
 
-def standing_moves(records: list[str]) -> str:
+def standing_moves(records: list[str], baseline: Any = "") -> str:
     """The whole-frame moves already in force, as the next round inherits them.
+
+    In force means the BEST round's, not the last one's. A loop that
+    always builds on its latest attempt keeps building on its own
+    regressions: rounds two and three of one run each inherited the
+    round before them, and each measured worse than round one, which
+    sat there the whole time with the better photograph.
 
     A round is a revision of the last one, and it is asked for as one:
     the critique says "reduce the bottom gradient slightly, leave the
@@ -563,23 +594,34 @@ def standing_moves(records: list[str]) -> str:
     -1.5 EV, round two at nothing, mean 10.3 back up to 59.4. So what is
     not mentioned carries, and a move is removed by asking for zero.
     """
-    for item in reversed(list(records)):
+    leading = best_round(records, baseline)
+    trailing = []
+    held = {}
+    for item in records:
         record = data(item) or {}
-        recipe = record.get("recipe") or {}
-        if not recipe.get("operations"):
+        number = int(record.get("round", 0))
+        if record.get("render") and number > leading:
+            trailing.append(number)
+        if number != leading:
             continue
-        held = {}
-        for operation in recipe["operations"]:
+        for operation in (record.get("recipe") or {}).get("operations", []):
             source = str(operation.get("source") or "")
-            name, _, number = source.rpartition(" ")
+            name, _, value = source.rpartition(" ")
             if name not in MOVES:
                 continue          # a mask's source is the region it is around
             try:
-                held[name] = float(number)
+                held[name] = float(value)
             except ValueError:
                 continue
-        return json.dumps(held, sort_keys=True)
-    return "{}"
+    if not held:
+        return "{}"
+    carried = {"round": leading, "moves": held}
+    if trailing:
+        carried["set_aside"] = (
+            "round(s) " + ", ".join(str(n) for n in trailing)
+            + " moved away from these and measured worse; they were set "
+            "aside. You are revising the best round, not the latest.")
+    return json.dumps(carried, sort_keys=True)
 
 
 def assemble_recipe(photo: str, plan: Any, masks: list[str],
@@ -599,7 +641,10 @@ def assemble_recipe(photo: str, plan: Any, masks: list[str],
     """
     settled = data(plan) or {}
     operations: list[dict[str, Any]] = []
-    whole = dict(data(carried) or {})
+    inherited = data(carried) or {}
+    if isinstance(inherited, dict) and "moves" in inherited:
+        inherited = inherited.get("moves") or {}
+    whole = dict(inherited) if isinstance(inherited, dict) else {}
     stated = data(settled.get("global_adjustments")) or {}
     if isinstance(stated, dict):
         whole.update(stated)
@@ -1150,6 +1195,13 @@ def round_record(directory: str, records: list[str], recipe_text: str,
         # back empty. A round that produced nothing is the round most
         # worth being able to read afterwards.
         "answer": (repr(plan)[:4000] if not str(sections).strip() else ""),
+        "goals": {
+            metric: str(direction).strip().lower()
+            for metric, direction in (
+                data(as_record(plan).get("goals")) or {}).items()
+            if metric in GOAL_METRICS
+            and str(direction).strip().lower() in {"up", "down"}
+        } if isinstance(data(as_record(plan).get("goals")), dict) else {},
         "masks_measured": data(masks_measured) or [],
         "recipe": data(recipe_text) or {},
         "unsupported": unsupported_note(recipe_text),
@@ -1193,20 +1245,66 @@ def treatment_report(directory: str, photo: str, evidence_text: str,
     }, indent=2, sort_keys=True)
 
 
-def best_round(rounds: list[str], target: str = "subject_separation") -> int:
+def declared_goals(rounds: list[str]) -> dict[str, str]:
+    """The treatment's contract: the first goals any round declared.
+
+    The first, not the latest -- a plan that quietly rewrites its goals
+    to fit the round it just made has not met its contract, it has
+    lowered it.
+    """
+    for item in rounds:
+        record = data(item) or {}
+        goals = record.get("goals") or {}
+        if isinstance(goals, dict) and goals:
+            return {str(k): str(v) for k, v in goals.items()}
+    return {}
+
+
+def round_scores(rounds: list[str], baseline: Any) -> list[tuple[int, int, float]]:
+    """Every rendered round scored against the declared goals.
+
+    A goal is met when its number moved the declared way from the
+    untouched frame. The score is how many were met; the separation is
+    kept beside it as the tie-break, which is also the entire ranking
+    when no goals were declared -- the shape the first eleven runs had.
+    """
+    base = data(baseline) or {}
+    goals = declared_goals(rounds)
+    scored = []
+    for item in rounds:
+        record = data(item) or {}
+        if not record.get("render"):
+            continue
+        measured = record.get("measurements") or {}
+        met = 0
+        for metric, direction in goals.items():
+            before = base.get(metric)
+            after = measured.get(metric)
+            if not isinstance(before, (int, float)) or not isinstance(after, (int, float)):
+                continue
+            if after > before if direction == "up" else after < before:
+                met += 1
+        separation = measured.get("subject_separation")
+        scored.append((int(record.get("round", 0)), met,
+                       float(separation)
+                       if isinstance(separation, (int, float)) else -math.inf))
+    return scored
+
+
+def best_round(rounds: list[str], baseline: Any = "") -> int:
     """Which round to offer first.
 
     The critique decides when to stop; this decides which of the kept
-    rounds leads. It follows the measurement the strategy is about --
-    how far the subject stands above what surrounds it -- and breaks
-    ties towards the later round, which has heard more criticism.
+    rounds leads. It follows the goals the treatment itself declared,
+    then the subject's separation, and breaks ties towards the later
+    round, which has heard more criticism. It once followed a single
+    hard-wired metric, and offered a posterised sky that happened to
+    score well on it.
     """
-    best, score = 0, -math.inf
-    for item in rounds:
-        record = data(item) or {}
-        value = float(record.get("measurements", {}).get(target, 0) or 0)
-        if value >= score:
-            best, score = int(record.get("round", 0)), value
+    best, key = 0, (-1, -math.inf, -1)
+    for number, met, separation in round_scores(rounds, baseline):
+        if (met, separation, number) >= key:
+            best, key = number, (met, separation, number)
     return best
 
 
@@ -1240,18 +1338,16 @@ def treatment_valid(report_text: str) -> bool:
     # true or false by inspection, and a model asked to certify them can
     # only add noise. What is left for the panel is the photographic
     # judgement, which is the part a program cannot check.
-    scored = []
     for item in rounds:
-        if not item.get("render"):
-            continue
-        measured = (item.get("measurements") or {}).get("subject_separation")
-        if not isinstance(measured, (int, float)):
+        if item.get("render") and not isinstance(
+                (item.get("measurements") or {}).get("subject_separation"),
+                (int, float)):
             return False
-        scored.append((int(item.get("round", 0)), float(measured)))
-    if not scored:
+    if not any(item.get("render") for item in rounds):
         return False
     chosen = int(report.get("chosen_round", 0))
-    return chosen == max(scored, key=lambda pair: pair[1])[0]
+    return chosen == best_round(
+        rounds, (report.get("evidence") or {}).get("baseline") or {})
 
 
 def treatment_evidence(report_text: str) -> str:
@@ -1274,11 +1370,15 @@ def treatment_evidence(report_text: str) -> str:
             "rounds_spent": len(rounds),
             "chosen_round": chosen,
             "reasoning": report.get("reasoning"),
+            "goals_declared": declared_goals(rounds),
             "before": (report.get("evidence") or {}).get("baseline"),
             "after": next((item.get("measurements") for item in rounds
                            if int(item.get("round", 0)) == chosen), {}),
             "each_round": [
                 {"round": item.get("round"),
+                 "goals_met": next((met for number, met, _ in round_scores(
+                     rounds, (report.get("evidence") or {}).get("baseline") or {})
+                     if number == int(item.get("round", 0))), None),
                  "operations": len((item.get("recipe") or {}).get("operations", [])),
                  "unsupported": item.get("unsupported", ""),
                  "subject_separation": (item.get("measurements") or {}).get(

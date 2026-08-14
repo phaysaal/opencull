@@ -52,6 +52,10 @@ schema Plan:
     mask_count: num
     -- The whole-frame moves, as a JSON object of named numbers.
     global_adjustments: text
+    -- The contract: which measured numbers should move and which way,
+    -- as a JSON object like {"veil_percent": "down"}. The round offered
+    -- at the end is the one that meets these.
+    goals: text
     rationale: text
 
 schema Mask:
@@ -104,7 +108,7 @@ forall attempt in range(rounds):
         -- What is already in force. A round revises the last one; read
         -- as a fresh recipe, "leave the whole frame unchanged" arrives
         -- as an empty answer and the frame springs back to untouched.
-        standing := standing_moves(records)
+        standing := standing_moves(records, untouched)
         plan := memo gen<Plan>(plan_prompt(evidence, critique, standing), images=[latest]) by A
         check keep_plan(directory, records, plan)
 
@@ -149,7 +153,7 @@ forall attempt in range(rounds):
             records := records + [left_alone_record(directory, records, plan, origin, untouched)]
 
 check len(records) > 0
-chosen := best_round(records)
+chosen := best_round(records, untouched)
 
 -- Every round on one sheet, so the argument the loop had with itself
 -- can be looked at without opening six files.
