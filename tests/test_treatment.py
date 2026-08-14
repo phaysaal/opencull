@@ -661,7 +661,39 @@ class WhatThePanelIsAskedTests(unittest.TestCase):
         policy = treatment.treatment_policy(json.dumps({"about": ""}))
         self.assertIn("beyond recovery", policy)
         self.assertNotIn("measurements are reported", policy)
-        self.assertLessEqual(policy.count(";"), 1)
+
+    def test_the_claim_promises_a_bounded_search_not_perfection(self):
+        """The evidence honestly carries "finished: false" critiques; a
+        claim reading "it did what it said" beside those is a
+        contradiction, and two independent families went 0-5 on it."""
+        policy = treatment.treatment_policy(json.dumps({"about": ""}))
+        self.assertIn("bounded search", policy)
+        self.assertIn("remaining faults", policy)
+        self.assertIn("not recovery", policy)
+
+    def test_the_panel_sees_the_offered_operations_not_a_count(self):
+        report = json.dumps({
+            "format": "darkimiya-treatment-v1", "photo": "A.ARW",
+            "evidence": {"baseline": {}}, "reasoning": "r",
+            "rounds": [{
+                "round": 1, "render": "1.jpg",
+                "measurements": {"subject_separation": 40.0},
+                "masks_measured": [{"region": "the rooftop",
+                                    "weight_at_subject": 0.0}],
+                "recipe": {"operations": [
+                    {"op": "tone.exposure", "value": -1.3},
+                    {"op": "mask.linear", "value": {
+                        "anchor": "linear gradient, from the bottom, up to 30%",
+                        "effects": [{"op": "tone.shadow", "value": 25.0,
+                                     "unit": "percent"}]}},
+                ]},
+            }],
+            "chosen_round": 1})
+        warrant = treatment.treatment_evidence(report)
+        self.assertIn('"tone.exposure"', warrant)
+        self.assertIn("up to 30%", warrant)
+        self.assertIn('"tone.shadow"', warrant)
+        self.assertIn("weight_at_subject", warrant)
 
 
 class UnculledFolderTests(unittest.TestCase):

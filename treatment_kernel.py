@@ -1362,6 +1362,22 @@ def treatment_evidence(report_text: str) -> str:
     report = data(report_text) or {}
     rounds = report.get("rounds") or []
     chosen = int(report.get("chosen_round", 0))
+    leading = next((item for item in rounds
+                    if int(item.get("round", 0)) == chosen), {})
+    # The operations themselves, not a count of them. The claim's
+    # central fact is that none of these tries to recover what was
+    # named irrecoverable -- a panel shown "operations: 6" was being
+    # asked to certify a property of things it could not see, and two
+    # independent families rightly went 0-5 on that.
+    offered = [
+        {"op": item.get("op"),
+         "value": (item.get("value") if not isinstance(item.get("value"), dict)
+                   else {"anchor": item["value"].get("anchor"),
+                         "effects": [
+                             {"op": effect.get("op"),
+                              "value": effect.get("value")}
+                             for effect in item["value"].get("effects", [])]})}
+        for item in (leading.get("recipe") or {}).get("operations", [])]
     lines = [
         "DETERMINISTIC TREATMENT PROJECTION:",
         json.dumps({
@@ -1371,6 +1387,8 @@ def treatment_evidence(report_text: str) -> str:
             "chosen_round": chosen,
             "reasoning": report.get("reasoning"),
             "goals_declared": declared_goals(rounds),
+            "offered_operations": offered,
+            "offered_masks_measured": leading.get("masks_measured") or [],
             "before": (report.get("evidence") or {}).get("baseline"),
             "after": next((item.get("measurements") for item in rounds
                            if int(item.get("round", 0)) == chosen), {}),
@@ -1398,18 +1416,24 @@ def treatment_policy(evidence_text: str) -> str:
     evidence = data(evidence_text) or {}
     subject = str(evidence.get("about") or "").strip()
     said = f" The photographer says the shoot is: “{subject}”." if subject else ""
-    # One question, not five joined by semicolons. The clauses about
-    # where the measurements sit and how the round was chosen are
-    # checked in treatment_valid, where they belong; a conjunction that
-    # long is refused on whichever clause the reader likes least, and a
-    # refusal that cannot be attributed teaches nobody anything.
+    # One question, checkable against evidence that actually exhibits
+    # it. The structural clauses live in treatment_valid; and the claim
+    # must not promise a finished masterpiece, because the evidence
+    # honestly reports each critique's remaining complaints -- a panel
+    # asked to warrant "it did what it said" while reading three
+    # "finished: false" lines is being asked to certify a
+    # contradiction, and it correctly refuses.
     return (
-        "a staged development of one photograph in which the treatment "
-        "spent itself on what it said it would: it named something in "
-        "the frame as beyond recovery, and the recipe it settled on "
-        "does not try to recover that thing, but works on what it said "
-        "it would protect and reveal instead -- or, where it judged the "
-        "photograph already right, said so and left it alone." + said)
+        "a budgeted, staged development of one photograph, offered as "
+        "the best round of a bounded search with its remaining faults "
+        "stated beside it -- not as finished perfection. The treatment "
+        "named part of the frame beyond recovery, and the offered "
+        "round's operations, listed in the evidence, do not try to "
+        "recover that part: recovery means pushing the named region's "
+        "values up to reinvent detail that is not there; darkening it, "
+        "containing it, or working on everything else is not recovery. "
+        "Where it judged the photograph already right, it said so and "
+        "left it alone." + said)
 
 
 def treatment_abstention(warrant: str) -> str:
