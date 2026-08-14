@@ -419,10 +419,10 @@ class DecisionTests(unittest.TestCase):
         masks = []
         for region in ("the sun", "the skyline"):
             self.assertTrue(treatment.keep_mask(
-                where, masks, {"region": region, "shape": "radial"}))
+                where, [], masks, {"region": region, "shape": "radial"}))
             masks.append({"region": region})
-        self.assertTrue((Path(where) / "mask-1.json").is_file())
-        self.assertTrue((Path(where) / "mask-2.json").is_file())
+        self.assertTrue((Path(where) / "mask-1-1.json").is_file())
+        self.assertTrue((Path(where) / "mask-1-2.json").is_file())
 
 
 class AnchorTests(unittest.TestCase):
@@ -579,11 +579,11 @@ class LostAnswerTests(unittest.TestCase):
         self.root = Path(tempfile.mkdtemp())
 
     def test_a_mask_that_never_arrived_is_not_kept(self):
-        self.assertFalse(treatment.keep_mask(str(self.root), [], None))
+        self.assertFalse(treatment.keep_mask(str(self.root), [], [], None))
 
     def test_what_did_arrive_is_written_down_anyway(self):
-        treatment.keep_mask(str(self.root), [], None)
-        kept = json.loads((self.root / "mask-1.json").read_text())
+        treatment.keep_mask(str(self.root), [], [], None)
+        kept = json.loads((self.root / "mask-1-1.json").read_text())
         self.assertIn("unreadable", kept)
 
     def test_the_masks_that_did_arrive_still_make_a_recipe(self):
@@ -829,6 +829,44 @@ class ZoneTests(unittest.TestCase):
     def test_the_prompts_explain_what_a_zone_is(self):
         built = treatment.plan_prompt(json.dumps({"baseline": {}}))
         self.assertIn("banding_percent is posterisation", built)
+
+
+class EyesTests(unittest.TestCase):
+    """Who is shown which picture, and what survives of each round's say.
+
+    The critique judged a render it could not compare -- it never saw
+    the start -- so a vanished roofline was invisible unless a number
+    said so, and no number did. And the plan revised a picture it had
+    never seen: every round it was shown the untouched frame, whatever
+    its last recipe had done to it.
+    """
+
+    def test_the_critique_is_told_it_has_both_frames(self):
+        built = treatment.critique_prompt(
+            json.dumps({"baseline": {}}), {"strategy": "s"},
+            json.dumps({"mean": 20}), 1, 3)
+        self.assertIn("TWO PHOTOGRAPHS", built)
+        self.assertIn("your rendering has lost", built)
+
+    def test_the_plan_is_told_what_frame_it_is_looking_at(self):
+        built = treatment.plan_prompt(json.dumps({"baseline": {}}))
+        self.assertIn("your latest render", built)
+
+    def test_each_rounds_plan_survives_the_next_rounds(self):
+        root = Path(tempfile.mkdtemp())
+        one = [json.dumps({"round": 1})]
+        self.assertTrue(treatment.keep_plan(str(root), [], {"subject": "a"}))
+        self.assertTrue(treatment.keep_plan(str(root), one, {"subject": "b"}))
+        self.assertEqual(
+            json.loads((root / "plan-1.json").read_text())["subject"], "a")
+        self.assertEqual(
+            json.loads((root / "plan-2.json").read_text())["subject"], "b")
+
+    def test_masks_are_filed_under_their_round(self):
+        root = Path(tempfile.mkdtemp())
+        one = [json.dumps({"round": 1})]
+        treatment.keep_mask(str(root), one, [], {"region": "the sun"})
+        self.assertTrue((root / "mask-2-1.json").is_file())
 
 
 class MaskMeasureTests(unittest.TestCase):

@@ -89,6 +89,12 @@ start := observe image(origin)
 check start.exists
 untouched := measure_frame_json(origin)
 
+-- What the planner is shown. Round one this is the untouched frame;
+-- after that, the latest render -- a reviser that has never seen the
+-- picture it is revising can only repeat what the critique told it,
+-- and the critique itself compares both frames side by side.
+latest := start
+
 critique := ""
 records := []
 forall attempt in range(rounds):
@@ -99,8 +105,8 @@ forall attempt in range(rounds):
         -- as a fresh recipe, "leave the whole frame unchanged" arrives
         -- as an empty answer and the frame springs back to untouched.
         standing := standing_moves(records)
-        plan := memo gen<Plan>(plan_prompt(evidence, critique, standing), images=[start]) by A
-        check keep_reasoning(directory, "plan", plan)
+        plan := memo gen<Plan>(plan_prompt(evidence, critique, standing), images=[latest]) by A
+        check keep_plan(directory, records, plan)
 
         -- The branch. Most photographs answer zero and the loop below
         -- never runs; this one is asked about each region on its own.
@@ -116,7 +122,7 @@ forall attempt in range(rounds):
             masks := []
             forall index in range(mask_count(plan)):
                 mask := memo gen<Mask>(mask_prompt(evidence, plan, index, mask_count(plan), masks), images=[start]) by A
-                if check keep_mask(directory, masks, mask):
+                if check keep_mask(directory, records, masks, mask):
                     masks := masks + [mask]
 
             -- Assembled here from numbers, not written as prose and hoped
@@ -134,8 +140,9 @@ forall attempt in range(rounds):
                 measured := measure_frame_json(render)
                 proof := observe image(render)
                 check proof.exists
-                critique := memo gen<Critique>(critique_prompt(evidence, plan, measured, round_number(records), rounds, placed), images=[proof]) by B
+                critique := memo gen<Critique>(critique_prompt(evidence, plan, measured, round_number(records), rounds, placed), images=[start, proof]) by B
                 records := records + [round_record(directory, records, recipe, plan, render, measured, critique, placed)]
+                latest := proof
             else:
                 records := records + [round_record(directory, records, recipe, plan)]
         else:

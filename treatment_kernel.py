@@ -354,9 +354,22 @@ def _context(evidence: dict[str, Any]) -> str:
     return "\n\n".join(lines)
 
 
-def keep_mask(directory: str, masks: list[str], mask: Any) -> bool:
+def keep_plan(directory: str, records: list[str], plan: Any) -> bool:
+    """Write this round's plan down under this round's number.
+
+    One file per round rather than one file overwritten: when the
+    question became "did the gate answer no on round one", the round-one
+    plan had already been replaced twice and nobody could say.
+    """
+    return keep_reasoning(
+        directory, f"plan-{round_number(records)}", plan)
+
+
+def keep_mask(directory: str, records: list[str],
+              masks: list[str], mask: Any) -> bool:
     """Write one mask down as it is settled, and say whether it says anything."""
-    return keep_reasoning(directory, f"mask-{len(masks) + 1}", mask)
+    return keep_reasoning(
+        directory, f"mask-{round_number(records)}-{len(masks) + 1}", mask)
 
 
 def plan_prompt(evidence_text: str, critique: Any = "",
@@ -378,6 +391,8 @@ def plan_prompt(evidence_text: str, critique: Any = "",
     ] if critique else [])
     return "\n\n".join([
         _VOICE,
+        "THE PHOTOGRAPH SHOWN is your latest render -- on the first "
+        "round, the frame with nothing done to it.",
         "PLAN THIS DEVELOPMENT. Answer all of the following together.",
         "1. DIAGNOSE. What is this photograph of, what is wrong with it, "
         "and -- the part that decides everything after it -- what about it "
@@ -465,8 +480,13 @@ def critique_prompt(evidence_text: str, strategy: str, after: str,
     return "\n\n".join([
         _VOICE + subject,
         f"LOOK AT WHAT YOU DID. Round {round_number} of at most {rounds}.",
-        "The photograph below is your own rendering. Beside it are the "
-        "measurements of the frame before and after your recipe.",
+        "TWO PHOTOGRAPHS: the first is the frame with nothing done to "
+        "it, the second is your rendering. Look at both before reading "
+        "the numbers -- name anything present in the first that your "
+        "rendering has lost, and any structure in yours that the first "
+        "does not have: banded tones, a hard edge around a glow, a "
+        "region gone to paper. Beside them are the measurements of "
+        "the frame before and after your recipe.",
         "Say what improved, and name any regression with the number that "
         "shows it. Then either state the single most valuable change to "
         "make next, or say the treatment is finished and why. Finishing "
@@ -913,6 +933,8 @@ def contact_sheet(directory: str, records: list[str], chosen: int) -> str:
             # ASCII: the sheet is drawn with PIL's built-in bitmap font,
             # which has no arrow and draws a blank box instead.
             mark = "  (offered)" if number == int(chosen) else ""
+            if not (record.get("recipe") or {}).get("operations"):
+                mark += "  -- left as it stands"
             frames.append((f"round {number}{mark}", Path(render)))
     frames = [(label, path) for label, path in frames if path.is_file()]
     if len(frames) < 2:
