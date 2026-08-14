@@ -124,14 +124,20 @@ forall attempt in range(rounds):
             -- a page of intent, and three produced none at all.
             recipe := assemble_recipe(photo, plan, masks, standing)
             if check treatment_usable(recipe):
+                -- What each mask will actually touch, measured from the
+                -- renderer's own weights before the render is paid for.
+                -- The gap between "a gradient over the rooftop" and a
+                -- ramp at half strength over the sky lived here, unseen,
+                -- for nine runs.
+                placed := measure_masks(origin, recipe)
                 render := render_round(photos, photo, recipe, directory, records, proof_edge)
                 measured := measure_frame_json(render)
                 proof := observe image(render)
                 check proof.exists
-                critique := memo gen<Critique>(critique_prompt(evidence, plan, measured, round_number(records), rounds), images=[proof]) by B
-                records := records + [round_record(directory, records, recipe, said(plan), render, measured, critique)]
+                critique := memo gen<Critique>(critique_prompt(evidence, plan, measured, round_number(records), rounds, placed), images=[proof]) by B
+                records := records + [round_record(directory, records, recipe, plan, render, measured, critique, placed)]
             else:
-                records := records + [round_record(directory, records, recipe, said(plan), "", "", "", plan)]
+                records := records + [round_record(directory, records, recipe, plan)]
         else:
             records := records + [left_alone_record(directory, records, plan, origin, untouched)]
 

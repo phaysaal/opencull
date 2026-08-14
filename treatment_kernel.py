@@ -381,8 +381,13 @@ def mask_prompt(evidence_text: str, plan: Any, index: float, total: float,
         "For a radial mask give centre_x and centre_y as percentages "
         "across and down the frame, and radius as a percentage of the "
         "frame's longer side. For a linear mask, say which edge in "
-        "'anchor' -- bottom, top, left or right. For a luma mask, say "
-        "shadows, midtones or highlights in 'anchor'.",
+        "'anchor' -- bottom, top, left or right -- and use 'radius' for "
+        "its REACH: how far the gradient goes from that edge before it "
+        "fades to nothing, as a percentage of the frame. A reach of 35 "
+        "from the bottom dies out a third of the way up, well below a "
+        "subject in the sky; 0 or 100 spans the whole frame, weight one "
+        "half in the middle. For a luma mask, say shadows, midtones or "
+        "highlights in 'anchor'.",
         "Set 'inverted' true where the adjustment belongs everywhere "
         "EXCEPT the region -- protecting something is usually this.",
         f"The brightest point of this frame is at "
@@ -398,9 +403,11 @@ def mask_prompt(evidence_text: str, plan: Any, index: float, total: float,
 
 
 def critique_prompt(evidence_text: str, strategy: str, after: str,
-                    round_number: int, rounds: int) -> str:
+                    round_number: int, rounds: int,
+                    masks_measured: str = "") -> str:
     """Ask what the render actually did -- with the numbers beside it."""
     evidence = data(evidence_text) or {}
+    placed = data(masks_measured) or []
     subject = (f" It is an infrared frame at {evidence['cutoff_nm']:.0f}nm."
                if evidence.get("spectrum") == "infrared" else "")
     return "\n\n".join([
@@ -418,6 +425,11 @@ def critique_prompt(evidence_text: str, strategy: str, after: str,
         "BEFORE, the same frame with nothing done to it:\n"
         + json.dumps(evidence.get("baseline") or {}, indent=2),
         "AFTER:\n" + json.dumps(data(after) or {}, indent=2),
+        *([("THE MASKS AS THE RENDERER BUILT THEM, measured on the frame: "
+            "how much of the picture each one touches, the brightness of "
+            "what it touches, and its weight at the subject -- 0 there "
+            "means it leaves the subject alone.\n"
+            + json.dumps(placed, indent=2))] if placed else []),
     ])
 
 
@@ -456,6 +468,12 @@ def _anchor_for(mask: dict[str, Any]) -> str:
         parts.append(f"radius {float(mask.get('radius') or 18):.0f}%")
     else:
         parts.append(f"from the {str(mask.get('anchor') or 'bottom').strip()}")
+        # The reach: how far the gradient goes before it fades to nothing.
+        # Without it the ramp spans the whole frame and sits at half
+        # strength in the middle -- over the sky, in every frame so far.
+        span = float(mask.get("radius") or 0)
+        if shape == "linear" and 0 < span < 100:
+            parts.append(f"up to {span:.0f}%")
     if mask.get("inverted"):
         parts.append("inverted")
     parts.append(f"feather {float(mask.get('feather') or 80):.0f}%")
@@ -596,7 +614,7 @@ def left_alone_record(directory: str, records: list[str], plan: Any,
         directory, records,
         json.dumps({"format": "opencull-development-recipe-v1",
                     "source_photo": "", "operations": []}),
-        said(plan), str(origin), str(measured),
+        plan, str(origin), str(measured),
         json.dumps({"improved": "", "regressed": "",
                     "next_change": "", "finished": True,
                     "rationale": verdict}))
@@ -664,6 +682,53 @@ def compiled_treatment(photo: str, answer: Any, sections: str,
     except (RecipeCompileError, ValueError) as exc:
         return json.dumps({"error": str(exc), "operations": []})
     return json.dumps(recipe, sort_keys=True)
+
+
+def measure_masks(origin: str, recipe_text: str) -> str:
+    """What each mask will actually touch, measured before it is rendered.
+
+    The renderer's own weights, applied to the untouched frame: how much
+    of the picture the mask covers, how bright what it touches is, and
+    its weight at the subject. This is the analysis that was missing
+    between the answer and the render -- a "bottom gradient over the
+    rooftop" that reads back as covering half the frame with weight 0.5
+    at the subject is not the mask that was asked for, and nobody could
+    see that from the prose. Two treatments spent three rounds each
+    asking a full-frame ramp to end below the sun.
+    """
+    from development_engine import mask_weights
+
+    recipe = data(recipe_text) or {}
+    placed = [item for item in recipe.get("operations", [])
+              if str(item.get("op", "")).startswith("mask.")
+              and isinstance(item.get("value"), dict)]
+    if not placed:
+        return "[]"
+    with Image.open(str(origin)) as opened:
+        image = opened.convert("RGB")
+        image.thumbnail((700, 700), Image.Resampling.LANCZOS)
+    rgb = np.asarray(image, dtype=np.float32) / 255.0
+    grey = np.asarray(image.convert("L"), dtype=np.float32)
+    bright = np.nonzero(grey >= 0.5 * float(grey.max()))
+    subject = ((int(bright[0].mean()), int(bright[1].mean()))
+               if bright[0].size else (grey.shape[0] // 2, grey.shape[1] // 2))
+    report = []
+    for item in placed:
+        weights = mask_weights(rgb, item["op"][5:], item["value"])
+        area = float(weights.sum())
+        inside = float((grey * weights).sum() / max(area, 1e-6))
+        outer = np.clip(1.0 - weights, 0.0, 1.0)
+        outside = float((grey * outer).sum() / max(float(outer.sum()), 1e-6))
+        report.append({
+            "region": str(item.get("source") or ""),
+            "coverage_percent": round(float(weights.mean()) * 100, 1),
+            "level_inside": round(inside, 1),
+            "level_outside": round(outside, 1),
+            "weight_at_subject": round(float(weights[subject]), 2),
+            "effects": [str(effect.get("op", ""))
+                        for effect in item["value"].get("effects", [])],
+        })
+    return json.dumps(report, sort_keys=True)
 
 
 def treatment_usable(recipe_text: str) -> bool:
@@ -993,8 +1058,8 @@ def latest_sections(records: list[str]) -> str:
 
 
 def round_record(directory: str, records: list[str], recipe_text: str,
-                 sections: str, render: str = "", measurements: str = "",
-                 critique: str = "", answer: Any = None) -> str:
+                 plan: Any = "", render: str = "", measurements: str = "",
+                 critique: str = "", masks_measured: str = "") -> str:
     """One round, written down whole.
 
     Kept because the process should be inspectable, and because round two
@@ -1002,15 +1067,16 @@ def round_record(directory: str, records: list[str], recipe_text: str,
     the last one survives.
     """
     number = round_number(records)
+    sections = ("" if plan is None
+                else plan if isinstance(plan, str) else said(plan))
     record = {
         "round": number,
         "sections": str(sections),
         # What the model actually said, kept whenever the sections come
         # back empty. A round that produced nothing is the round most
         # worth being able to read afterwards.
-        "answer": (repr(answer)[:4000]
-                   if answer is not None and not json.loads(sections or "{}")
-                   else ""),
+        "answer": (repr(plan)[:4000] if not str(sections).strip() else ""),
+        "masks_measured": data(masks_measured) or [],
         "recipe": data(recipe_text) or {},
         "unsupported": unsupported_note(recipe_text),
         "render": str(render),

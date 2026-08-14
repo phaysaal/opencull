@@ -572,12 +572,28 @@ def _spatial_mask(rgb: np.ndarray, shape: str, value: dict[str, Any]) -> np.ndar
     anchor = str(value.get("anchor", "")).casefold()
     if shape == "linear":
         if "bottom" in anchor:
-            return yy
-        if "left" in anchor:
-            return 1 - xx
-        if "right" in anchor:
-            return xx
-        return 1 - yy
+            ramp = yy
+        elif "left" in anchor:
+            ramp = 1 - xx
+        elif "right" in anchor:
+            ramp = xx
+        else:
+            ramp = 1 - yy
+        # How far the gradient reaches from its edge, as "up to 35%".
+        # Without it the ramp spans the whole frame -- weight one half in
+        # the middle -- so a "bottom" gradient meant for a rooftop lifts
+        # the sky and brushes the sun, and no wording in the anchor could
+        # say otherwise: two treatments spent three rounds each asking a
+        # gradient to "end below the crescent", which this ramp cannot.
+        # The full-frame ramp is kept, bit for bit, where no reach is
+        # stated, because finished recipes already render with it.
+        stated = re.search(r"(?i)\bup\s*to\s*(\d+(?:\.\d+)?)\s*%", anchor)
+        if stated:
+            reach = min(max(float(stated.group(1)) / 100.0, 0.05), 1.0)
+            ramp = np.clip((ramp - (1.0 - reach)) / reach, 0.0, 1.0)
+            # Smoothstep, so the gradient lands without a visible edge.
+            ramp = ramp * ramp * (3.0 - 2.0 * ramp)
+        return ramp
     if shape == "radial":
         centre_x, centre_y, reach = 0.5, 0.5, 0.7072
         if "bright" in anchor or "sun" in anchor:
@@ -638,6 +654,18 @@ def _spatial_mask(rgb: np.ndarray, shape: str, value: dict[str, Any]) -> np.ndar
             return np.clip(1.0 - np.abs(shown - 0.5) * 2.5, 0.0, 1.0)
         return np.clip((1 - lum * 2) if "shadow" in anchor else lum * 2, 0, 1)
     return _hue_mask(rgb, anchor)
+
+
+def mask_weights(rgb: np.ndarray, shape: str, value: dict[str, Any]) -> np.ndarray:
+    """The weights a mask will actually blend with, for measuring.
+
+    Public because a treatment that asks for a mask should be able to
+    find out what the renderer will do with the answer before paying for
+    the render: the gap between "a bottom gradient over the rooftop" and
+    a ramp at half strength in the middle of the sky lived here,
+    unmeasured, for nine live runs.
+    """
+    return _spatial_mask(rgb, shape, value)
 
 
 def _inscribed(width: int, height: int, degrees: float) -> tuple[int, int]:

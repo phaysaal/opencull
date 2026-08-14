@@ -253,18 +253,17 @@ class AnswerShapeTests(unittest.TestCase):
         where = treatment.treatment_directory(
             str(self.root), "A.ARW", "20260814T000004Z")
         compiled = treatment.compiled_treatment("A.ARW", {}, "{}")
-        treatment.round_record(where, [], compiled, "{}",
-                               answer={"recipe": "something unreadable"})
+        treatment.round_record(where, [], compiled, None)
         kept = json.loads((Path(where) / "round-1.json").read_text())
-        self.assertIn("unreadable", kept["answer"])
+        self.assertEqual(kept["sections"], "")
+        self.assertEqual(kept["answer"], "None")
 
     def test_a_round_that_worked_does_not_keep_the_raw_answer(self):
         where = treatment.treatment_directory(
             str(self.root), "A.ARW", "20260814T000005Z")
         sections = json.dumps({"global_exposure": ["Contrast +12"]})
         compiled = treatment.compiled_treatment("A.ARW", {}, sections)
-        treatment.round_record(where, [], compiled, sections,
-                               answer={"recipe": sections})
+        treatment.round_record(where, [], compiled, sections)
         kept = json.loads((Path(where) / "round-1.json").read_text())
         self.assertEqual(kept["answer"], "")
 
@@ -763,6 +762,82 @@ class GateTests(unittest.TestCase):
     def test_the_panel_is_told_leaving_it_alone_is_an_outcome(self):
         policy = treatment.treatment_policy(json.dumps({"about": ""}))
         self.assertIn("left it alone", policy)
+
+
+class MaskMeasureTests(unittest.TestCase):
+    """What a mask will touch, measured before the render is paid for.
+
+    A "bottom gradient over the rooftop" that reads back as covering
+    half the frame with weight 0.5 at the subject is not the mask that
+    was asked for, and nobody could see that from the prose: two
+    treatments spent three rounds each asking a full-frame ramp to end
+    below the sun.
+    """
+
+    def setUp(self):
+        self._temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self._temporary.name)
+        self.addCleanup(self._temporary.cleanup)
+        self.origin = frame(self.root / "start.jpg")   # light at 700,400 of 900x600
+
+    def recipe(self, mask):
+        return treatment.assemble_recipe(
+            "A.ARW", {"mask_count": 1, "global_adjustments": {}}, [mask])
+
+    def test_a_full_frame_ramp_reads_back_as_touching_the_subject(self):
+        report = json.loads(treatment.measure_masks(self.origin, self.recipe(
+            {"region": "the ground", "shape": "linear", "anchor": "bottom",
+             "radius": 0, "adjustments": {"exposure": 0.8}})))
+        self.assertAlmostEqual(report[0]["coverage_percent"], 50.0, delta=3)
+        self.assertGreater(report[0]["weight_at_subject"], 0.5)
+
+    def test_a_reach_keeps_the_gradient_off_the_subject(self):
+        """radius 25 from the bottom dies out well below a light at 2/3 height."""
+        report = json.loads(treatment.measure_masks(self.origin, self.recipe(
+            {"region": "the ground", "shape": "linear", "anchor": "bottom",
+             "radius": 25, "adjustments": {"exposure": 0.8}})))
+        self.assertLess(report[0]["coverage_percent"], 20)
+        self.assertEqual(report[0]["weight_at_subject"], 0.0)
+
+    def test_the_reach_is_written_into_the_anchor(self):
+        recipe = json.loads(self.recipe(
+            {"region": "the ground", "shape": "linear", "anchor": "bottom",
+             "radius": 35, "adjustments": {"exposure": 0.8}}))
+        self.assertIn("up to 35%", recipe["operations"][-1]["value"]["anchor"])
+
+    def test_a_radial_mask_reports_what_it_is_centred_on(self):
+        report = json.loads(treatment.measure_masks(self.origin, self.recipe(
+            {"region": "the sun", "shape": "radial", "centre_x": 78,
+             "centre_y": 67, "radius": 10, "adjustments": {"exposure": -0.5}})))
+        self.assertGreater(report[0]["weight_at_subject"], 0.8)
+        self.assertGreater(report[0]["level_inside"],
+                           report[0]["level_outside"])
+
+    def test_a_recipe_with_no_masks_reports_none(self):
+        recipe = treatment.assemble_recipe(
+            "A.ARW", {"mask_count": 0, "global_adjustments": {"exposure": -1}}, [])
+        self.assertEqual(treatment.measure_masks(self.origin, recipe), "[]")
+
+    def test_the_critique_is_shown_the_mask_report(self):
+        report = treatment.measure_masks(self.origin, self.recipe(
+            {"region": "the ground", "shape": "linear", "anchor": "bottom",
+             "radius": 25, "adjustments": {"exposure": 0.8}}))
+        built = treatment.critique_prompt(
+            json.dumps({"baseline": {}}), {"strategy": "s"},
+            json.dumps({"mean": 20}), 1, 3, report)
+        self.assertIn("AS THE RENDERER BUILT THEM", built)
+        self.assertIn("weight_at_subject", built)
+
+    def test_a_round_keeps_the_mask_report_beside_the_recipe(self):
+        report = treatment.measure_masks(self.origin, self.recipe(
+            {"region": "the ground", "shape": "linear", "anchor": "bottom",
+             "radius": 25, "adjustments": {"exposure": 0.8}}))
+        kept = json.loads(treatment.round_record(
+            str(self.root), [], self.recipe(
+                {"region": "the ground", "shape": "linear", "anchor": "bottom",
+                 "radius": 25, "adjustments": {"exposure": 0.8}}),
+            {"strategy": "s"}, "r.jpg", "{}", "{}", report))
+        self.assertEqual(kept["masks_measured"][0]["region"], "the ground")
 
 
 class ContactSheetTests(unittest.TestCase):
