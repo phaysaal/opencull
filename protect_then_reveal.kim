@@ -40,6 +40,13 @@ schema Plan:
     reveal: text
     title: text
     strategy: text
+    -- Whether this photograph wants developing at all. A frame that
+    -- already serves its subject should be left alone, and no is a
+    -- professional answer.
+    needs_edit: bool
+    -- Why: what is wrong that an edit can fix, or what was examined and
+    -- found already right.
+    verdict: text
     -- How many regions of this frame need opposite things. Zero is a
     -- real answer and the usual one.
     mask_count: num
@@ -80,6 +87,7 @@ evidence := evidence_json(photo, origin, spectrum, cutoff_nm, about)
 
 start := observe image(origin)
 check start.exists
+untouched := measure_frame_json(origin)
 
 critique := ""
 records := []
@@ -96,28 +104,36 @@ forall attempt in range(rounds):
 
         -- The branch. Most photographs answer zero and the loop below
         -- never runs; this one is asked about each region on its own.
-        -- A mask that does not arrive is skipped, not fatal. One live run
-        -- lost a whole treatment -- the plan, the render, the budget --
-        -- because a single answer came back without every field in it.
-        masks := []
-        forall index in range(mask_count(plan)):
-            mask := memo gen<Mask>(mask_prompt(evidence, plan, index, mask_count(plan), masks), images=[start]) by A
-            if check keep_mask(directory, masks, mask):
-                masks := masks + [mask]
+        -- The gate, asked before anything is spent. A photograph that
+        -- already serves its subject is offered as it stands: an earlier
+        -- shape had no way to say so, and on a frame that arrived well
+        -- exposed it edited three times and finished with a posterised
+        -- sky and the roofline it promised to protect gone.
+        if check edit_wanted(plan, records):
+            -- A mask that does not arrive is skipped, not fatal. One live
+            -- run lost a whole treatment -- the plan, the render, the
+            -- budget -- because one answer came back missing a field.
+            masks := []
+            forall index in range(mask_count(plan)):
+                mask := memo gen<Mask>(mask_prompt(evidence, plan, index, mask_count(plan), masks), images=[start]) by A
+                if check keep_mask(directory, masks, mask):
+                    masks := masks + [mask]
 
-        -- Assembled here from numbers, not written as prose and hoped to
-        -- compile: a live round once produced two operations out of a
-        -- page of intent, and three produced none at all.
-        recipe := assemble_recipe(photo, plan, masks, standing)
-        if check treatment_usable(recipe):
-            render := render_round(photos, photo, recipe, directory, records, proof_edge)
-            measured := measure_frame_json(render)
-            proof := observe image(render)
-            check proof.exists
-            critique := memo gen<Critique>(critique_prompt(evidence, plan, measured, round_number(records), rounds), images=[proof]) by B
-            records := records + [round_record(directory, records, recipe, said(plan), render, measured, critique)]
+            -- Assembled here from numbers, not written as prose and hoped
+            -- to compile: a live round once produced two operations out of
+            -- a page of intent, and three produced none at all.
+            recipe := assemble_recipe(photo, plan, masks, standing)
+            if check treatment_usable(recipe):
+                render := render_round(photos, photo, recipe, directory, records, proof_edge)
+                measured := measure_frame_json(render)
+                proof := observe image(render)
+                check proof.exists
+                critique := memo gen<Critique>(critique_prompt(evidence, plan, measured, round_number(records), rounds), images=[proof]) by B
+                records := records + [round_record(directory, records, recipe, said(plan), render, measured, critique)]
+            else:
+                records := records + [round_record(directory, records, recipe, said(plan), "", "", "", plan)]
         else:
-            records := records + [round_record(directory, records, recipe, said(plan), "", "", "", plan)]
+            records := records + [left_alone_record(directory, records, plan, origin, untouched)]
 
 check len(records) > 0
 chosen := best_round(records)

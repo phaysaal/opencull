@@ -681,6 +681,90 @@ class UnculledFolderTests(unittest.TestCase):
         self.assertEqual(roster.path, report)
 
 
+class GateTests(unittest.TestCase):
+    """Is an edit necessary at all -- asked before anything is spent.
+
+    The procedure diagnosed, decided, separated and then edited. There
+    was no way to answer "this frame is already right": an empty recipe
+    counted as a failed round, and "finished" could only be said by a
+    critique, which only runs after a render. So the earliest the loop
+    could conclude nothing was needed was after it had already edited
+    once. On a Fujifilm frame that arrived well exposed it edited three
+    times and finished with a posterised sky.
+    """
+
+    def setUp(self):
+        self._temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self._temporary.name)
+        self.addCleanup(self._temporary.cleanup)
+
+    def test_a_frame_already_right_is_left_alone(self):
+        self.assertFalse(treatment.edit_wanted(
+            {"needs_edit": False, "verdict": "already right"}, []))
+
+    def test_a_frame_that_wants_work_goes_on(self):
+        self.assertTrue(treatment.edit_wanted({"needs_edit": True}, []))
+
+    def test_an_answer_that_never_arrived_means_yes(self):
+        """A lost generation must not read as a decision to do nothing."""
+        self.assertTrue(treatment.edit_wanted(None, []))
+        self.assertTrue(treatment.edit_wanted({}, []))
+
+    def test_the_word_no_is_read_as_no(self):
+        self.assertFalse(treatment.edit_wanted({"needs_edit": "false"}, []))
+        self.assertTrue(treatment.edit_wanted({"needs_edit": "yes"}, []))
+
+    def test_only_the_first_round_is_gated(self):
+        """After a render the question is answered better by the critique."""
+        already = [json.dumps({"round": 1, "measurements": {"mean": 10}})]
+        self.assertTrue(treatment.edit_wanted({"needs_edit": False}, already))
+
+    def test_leaving_it_alone_is_a_round_with_the_untouched_frame_in_it(self):
+        kept = json.loads(treatment.left_alone_record(
+            str(self.root), [], {"needs_edit": False, "verdict": "well judged"},
+            "/where/start.jpg", json.dumps({"subject_separation": 37.1})))
+        self.assertEqual(kept["render"], "/where/start.jpg")
+        self.assertEqual(kept["recipe"]["operations"], [])
+        self.assertEqual(kept["measurements"]["subject_separation"], 37.1)
+        self.assertTrue((self.root / "round-1.json").is_file())
+
+    def test_leaving_it_alone_ends_the_loop(self):
+        kept = treatment.left_alone_record(
+            str(self.root), [], {"verdict": "well judged"},
+            "/where/start.jpg", "{}")
+        self.assertFalse(treatment.keep_going([kept], 3))
+
+    def test_the_reason_it_was_left_alone_is_kept(self):
+        kept = json.loads(treatment.left_alone_record(
+            str(self.root), [], {"verdict": "the veil is the subject"},
+            "/where/start.jpg", "{}"))
+        self.assertEqual(kept["critique"]["rationale"],
+                         "the veil is the subject")
+
+    def test_a_treatment_that_only_left_it_alone_still_checks_out(self):
+        kept = treatment.left_alone_record(
+            str(self.root), [], {"verdict": "already right"},
+            "/where/start.jpg", json.dumps({"subject_separation": 37.1}))
+        report = treatment.treatment_report(
+            str(self.root), "DSCF1221.RAF",
+            json.dumps({"baseline": {"subject_separation": 37.1}}), [kept], 1)
+        self.assertTrue(treatment.treatment_valid(report))
+
+    def test_the_question_is_put_before_the_masks_and_the_numbers(self):
+        built = treatment.plan_prompt(json.dumps({"baseline": {}}))
+        self.assertIn("IS AN EDIT NECESSARY AT ALL?", built)
+        self.assertLess(built.index("IS AN EDIT NECESSARY"),
+                        built.index("SEPARATE"))
+
+    def test_the_question_warns_against_answering_no_out_of_caution(self):
+        built = treatment.plan_prompt(json.dumps({"baseline": {}}))
+        self.assertIn("not answer no out of caution", built)
+
+    def test_the_panel_is_told_leaving_it_alone_is_an_outcome(self):
+        policy = treatment.treatment_policy(json.dumps({"about": ""}))
+        self.assertIn("left it alone", policy)
+
+
 class ContactSheetTests(unittest.TestCase):
     """Every round on one sheet, so the argument can be looked at."""
 

@@ -335,13 +335,20 @@ def plan_prompt(evidence_text: str, critique: Any = "",
         "2. DECIDE. What must be PROTECTED, left alone because touching it "
         "can only cost, and what must be REVEALED. Two or three of each; a "
         "photograph with six priorities has none.",
-        "3. SEPARATE. Do two parts of this frame need opposite things? If "
+        "3. IS AN EDIT NECESSARY AT ALL? Answer needs_edit. A photograph "
+        "that already serves its subject should be left alone, and saying "
+        "so is a professional answer, not a failure to find work. But do "
+        "not answer no out of caution: say no ONLY if you can name each "
+        "thing you would otherwise have corrected and say why it is "
+        "already right. Put that in 'verdict'. If yes, 'verdict' says "
+        "what specifically is wrong that an edit can fix.",
+        "4. SEPARATE. Do two parts of this frame need opposite things? If "
         "they do, that is a mask, and you will be asked about each one "
         "separately afterwards. Say how many -- 0, 1, 2 or 3. Zero is a "
         "real answer and the usual one: most photographs want one set of "
         "adjustments applied to all of them. Only ask for a mask where you "
         "can name the region and say what it needs that the rest does not.",
-        "4. THE WHOLE FRAME. The adjustments that apply everywhere, before "
+        "5. THE WHOLE FRAME. The adjustments that apply everywhere, before "
         "any mask. Give them as numbers.",
         _GLOBAL_MOVES,
         _LEARNED,
@@ -545,6 +552,54 @@ def assemble_recipe(photo: str, plan: Any, masks: list[str],
                      "executable": len(operations),
                      "guardrails": 0, "unsupported": 0},
     }, sort_keys=True)
+
+
+def edit_wanted(plan: Any, records: list[str]) -> bool:
+    """Whether this frame wants developing at all.
+
+    Asked once, before anything is spent. The procedure had no way to
+    answer no: it diagnosed, decided, separated and then edited, and an
+    empty recipe counted as a failed round rather than a verdict. On a
+    Fujifilm frame that arrived already well exposed -- separation 37.1,
+    grain 0.29 -- it therefore edited three times and finished with a
+    posterised sky and the roofline it had promised to protect gone.
+
+    Only the first round is gated. After that the question is not "does
+    this frame need work" but "is this treatment finished", which the
+    critique is already asked and answers better, having seen a render.
+
+    An unreadable answer means yes. A lost generation must never be
+    mistaken for a considered decision to do nothing.
+    """
+    if records:
+        return True
+    settled = as_record(plan)
+    wanted = settled.get("needs_edit", True)
+    if isinstance(wanted, str):
+        return wanted.strip().lower() not in {"false", "no", "0", ""}
+    return bool(wanted)
+
+
+def left_alone_record(directory: str, records: list[str], plan: Any,
+                      origin: str, measured: str) -> str:
+    """The frame as it stands, offered as the treatment's own answer.
+
+    Written as a round like any other -- it has a render, the untouched
+    one, and that frame's measurements -- so everything downstream reads
+    it without a special case: it appears on the contact sheet, it can
+    be the round that leads, and the report says what it says.
+    """
+    settled = as_record(plan)
+    verdict = str(settled.get("verdict") or
+                  "The frame already serves its subject.")
+    return round_record(
+        directory, records,
+        json.dumps({"format": "opencull-development-recipe-v1",
+                    "source_photo": "", "operations": []}),
+        said(plan), str(origin), str(measured),
+        json.dumps({"improved": "", "regressed": "",
+                    "next_change": "", "finished": True,
+                    "rationale": verdict}))
 
 
 def mask_count(plan: Any) -> int:
@@ -1113,7 +1168,8 @@ def treatment_policy(evidence_text: str) -> str:
         "spent itself on what it said it would: it named something in "
         "the frame as beyond recovery, and the recipe it settled on "
         "does not try to recover that thing, but works on what it said "
-        "it would protect and reveal instead." + said)
+        "it would protect and reveal instead -- or, where it judged the "
+        "photograph already right, said so and left it alone." + said)
 
 
 def treatment_abstention(warrant: str) -> str:
