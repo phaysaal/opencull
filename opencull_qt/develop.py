@@ -775,6 +775,9 @@ class DevelopPage(QWidget):
         # The frames whose treatment runs were active at the last poll,
         # so a completion is an event rather than a state nobody reads.
         self._treating_last: set[str] = set()
+        # How each frame's last treatment run ended, so the page that
+        # asked is the page that answers. Cleared by asking again.
+        self._treatment_outcome: dict[str, str] = {}
         self.rendered: dict[tuple[str, str], QPixmap] = {}
 
         # One pool for both renderers. A render saturates the machine on
@@ -1364,10 +1367,15 @@ class DevelopPage(QWidget):
             if job.get("status") in {"queued", "running", "stopping",
                                      "detached"}:
                 active[str(job.get("photo") or "")] = job
-        finished = {
-            str(job.get("photo") or "")
-            for job in jobs if job.get("status") in {"completed", "failed"}}
-        arrived = finished & self._treating_last
+        ended = {str(job.get("photo") or ""): job for job in jobs
+                 if job.get("status") in {"completed", "failed"}}
+        arrived = set(ended) & self._treating_last
+        for photo in arrived:
+            job = ended[photo]
+            self._treatment_outcome[photo] = (
+                "The treatment is warranted -- it has joined the list above."
+                if job.get("status") == "completed"
+                else str(job.get("message") or "The treatment run ended."))
         self._treating_last = set(active)
         busy = self.current in active
         self.treat_button.setEnabled(not busy)
@@ -1385,7 +1393,13 @@ class DevelopPage(QWidget):
             else:
                 self.treating.setText(
                     "A treatment of this frame is waiting in the queue.")
-        self.treating.setVisible(busy)
+        elif self.current in self._treatment_outcome:
+            # The run this page asked for has ended; say how, here,
+            # where the photographer is looking -- not only on the
+            # queue page they are not.
+            self.treating.setText(self._treatment_outcome[self.current])
+        self.treating.setVisible(
+            busy or self.current in self._treatment_outcome)
         self.treating_bar.setVisible(
             busy and str(active[self.current].get("status")) == "running")
         if arrived:
@@ -1408,6 +1422,7 @@ class DevelopPage(QWidget):
             3, 1, 6)
         if not agreed:
             return
+        self._treatment_outcome.pop(self.current, None)
         self.treatment_wanted.emit(self.current, int(rounds))
         self._report(
             f"Queued: {self.current}, {rounds} round"

@@ -388,13 +388,42 @@ class TreatmentMarkerTests(unittest.TestCase):
         page.treatment_jobs([self.job(page.current, "queued")])
         self.assertFalse(page.treating_bar.isVisible())
 
-    def test_an_abstention_also_ends_the_marker(self):
+    def test_an_abstention_ends_the_bar_and_says_how_it_ended(self):
+        """The bar finished and the page went silent; the outcome had
+        gone to the queue page, where nobody was looking."""
+        page = self.page()
+        page.treatment_jobs([self.job(page.current, "running")])
+        declined = self.job(page.current, "failed")
+        declined["message"] = "The panel declined to vouch for the treatment."
+        page.treatment_jobs([declined])
+        self.assertTrue(page.treat_button.isEnabled())
+        self.assertFalse(page.treating_bar.isVisible())
+        self.assertTrue(page.treating.isVisible())
+        self.assertIn("panel declined", page.treating.text())
+
+    def test_a_warranted_run_says_it_joined_the_list(self):
+        page = self.page()
+        page.treatment_jobs([self.job(page.current, "running")])
+        page.treatment_jobs([self.job(page.current, "completed")])
+        self.assertIn("joined the list above", page.treating.text())
+        self.assertTrue(page.treating.isVisible())
+
+    def test_the_outcome_note_clears_when_the_frame_is_asked_again(self):
         page = self.page()
         page.treatment_jobs([self.job(page.current, "running")])
         page.treatment_jobs([self.job(page.current, "failed")])
-        self.assertTrue(page.treat_button.isEnabled())
+        with unittest.mock.patch(
+                "opencull_qt.develop.QInputDialog.getInt",
+                return_value=(3, True)):
+            page.treat_button.click()
+        self.assertNotIn(page.current, page._treatment_outcome)
+
+    def test_a_run_nobody_watched_start_is_not_an_outcome(self):
+        """Only a transition this page saw becomes a note; history from
+        before the page opened stays on the queue page."""
+        page = self.page()
+        page.treatment_jobs([self.job(page.current, "failed")])
         self.assertFalse(page.treating.isVisible())
-        self.assertFalse(page.treating_bar.isVisible())
 
     def test_a_queued_treatment_says_it_is_waiting(self):
         page = self.page()
@@ -415,7 +444,8 @@ class TreatmentMarkerTests(unittest.TestCase):
         page.treatment_jobs([self.job(page.current, "completed")])
         self.assertEqual(heard, [True])
         self.assertTrue(page.treat_button.isEnabled())
-        self.assertFalse(page.treating.isVisible())
+        # The label stays, carrying the outcome; only the bar goes.
+        self.assertFalse(page.treating_bar.isVisible())
 
     def test_a_run_that_was_already_over_is_not_an_event(self):
         page = self.page()
