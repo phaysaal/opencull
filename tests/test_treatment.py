@@ -764,6 +764,73 @@ class GateTests(unittest.TestCase):
         self.assertIn("left it alone", policy)
 
 
+class ZoneTests(unittest.TestCase):
+    """The numbers that see what the global averages hide.
+
+    On one live round the sky posterised into visible bands and the
+    roofline vanished, and every global number improved -- grain fell,
+    because a plateau has less variance than a smooth noisy gradient.
+    The loop offered the most damaged round as its best.
+    """
+
+    def setUp(self):
+        self._temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self._temporary.name)
+        self.addCleanup(self._temporary.cleanup)
+
+    def gradient(self, name, quantise=0):
+        rows = np.linspace(10, 220, 600, dtype=np.float32)
+        sheet = np.repeat(rows[:, None], 900, axis=1)
+        noisy = np.clip(sheet + np.random.default_rng(7).normal(
+            0, 2, sheet.shape), 0, 255)
+        if quantise:
+            noisy = (noisy // quantise) * quantise
+        path = self.root / name
+        Image.fromarray(noisy.astype(np.uint8)).convert("RGB").save(path)
+        return str(path)
+
+    def test_a_smooth_gradient_is_not_called_banded(self):
+        measured = treatment.measure_frame(self.gradient("smooth.png"))
+        self.assertLess(measured["banding_percent"], 5)
+
+    def test_a_posterised_gradient_is(self):
+        measured = treatment.measure_frame(
+            self.gradient("banded.png", quantise=24))
+        self.assertGreater(measured["banding_percent"], 40)
+
+    def test_each_third_of_the_frame_is_measured_on_its_own(self):
+        measured = treatment.measure_frame(self.gradient("smooth.png"))
+        zones = measured["zones"]
+        self.assertEqual(list(zones), ["top", "middle", "bottom"])
+        self.assertLess(zones["top"]["mean"], zones["bottom"]["mean"])
+        for zone in zones.values():
+            for key in ("mean", "black_percent", "grain", "banding_percent"):
+                self.assertIn(key, zone)
+
+    def test_a_crushed_bottom_third_is_named_not_averaged(self):
+        rows = np.full((600, 900), 80, dtype=np.float32)
+        rows[400:] = 0
+        noisy = np.clip(rows + np.random.default_rng(3).normal(
+            0, 2, rows.shape), 0, 255)
+        path = self.root / "crushed.png"
+        Image.fromarray(noisy.astype(np.uint8)).convert("RGB").save(path)
+        measured = treatment.measure_frame(str(path))
+        self.assertGreater(measured["zones"]["bottom"]["black_percent"], 90)
+        self.assertLess(measured["zones"]["top"]["black_percent"], 5)
+
+    def test_already_black_pixels_do_not_count_as_banding(self):
+        """A silhouette is flat because it is black, not because it banded."""
+        dark = np.zeros((600, 900), dtype=np.uint8)
+        path = self.root / "dark.png"
+        Image.fromarray(dark).convert("RGB").save(path)
+        measured = treatment.measure_frame(str(path))
+        self.assertEqual(measured["banding_percent"], 0.0)
+
+    def test_the_prompts_explain_what_a_zone_is(self):
+        built = treatment.plan_prompt(json.dumps({"baseline": {}}))
+        self.assertIn("banding_percent is posterisation", built)
+
+
 class MaskMeasureTests(unittest.TestCase):
     """What a mask will touch, measured before the render is paid for.
 

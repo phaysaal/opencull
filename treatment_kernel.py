@@ -138,6 +138,47 @@ def measure_frame(path: str) -> dict[str, Any]:
         float(core.mean() - ring.mean()) / max(float(core.mean() + ring.mean()), 1e-6) * 100
         if core.size and ring.size else 0.0)
 
+    # Posterisation, measured where it lives: in space, not the
+    # histogram. A banded sky is plateaus of exactly-equal pixels
+    # meeting at visible steps, and every healthy photograph has grain
+    # enough that almost nothing above black is perfectly flat. The
+    # obvious histogram-comb metric reads 0.0 on a real banded render
+    # -- JPEG dither refills the bins -- and on the round this was built
+    # from, the banding IMPROVED every global number: grain fell from
+    # 0.29 to 0.23, because a plateau has less local variance than a
+    # smooth noisy gradient, and the loop offered the most damaged round
+    # as its best.
+    hi = np.asarray(image.convert("L").filter(ImageFilter.MaxFilter(3)),
+                    dtype=np.float32)
+    lo = np.asarray(image.convert("L").filter(ImageFilter.MinFilter(3)),
+                    dtype=np.float32)
+    plateau = (hi - lo) == 0
+    alive = grey > 6
+
+    def banding(rows: slice) -> float:
+        living = alive[rows]
+        if not living.any():
+            return 0.0
+        return float((plateau[rows] & living).sum() / living.sum() * 100)
+
+    # The frame in thirds, top to bottom. The global numbers average a
+    # crushed foreground against a bright sky and see nothing wrong: a
+    # rooftop band that fell from 60.4 to zero read as "black_percent
+    # rose", which is also what a well-placed low-key grade reads as.
+    # Zones are what let "the bottom third died" be said in numbers.
+    thirds = {"top": slice(0, height // 3),
+              "middle": slice(height // 3, 2 * height // 3),
+              "bottom": slice(2 * height // 3, height)}
+    zones = {
+        name: {
+            "mean": round(float(grey[rows].mean()), 1),
+            "black_percent": round(float((grey[rows] <= 6).mean() * 100), 1),
+            "grain": round(float(np.abs(grey[rows] - smooth[rows]).mean()), 2),
+            "banding_percent": round(banding(rows), 1),
+        }
+        for name, rows in thirds.items()
+    }
+
     hsv = np.asarray(image.convert("HSV"), dtype=np.float32)
     saturation = hsv[..., 1] / 255.0
     coloured = saturation > 0.25
@@ -150,6 +191,8 @@ def measure_frame(path: str) -> dict[str, Any]:
         "silhouette_percent": round(float((grey < 26).mean() * 100), 2),
         "veil_percent": round(float(((grey > 25) & (grey < 60)).mean() * 100), 2),
         "grain": round(float(np.abs(grey - smooth).mean()), 3),
+        "banding_percent": round(banding(slice(0, height)), 1),
+        "zones": zones,
         "subject_separation": round(separation, 1),
         "subject_level": round(float(core.mean()) if core.size else 0.0, 1),
         "surround_level": round(float(ring.mean()) if ring.size else 0.0, 1),
@@ -285,7 +328,16 @@ _VOICE = (
 
 
 def _context(evidence: dict[str, Any]) -> str:
-    lines = [f"THE FRAME, MEASURED LOCALLY:\n{json.dumps(evidence['baseline'], indent=2)}"]
+    lines = [
+        f"THE FRAME, MEASURED LOCALLY:\n{json.dumps(evidence['baseline'], indent=2)}",
+        "The zones are the top, middle and bottom thirds of the frame -- "
+        "where the global numbers average a crushed foreground against a "
+        "bright sky and notice nothing, the zone says which third died. "
+        "banding_percent is posterisation: the share of living pixels "
+        "sitting in perfectly flat plateaus. If it climbs well past its "
+        "starting value, the tones have broken into visible bands, "
+        "however good the other numbers look.",
+    ]
     if evidence.get("about"):
         lines.append(
             "WHAT THE PHOTOGRAPHER SAYS THIS SHOOT IS, in their own words: "
