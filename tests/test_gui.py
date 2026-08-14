@@ -1293,15 +1293,26 @@ class GuiProviderTests(unittest.TestCase):
 
             migrated = ProviderStore(
                 root / "providers.json", root / "opencull", keychain)
+            # The panel seats, C and D, must be two families and neither
+            # of them the generators': Kimiya drops a judge that shares
+            # a family with the agent it is judging, and an all-OpenAI
+            # default quietly turned every 5-vote panel into one model
+            # sampled five times.
+            migrated_models = migrated.public()["profiles"][0]["models"]
             self.assertEqual(
-                migrated.public()["profiles"][0]["models"],
+                migrated_models,
                 {
                     "A": "openai/gpt-5.6-luna-pro",
                     "B": "openai/gpt-5.6-luna-pro",
-                    "C": "openai/gpt-4.1-mini",
-                    "D": "openai/gpt-5.6-luna-pro",
+                    "C": "anthropic/claude-haiku-4.5",
+                    "D": "google/gemini-2.5-flash",
                 },
             )
+            families = {name: model.split("/")[0]
+                        for name, model in migrated_models.items()}
+            self.assertNotIn(families["C"], (families["A"], families["B"]))
+            self.assertNotIn(families["D"], (families["A"], families["B"]))
+            self.assertNotEqual(families["C"], families["D"])
 
             custom = provider_data()
             custom["id"] = profile_id

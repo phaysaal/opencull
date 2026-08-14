@@ -166,12 +166,36 @@ class ProviderStore:
                 "C": "mistralai/mistral-small-3.2-24b-instruct",
                 "D": "qwen/qwen3.7-flash",
             },
+            # Both shapes of the mistake this migration exists to repair:
+            # a panel with no second family in it. Kimiya refuses to let
+            # a judge share a family with the agent whose work it is
+            # judging, so with A and B on OpenAI, an OpenAI C is quietly
+            # dropped from every panel [C, D] in the application -- and
+            # five "independent" votes were one model sampled five
+            # times. Eleven treatment runs abstained before anyone saw
+            # a panel vote that was actually a panel.
+            {
+                "A": "openai/gpt-5.6-luna-pro",
+                "B": "openai/gpt-5.6-luna-pro",
+                "C": "openai/gpt-4.1-mini",
+                "D": "openai/gpt-5.6-luna-pro",
+            },
+            {
+                "A": "openai/gpt-5.6-luna-pro",
+                "B": "openai/gpt-5.6-luna-pro",
+                "C": "openai/gpt-4.1-mini",
+                "D": "google/gemini-2.5-flash",
+            },
         )
+        # A and B generate, C and D judge, in every shipped program. The
+        # judges must therefore be two families, neither of them the
+        # generators': the guarantee "4 of 5 independent votes" is only
+        # worth the independence of the voters.
         recommended = {
             "A": "openai/gpt-5.6-luna-pro",
             "B": "openai/gpt-5.6-luna-pro",
-            "C": "openai/gpt-4.1-mini",
-            "D": "openai/gpt-5.6-luna-pro",
+            "C": "anthropic/claude-haiku-4.5",
+            "D": "google/gemini-2.5-flash",
         }
         changed = False
         for profile in self._state["profiles"]:
