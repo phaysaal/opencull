@@ -448,6 +448,29 @@ class AnchorTests(unittest.TestCase):
         self.assertEqual(Path(first).name, "round-1.jpg")
 
 
+class RepeatedRoundTests(unittest.TestCase):
+    """A round that changed nothing is the end of the argument."""
+
+    def round(self, number, measurements, finished=False):
+        return json.dumps({
+            "round": number, "measurements": measurements,
+            "critique": {"finished": finished, "next_change": "lift it"},
+        })
+
+    def test_two_identical_renders_end_the_loop(self):
+        same = {"mean": 10.78, "subject_separation": 22.0}
+        self.assertFalse(treatment.keep_going(
+            [self.round(1, same), self.round(2, dict(same))], 3))
+
+    def test_a_round_that_moved_keeps_the_budget_open(self):
+        self.assertTrue(treatment.keep_going(
+            [self.round(1, {"mean": 10.33}), self.round(2, {"mean": 10.78})], 3))
+
+    def test_a_round_that_never_rendered_does_not_count_as_a_repeat(self):
+        self.assertTrue(treatment.keep_going(
+            [self.round(1, {}), self.round(2, {})], 3))
+
+
 class CarriedMovesTests(unittest.TestCase):
     """A round revises the last one; it does not start from nothing.
 

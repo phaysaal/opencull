@@ -222,9 +222,17 @@ _MASK_MOVES = (
     + ", ".join(MASK_MOVES))
 
 # What rendering taught, which no amount of looking at a JPEG will.
-_LEARNED = """Three things this renderer has been measured doing, which
+_LEARNED = """Four things this renderer has been measured doing, which
 are not obvious:
 
+  • A local lift cannot recover what a global move has already crushed.
+    The whole frame is applied first and the masks after it, so contrast
+    that drives a region to zero has destroyed it before any mask
+    reaches it -- measured: after exposure -1.5 with contrast 35, the
+    bottom tenth of the frame sat at 0.0, and a bottom gradient of +1 EV
+    with shadows +50 moved the lower third from 2.61 to 2.80. To keep a
+    dark region readable ask for less global contrast, or protect it
+    with a mask; do not plan to rescue it afterwards.
   • Contrast pivots at middle grey. On a subject sitting at seven
     percent brightness, positive contrast drives it toward black rather
     than away from it. To lift something dark, use exposure.
@@ -787,7 +795,18 @@ def keep_going(records: list[str], rounds: float) -> bool:
         return True
     last = data(records[-1]) or {}
     critique = last.get("critique") or {}
-    return not bool(critique.get("finished"))
+    if bool(critique.get("finished")):
+        return False
+    # A round that rendered the same photograph as the one before it is
+    # the loop disagreeing with a frame that will not move: live, rounds
+    # two and three came out pixel-identical while the critique asked
+    # for the same change both times. Spending the third was waste.
+    if len(records) >= 2:
+        previous = data(records[-2]) or {}
+        if (last.get("measurements")
+                and last.get("measurements") == previous.get("measurements")):
+            return False
+    return True
 
 
 def latest_critique(records: list[str]) -> str:
