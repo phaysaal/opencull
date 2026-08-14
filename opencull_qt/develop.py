@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QListWidget,
     QListWidgetItem,
@@ -752,6 +753,7 @@ class DevelopPage(QWidget):
     closed = Signal()
     verification_wanted = Signal(dict)
     why_wanted = Signal(str)        # the frame whose story is asked for
+    treatment_wanted = Signal(str, int)   # photo, rounds of budget
 
     def __init__(self, report, workspace: DevelopmentWorkspace,
                  loader: PreviewLoader, parent: QWidget | None = None):
@@ -1057,6 +1059,19 @@ class DevelopPage(QWidget):
         self.verify_button.clicked.connect(self.verify_current)
         layout.addWidget(self.verify_button)
 
+        self.treat_button = QPushButton("Kimiya Treatment…")
+        self.treat_button.setObjectName("ghost")
+        self.treat_button.setFont(theme.body(10))
+        self.treat_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.treat_button.setToolTip(tooltip(
+            "Develop this frame in rounds: a model plans, renders, "
+            "measures its own result and revises, within a budget you "
+            "set. Every round is kept beside the photographs, and the "
+            "finished treatment appears in this list once a panel has "
+            "vouched for it. Each round costs several model calls."))
+        self.treat_button.clicked.connect(self.treat_current)
+        layout.addWidget(self.treat_button)
+
         # A full-size render takes a minute and a half of somebody's
         # evening. A disabled button says only that it is unavailable.
         self.delivery_meter = QProgressBar()
@@ -1314,6 +1329,27 @@ class DevelopPage(QWidget):
         chosen = self.treatments.item(row).data(Qt.ItemDataRole.UserRole)
         return next(
             (item for item in self.available if item["id"] == chosen), None)
+
+    def treat_current(self) -> None:
+        """Ask for a Kimiya Treatment of this frame, budget stated first."""
+        if not self.current:
+            return
+        rounds, agreed = QInputDialog.getInt(
+            self, "Kimiya Treatment",
+            f"Treat {self.current} in how many rounds?\n\n"
+            "Each round is a plan, a question per mask, a render and a "
+            "critique -- several model calls. Three is usually enough; "
+            "the treatment stops early when it is satisfied or when a "
+            "round changes nothing.",
+            3, 1, 6)
+        if not agreed:
+            return
+        self.treatment_wanted.emit(self.current, int(rounds))
+        self._report(
+            f"Queued: {self.current}, {rounds} round"
+            f"{'' if rounds == 1 else 's'}. The rounds land beside the "
+            "photographs under .darkimiya/Treatments; the finished "
+            "treatment joins this list when the panel vouches for it.")
 
     def toggle_presets(self) -> None:
         self.presets_open = not self.presets_open

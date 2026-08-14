@@ -336,6 +336,52 @@ class DevelopmentWorkspace:
                          "camera's own embedded rendering is used. That is a "
                          "judgement already made, not a development.")}
 
+    def finished_treatments(self, photo: str = "") -> list[dict]:
+        """Every Kimiya Treatment report this project has, newest first.
+
+        Read from the project's artifacts, where the queue registers a
+        completed run, and each report checked on disk: a treatment
+        whose file has gone is not offered, because offering it would
+        promise a render nobody can make.
+        """
+        self.project = load_project(self.project_path)
+        found = []
+        for item in (self.project.get("artifacts", {}).get("treatments")
+                     or []):
+            if not isinstance(item, dict):
+                continue
+            path = Path(str(item.get("path") or "")).expanduser()
+            if not path.is_file():
+                continue
+            try:
+                report = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if report.get("format") != "darkimiya-treatment-v1":
+                continue
+            if photo and str(report.get("photo") or "") != photo:
+                continue
+            chosen = int(report.get("chosen_round") or 0)
+            leading = next(
+                (round_ for round_ in report.get("rounds", [])
+                 if int(round_.get("round", 0)) == chosen), None)
+            recipe = (leading or {}).get("recipe") or {}
+            if not isinstance(recipe.get("operations"), list):
+                continue
+            found.append({
+                "id": f"kimiya-{path.stem.replace('.', '-')}".lower(),
+                "path": str(path),
+                "photo": str(report.get("photo") or ""),
+                "title": str(recipe.get("title")
+                             or "Kimiya Treatment").strip()[:80],
+                "strategy": str(report.get("strategy") or ""),
+                "rounds_spent": len(report.get("rounds", [])),
+                "chosen_round": chosen,
+                "recipe": recipe,
+            })
+        found.reverse()
+        return found
+
     def treatments(self, photo: str) -> list[dict]:
         """The treatments that can actually be rendered for one photograph.
 
@@ -380,6 +426,20 @@ class DevelopmentWorkspace:
                 "name": str(item.get("name") or "Imported recipe"),
                 "intent": f"Imported from {Path(str(item.get('source_path', ''))).name}",
                 "kind": "imported"})
+        # A finished Kimiya Treatment outranks a preset: it was argued
+        # about this frame in rounds, rendered, measured and warranted,
+        # where a preset is a stated look that has never seen the frame.
+        for finished in self.finished_treatments(photo):
+            available.append({
+                "id": finished["id"],
+                "name": finished["title"],
+                "intent": (
+                    f"Kimiya Treatment ({finished['strategy']}): round "
+                    f"{finished['chosen_round']} of "
+                    f"{finished['rounds_spent']}, offered by the treatment "
+                    "itself. The whole argument is in "
+                    f"{Path(finished['path']).name}."),
+                "kind": "treatment"})
         # Presets sit below what was written for this photograph and above
         # the camera's own frame: a stated look is a weaker claim than an
         # answer about this scene and a stronger one than no edit at all.
@@ -499,8 +559,14 @@ class DevelopmentWorkspace:
                       if item.get("photo") == photo), None)
         preset = next(
             (item for item in self.presets() if item["id"] == style), None)
+        # A finished Kimiya Treatment carries its own recipe, so like a
+        # preset it asks nothing of the edit directions.
+        treatment = next(
+            (item for item in self.finished_treatments(photo)
+             if item["id"] == style),
+            None) if style.startswith("kimiya-") else None
         if entry is None:
-            if style != "calibrated" and preset is None:
+            if style != "calibrated" and preset is None and treatment is None:
                 raise ValueError("photograph has no edit direction")
             # The baseline interprets nothing, so it needs no direction. Only
             # the RAW match matters, and that is indexed separately.
@@ -522,7 +588,7 @@ class DevelopmentWorkspace:
         source_kind = "raw" if source.suffix.casefold() not in {".jpg", ".jpeg"} else "jpeg"
         recipe_value = entry.get(f"{style}_recipe")
         portable = None
-        if style not in builtin_styles and preset is None:
+        if style not in builtin_styles and preset is None and treatment is None:
             portable = next((
                 item for item in workspace.get("recipes", [])
                 if isinstance(item, dict)
@@ -544,6 +610,16 @@ class DevelopmentWorkspace:
                 "coverage": {"instructions": 0, "executable": 0,
                              "guardrails": 0, "unsupported": 0},
             }
+        elif treatment is not None:
+            # The treatment's offered recipe is already the renderer's own
+            # format -- the treatment rendered it to choose it. Only the
+            # frame and its source are this workspace's to say.
+            recipe = dict(treatment["recipe"])
+            recipe.update({
+                "format": "opencull-development-recipe-v1",
+                "source_photo": photo, "source_kind": source_kind,
+                "style": style,
+            })
         elif preset is not None:
             # A preset is already compiled -- it was compiled when it was
             # written, or when it was kept -- so nothing is parsed here.

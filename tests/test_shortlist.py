@@ -610,6 +610,18 @@ class OneCommandBuilderTests(unittest.TestCase):
         for spelling in ("shortlist=", "policy=", "keep_per_group="):
             self.assertNotIn(spelling, builder)
 
+    def test_a_treatment_job_says_which_frame_and_how_many_rounds(self):
+        job = self.job("treatment")
+        job.update({"photo": "DSC00703.ARW", "rounds": 3})
+        program, arguments = kimiya_arguments(job)
+        self.assertEqual(program, "protect_then_reveal.kim")
+        said = dict(item.split("=", 1) for item in arguments if "=" in item)
+        self.assertEqual(said["photo"], "DSC00703.ARW")
+        self.assertEqual(said["rounds"], "3")
+        self.assertEqual(said["spectrum"], "infrared")
+        self.assertEqual(said["cutoff_nm"], "760.0")
+        self.assertIn("not the moon", said["about"])
+
     def test_a_kind_nobody_recognises_is_refused(self):
         with self.assertRaises(ValueError):
             kimiya_arguments({"kind": "telepathy"})

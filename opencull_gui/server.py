@@ -868,6 +868,19 @@ class ReviewHandler(BaseHTTPRequestHandler):
                 )
                 self._json(result)
                 return
+            elif parsed.path == "/api/jobs/add-treatment":
+                if self.server.jobs is None:
+                    raise JobError("job manager is disabled")
+                result = self.server.jobs.add_treatment(
+                    photos=str(body.get("photos", "")),
+                    photo=str(body.get("photo", "")),
+                    rounds=body.get("rounds", 3),
+                    output=str(body.get("output", "")),
+                    provider_profile_id=str(
+                        body.get("provider_profile_id", "")),
+                )
+                self._json(result)
+                return
             elif parsed.path == "/api/jobs/add-semantic-verification":
                 if self.server.jobs is None:
                     raise JobError("job manager is disabled")

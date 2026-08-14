@@ -1467,6 +1467,44 @@ class GuiProviderTests(unittest.TestCase):
             finally:
                 manager.shutdown()
 
+    def test_a_treatment_is_queued_for_one_frame_with_a_bounded_budget(self):
+        """The develop page's door to the Kimiya Treatment."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            store, _ = self.make_store(root)
+            photos = root / "photos"
+            photos.mkdir()
+            (photos / "DSC00703.ARW").write_bytes(b"not really a raw")
+            manager = JobManager(
+                root / "jobs.json", store.project_root,
+                providers=store, autostart=False,
+                command_builder=lambda job: [],
+                program_checker=lambda path: None,
+            )
+            try:
+                state = manager.add_treatment(
+                    str(photos), "DSC00703.ARW", rounds=4)
+                job = state["jobs"][0]
+                self.assertEqual(job["kind"], "treatment")
+                self.assertEqual(job["photo"], "DSC00703.ARW")
+                self.assertEqual(job["rounds"], 4)
+                self.assertTrue(job["output"].endswith(
+                    "DSC00703.treatment.json"))
+                # A second ask must not overwrite the first report.
+                Path(job["output"]).parent.mkdir(parents=True, exist_ok=True)
+                Path(job["output"]).write_text("{}")
+                again = manager.add_treatment(
+                    str(photos), "DSC00703.ARW", rounds=2)
+                self.assertTrue(again["jobs"][1]["output"].endswith(
+                    "DSC00703.treatment-2.json"))
+                with self.assertRaises(JobError):
+                    manager.add_treatment(str(photos), "MISSING.ARW")
+                with self.assertRaises(JobError):
+                    manager.add_treatment(
+                        str(photos), "DSC00703.ARW", rounds=40)
+            finally:
+                manager.shutdown()
+
     def test_queue_binds_custom_judgment_policy_to_generated_program(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

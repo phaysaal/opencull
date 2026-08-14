@@ -1753,6 +1753,9 @@ class Launcher(QMainWindow):
         page.verification_wanted.connect(
             lambda request: self.verify_render(bench.workspace, request))
         page.why_wanted.connect(self.explain_frame)
+        page.treatment_wanted.connect(
+            lambda photo, rounds: self.treat_frame(
+                bench.workspace, photo, rounds))
         return page
 
     def _finetune_page(self, bench: Bench):
@@ -2009,6 +2012,24 @@ class Launcher(QMainWindow):
         # So the phase turns into its progress page now rather than at the
         # next tick of the clock.
         self.refresh()
+
+    def treat_frame(self, workspace, photo: str, rounds: int) -> None:
+        """Queue a Kimiya Treatment: one frame, developed in rounds."""
+        try:
+            self.services.jobs.add_treatment(
+                photos=str(workspace.project.get("source_folder") or ""),
+                photo=photo,
+                rounds=rounds,
+                provider_profile_id=self.provider_id())
+        except Exception as exc:
+            self._say(str(exc), "alarm")
+            return
+        self._say(
+            f"Treating {photo} in up to {rounds} round"
+            f"{'' if rounds == 1 else 's'}. Every round is kept under "
+            ".darkimiya/Treatments beside the photographs; the finished "
+            "treatment appears on the develop page once the panel has "
+            "vouched for it.", "ok")
 
     def verify_render(self, workspace, request: dict) -> None:
         """Ask a model whether one rendering did what it promised."""

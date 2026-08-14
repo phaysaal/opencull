@@ -8,6 +8,7 @@ import sys
 import tempfile
 import time
 import unittest
+import unittest.mock
 from pathlib import Path
 
 from PIL import Image
@@ -194,6 +195,131 @@ class SuggestedTreatmentTests(unittest.TestCase):
 
 
 @unittest.skipUnless(QApplication is not None, "PySide6 is not installed")
+class TreatmentEntryTests(unittest.TestCase):
+    """The door to a Kimiya Treatment, and where the result appears.
+
+    Until now the treatment could only be launched from a terminal by
+    somebody who knew the program's name; the photographer it was built
+    for had no way to ask for it.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.application = QApplication.instance() or QApplication([])
+
+    def setUp(self):
+        self._temporary = tempfile.TemporaryDirectory()
+        root = Path(self._temporary.name)
+        self.report_path, self.photos_path = build_shoot(root)
+        self.report = load_report(self.report_path)
+        self.photos = PhotoStore(self.photos_path, root / "cache")
+        self.addCleanup(self._temporary.cleanup)
+
+    def page(self):
+        from opencull_qt.develop import DevelopPage, workspace_for
+        from opencull_qt.previews import PreviewLoader
+
+        loader = PreviewLoader(self.photos)
+        self.workspace = workspace_for(
+            self.report, self.photos.root, decoders=set())
+        page = DevelopPage(self.report, self.workspace, loader)
+        page.resize(900, 600)
+        page.show()
+        self.addCleanup(page.shutdown)
+        self.addCleanup(loader.shutdown)
+        self.addCleanup(page.deleteLater)
+        return page
+
+    def report_file(self, photo: str) -> Path:
+        """A finished treatment on disk, as the queue would leave it."""
+        from opencull_gui.project import ensure_project_layout
+
+        layout = ensure_project_layout(self.photos.root)
+        path = layout["Recipes"] / f"{Path(photo).stem}.treatment.json"
+        path.write_text(json.dumps({
+            "format": "darkimiya-treatment-v1",
+            "strategy": "protect-then-reveal",
+            "photo": photo,
+            "evidence": {"baseline": {}},
+            "chosen_round": 1,
+            "rounds": [{
+                "round": 1, "render": "round-1.jpg",
+                "sections": "protect the sky",
+                "measurements": {"subject_separation": 20.0},
+                "recipe": {
+                    "format": "opencull-development-recipe-v1",
+                    "title": "Dusk, held back",
+                    "operations": [
+                        {"op": "tone.exposure", "value": -0.5,
+                         "unit": "EV", "mode": "delta",
+                         "source": "exposure -0.5"}],
+                },
+            }],
+        }))
+        return path
+
+    def register(self, path: Path) -> None:
+        from opencull_gui.project import register_job_output
+
+        register_job_output(self.workspace.project_path, {
+            "kind": "treatment", "id": "job1", "output": str(path)})
+
+    def test_the_button_asks_and_then_emits_the_frame_and_the_budget(self):
+        page = self.page()
+        heard = []
+        page.treatment_wanted.connect(
+            lambda photo, rounds: heard.append((photo, rounds)))
+        with unittest.mock.patch(
+                "opencull_qt.develop.QInputDialog.getInt",
+                return_value=(4, True)):
+            page.treat_button.click()
+        self.assertEqual(heard, [(page.current, 4)])
+
+    def test_declining_the_dialog_asks_for_nothing(self):
+        page = self.page()
+        heard = []
+        page.treatment_wanted.connect(
+            lambda photo, rounds: heard.append((photo, rounds)))
+        with unittest.mock.patch(
+                "opencull_qt.develop.QInputDialog.getInt",
+                return_value=(3, False)):
+            page.treat_button.click()
+        self.assertEqual(heard, [])
+
+    def test_a_finished_treatment_is_offered_for_its_own_frame_only(self):
+        self.page()
+        self.register(self.report_file(NAMES[0]))
+        offered = self.workspace.treatments(NAMES[0])
+        mine = [item for item in offered if item["kind"] == "treatment"]
+        self.assertEqual(len(mine), 1)
+        self.assertEqual(mine[0]["name"], "Dusk, held back")
+        self.assertIn("round 1 of 1", mine[0]["intent"])
+        others = self.workspace.treatments(NAMES[1])
+        self.assertEqual(
+            [item for item in others if item["kind"] == "treatment"], [])
+
+    def test_the_offered_recipe_is_what_the_treatment_settled_on(self):
+        self.page()
+        self.register(self.report_file(NAMES[0]))
+        entry = self.workspace.treatments(NAMES[0])
+        chosen = next(item for item in entry if item["kind"] == "treatment")
+        recipe = self.workspace.compiled_recipe(
+            NAMES[0], chosen["id"], "darktable")
+        self.assertEqual(
+            [(item["op"], item["value"]) for item in recipe["operations"]],
+            [("tone.exposure", -0.5)])
+        self.assertEqual(recipe["source_photo"], NAMES[0])
+
+    def test_a_report_whose_file_has_gone_is_not_offered(self):
+        self.page()
+        path = self.report_file(NAMES[0])
+        self.register(path)
+        path.unlink()
+        offered = self.workspace.treatments(NAMES[0])
+        self.assertEqual(
+            [item for item in offered if item["kind"] == "treatment"], [])
+
+
 class VerificationTests(unittest.TestCase):
     """Checking that a rendering did what its treatment said it would."""
 

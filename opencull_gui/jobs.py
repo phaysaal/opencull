@@ -97,6 +97,16 @@ def kimiya_arguments(job: dict[str, Any]) -> tuple[str, list[str]]:
             f"about={job.get('about', '')}",
             "resume=true",
         ]
+    if kind == "treatment":
+        return "protect_then_reveal.kim", [
+            f"photos={job['photos']}",
+            f"photo={job['photo']}",
+            f"output={job['output']}",
+            f"spectrum={job.get('spectrum', 'visible')}",
+            f"cutoff_nm={job.get('cutoff_nm', 0)}",
+            f"about={job.get('about', '')}",
+            f"rounds={job.get('rounds', 3)}",
+        ]
     if kind not in {None, "culling"}:
         raise ValueError(f"unsupported kimiya job kind: {kind}")
     return "opencull.kim", [
@@ -944,6 +954,107 @@ class JobManager:
             else:
                 raise JobError(f"unsupported job action: {action}")
             return self.public()
+
+    def add_treatment(
+        self,
+        photos: str,
+        photo: str,
+        rounds: Any = 3,
+        output: str = "",
+        provider_profile_id: str = "",
+    ) -> dict[str, Any]:
+        """Queue a Kimiya Treatment: one photograph, developed in rounds.
+
+        The most expensive thing a single frame can ask for -- each round
+        is a plan, a question per mask, a render and a critique -- so it
+        is queued per photograph and never for a folder.
+        """
+        source = Path(photos).expanduser().resolve()
+        if not source.is_dir():
+            raise JobError(f"photo folder is not a directory: {source}")
+        name = Path(str(photo).strip()).name
+        if not name or not (source / name).is_file():
+            raise JobError(f"no such photograph in {source}: {name or photo!r}")
+        try:
+            budget = int(rounds)
+        except (TypeError, ValueError):
+            raise JobError("rounds must be a small whole number") from None
+        if not 1 <= budget <= 6:
+            raise JobError("rounds must be between 1 and 6")
+        try:
+            project_path, project = load_or_create_folder_project(
+                source, source.name)
+            layout = ensure_project_layout(source)
+        except (OSError, ValueError) as exc:
+            raise JobError(f"cannot open the Darkimiya project: {exc}") from exc
+        if str(output).strip():
+            chosen_output = self._validate_output(Path(output))
+        else:
+            # A frame may be treated again; the report of the last time is
+            # not something a new run silently overwrites.
+            stem = Path(name).stem
+            chosen_output = (layout["Recipes"] / f"{stem}.treatment.json").resolve()
+            number = 2
+            while chosen_output.exists():
+                chosen_output = (
+                    layout["Recipes"] / f"{stem}.treatment-{number}.json").resolve()
+                number += 1
+        with self._lock:
+            job_id = uuid.uuid4().hex[:12]
+            provider_bundle = None
+            if provider_profile_id:
+                if self.providers is None:
+                    raise JobError("provider profiles are disabled")
+                try:
+                    provider_bundle = self.providers.materialize(
+                        job_id, provider_profile_id, "protect_then_reveal.kim")
+                    self.program_checker(Path(provider_bundle["program_path"]))
+                except (ProviderError, JobError) as exc:
+                    raise JobError(str(exc)) from exc
+            profile_data = provider_bundle["profile"] if provider_bundle else {}
+            job = {
+                "id": job_id,
+                "kind": "treatment",
+                "project": str(project_path),
+                "project_id": project["id"],
+                "photos": str(source),
+                "photo": name,
+                "rounds": budget,
+                "output": str(chosen_output),
+                "checkpoint": f"{chosen_output}.checkpoint.json",
+                "log": f"{chosen_output}.log",
+                "spectrum": str(
+                    (project.get("rendering") or {}).get("spectrum")
+                    or "visible"),
+                "cutoff_nm": float(
+                    (project.get("rendering") or {}).get("cutoff_nm") or 0),
+                "about": str(project.get("about") or ""),
+                "status": "queued",
+                "message": f"Waiting to treat {name}.",
+                "pid": None, "created_at": _now(), "started_at": None,
+                "finished_at": None, "exit_code": None,
+                "provider_profile_id": provider_profile_id or None,
+                "requested_model": None,
+                "provider_profile_name": profile_data.get(
+                    "name", "Legacy agents.kim"),
+                "provider_kind": profile_data.get("kind", "legacy"),
+                "provider_privacy": (
+                    "local" if profile_data.get("kind") == "ollama"
+                    else "remote-zdr" if profile_data.get("kind") == "openrouter"
+                    and profile_data.get("zdr")
+                    else "declared-in-agents.kim" if not provider_bundle
+                    else "remote-provider-policy"),
+                "provider_config_sha256": (
+                    provider_bundle["agents_sha256"] if provider_bundle else None),
+                "program_sha256": (
+                    provider_bundle["program_sha256"] if provider_bundle else None),
+                "program_path": (
+                    provider_bundle["program_path"] if provider_bundle else None),
+            }
+            self._state["jobs"].append(job)
+            self._save()
+        self._wake.set()
+        return self.public()
 
     def add_edit_suggestions(
         self,

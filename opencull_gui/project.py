@@ -36,7 +36,7 @@ ARTIFACT_KEYS = (
     "culling_report", "culling_review", "shortlist", "shortlist_review", "style_profile",
     "raw_source_map", "calibration", "edit_directions", "recipes", "renders", "renderer_comparisons",
     "verifications", "adjustments", "exports", "operations", "rejected",
-    "raw_reserve",
+    "raw_reserve", "treatments",
 )
 
 
@@ -466,6 +466,7 @@ def register_job_output(path: Path, job: dict[str, Any]) -> dict[str, Any]:
         "edit_suggestions": ("edit_directions", "style", False),
         "semantic_verification": ("verifications", "verify", False),
         "style_profile": ("style_profile", "style", False),
+        "treatment": ("treatments", "develop", False),
     }
     selected = mapping.get(str(job.get("kind", "")))
     if selected is None:
