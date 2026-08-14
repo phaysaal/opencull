@@ -320,6 +320,143 @@ class TreatmentEntryTests(unittest.TestCase):
             [item for item in offered if item["kind"] == "treatment"], [])
 
 
+class TreatmentRoundsTests(unittest.TestCase):
+    """Every round choosable, and a refusal said rather than hidden.
+
+    An abstention left nothing on the develop page at all: the rounds
+    -- rendered, measured, paid for -- were only findable by someone
+    reading .darkimiya/Treatments by hand, and the failure information
+    lived in a text file nobody was told about.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.application = QApplication.instance() or QApplication([])
+
+    def setUp(self):
+        self._temporary = tempfile.TemporaryDirectory()
+        root = Path(self._temporary.name)
+        self.report_path, self.photos_path = build_shoot(root)
+        self.report = load_report(self.report_path)
+        self.photos = PhotoStore(self.photos_path, root / "cache")
+        self.addCleanup(self._temporary.cleanup)
+
+    def run_directory(self, photo: str, rounds: int = 2,
+                      stamp: str = "20260814T154021Z") -> Path:
+        run = (self.photos_path / ".darkimiya" / "Treatments"
+               / f"{Path(photo).stem}.protect-then-reveal.{stamp}")
+        run.mkdir(parents=True, exist_ok=True)
+        for n in range(1, rounds + 1):
+            render = run / f"round-{n}.jpg"
+            Image.new("RGB", (60, 40), (30 * n, 20, 60)).save(render)
+            (run / f"round-{n}.json").write_text(json.dumps({
+                "round": n, "render": str(render),
+                "measurements": {"subject_separation": 10.0 + n,
+                                 "veil_percent": 30.0 - n},
+                "critique": {"regressed": f"the veil rose in round {n}",
+                             "finished": False},
+                "recipe": {"format": "opencull-development-recipe-v1",
+                           "title": f"attempt {n}",
+                           "operations": [{"op": "tone.exposure",
+                                           "value": -0.1 * n, "unit": "EV",
+                                           "mode": "delta",
+                                           "source": f"exposure {-0.1 * n}"}]},
+            }))
+        return run
+
+    def page(self):
+        from opencull_qt.develop import DevelopPage, workspace_for
+        from opencull_qt.previews import PreviewLoader
+
+        loader = PreviewLoader(self.photos)
+        self.workspace = workspace_for(
+            self.report, self.photos.root, decoders=set())
+        page = DevelopPage(self.report, self.workspace, loader)
+        page.resize(900, 600)
+        page.show()
+        self.addCleanup(page.shutdown)
+        self.addCleanup(loader.shutdown)
+        self.addCleanup(page.deleteLater)
+        return page
+
+    def test_an_unwarranted_runs_rounds_are_still_offered(self):
+        self.run_directory(NAMES[0])
+        self.page()
+        rounds = [item for item in self.workspace.treatments(NAMES[0])
+                  if item["kind"] == "round"]
+        self.assertEqual([item["name"] for item in rounds],
+                         ["Round 1", "Round 2"])
+        self.assertFalse(rounds[0]["warranted"])
+        self.assertIn("declined to vouch", rounds[0]["run_status"])
+
+    def test_each_round_carries_its_numbers_and_its_own_fault(self):
+        self.run_directory(NAMES[0])
+        self.page()
+        rounds = [item for item in self.workspace.treatments(NAMES[0])
+                  if item["kind"] == "round"]
+        self.assertIn("separation 11.0", rounds[0]["intent"])
+        self.assertIn("the veil rose in round 1", rounds[0]["intent"])
+        self.assertIn("Not warranted", rounds[0]["intent"])
+        # The full story -- including why the panel declined -- rides
+        # the tooltip's text, not the intent panel.
+        self.assertIn("declined to vouch", rounds[0]["story"])
+
+    def test_choosing_a_round_renders_that_rounds_recipe(self):
+        self.run_directory(NAMES[0])
+        self.page()
+        rounds = [item for item in self.workspace.treatments(NAMES[0])
+                  if item["kind"] == "round"]
+        recipe = self.workspace.compiled_recipe(
+            NAMES[0], rounds[1]["id"], "darktable")
+        self.assertEqual(recipe["operations"][0]["value"], -0.2)
+        self.assertEqual(recipe["source_photo"], NAMES[0])
+
+    def test_the_heading_names_the_refusal_and_folds_the_rounds(self):
+        self.run_directory(NAMES[0])
+        page = self.page()
+        from opencull_qt.develop import ROUNDS_ROW
+
+        for row in range(page.treatments.count()):
+            item = page.treatments.item(row)
+            if item.data(Qt.ItemDataRole.UserRole) == ROUNDS_ROW:
+                break
+        else:
+            self.fail("no rounds heading in the list")
+        self.assertIn("not warranted", item.text())
+        self.assertIn("TREATMENT ROUNDS · 2", item.text())
+        before = page.treatments.count()
+        page._clicked_treatment(item)
+        self.assertEqual(page.treatments.count(), before + 2)
+
+    def test_a_rounds_thumbnail_is_its_own_proof_not_a_new_render(self):
+        self.run_directory(NAMES[0])
+        page = self.page()
+        rounds = [item for item in self.workspace.treatments(NAMES[0])
+                  if item["kind"] == "round"]
+        page.rounds_open = True
+        page._fill_treatments()
+        self.assertIn((NAMES[0], rounds[0]["id"]), page.previews)
+
+    def test_only_the_newest_run_is_listed(self):
+        self.run_directory(NAMES[0], rounds=1, stamp="20260814T100000Z")
+        self.run_directory(NAMES[0], rounds=2, stamp="20260814T154021Z")
+        self.page()
+        rounds = [item for item in self.workspace.treatments(NAMES[0])
+                  if item["kind"] == "round"]
+        self.assertEqual(len(rounds), 2)
+        self.assertIn("154021z", rounds[0]["id"])
+
+    def test_a_run_with_nothing_rendered_shows_no_heading(self):
+        run = (self.photos_path / ".darkimiya" / "Treatments"
+               / f"{Path(NAMES[0]).stem}.protect-then-reveal.20260814T000001Z")
+        run.mkdir(parents=True)
+        (run / "plan-1.json").write_text("{}")
+        self.page()
+        self.assertEqual(
+            [item for item in self.workspace.treatments(NAMES[0])
+             if item["kind"] == "round"], [])
+
+
 class TreatmentMarkerTests(unittest.TestCase):
     """The page says a frame is being treated, and notices the arrival."""
 

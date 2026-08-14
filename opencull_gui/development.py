@@ -382,6 +382,81 @@ class DevelopmentWorkspace:
         found.reverse()
         return found
 
+    def treatment_rounds(self, photo: str) -> list[dict]:
+        """Every round of the newest treatment run for one photograph.
+
+        Warranted or not. An abstention is a refusal to vouch, not an
+        erasure: the rounds were rendered, measured and criticised, the
+        photographer paid for them, and the report format itself says an
+        earlier round may be the better photograph. So each round is
+        offered with its own numbers and its own recorded fault, and
+        what the panel declined to put its name to is said rather than
+        hidden. Older runs stay on disk beside this one.
+        """
+        stem = Path(photo).stem
+        root = (Path(str(self.project.get("source_folder") or ""))
+                / ".darkimiya" / "Treatments")
+        if not stem or not root.is_dir():
+            return []
+        runs = sorted(item for item in root.glob(f"{stem}.*")
+                      if item.is_dir())
+        if not runs:
+            return []
+        run = runs[-1]
+        stamp = run.name.rsplit(".", 1)[-1]
+        warranted_dirs = {
+            str(json.loads(Path(item["path"]).read_text(
+                encoding="utf-8")).get("directory") or "")
+            for item in (self.project.get("artifacts", {}).get("treatments")
+                         or [])
+            if isinstance(item, dict) and Path(str(item.get("path"))).is_file()
+        }
+        blessed = str(run) in warranted_dirs
+        standing = ("warranted by the panel" if blessed
+                    else "NOT warranted: the panel declined to vouch, or "
+                         "the run stopped early. The pictures are still "
+                         "real; judge them yourself.")
+        rounds = []
+        for record_path in sorted(run.glob("round-*.json")):
+            try:
+                record = json.loads(record_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            recipe = record.get("recipe") or {}
+            if not isinstance(recipe.get("operations"), list) or not recipe["operations"]:
+                continue
+            number = int(record.get("round") or 0)
+            measured = record.get("measurements") or {}
+            critique = record.get("critique") or {}
+            told = []
+            for key, label in (("subject_separation", "separation"),
+                               ("veil_percent", "veil"),
+                               ("banding_percent", "banding")):
+                if isinstance(measured.get(key), (int, float)):
+                    told.append(f"{label} {measured[key]}")
+            fault = " ".join(str(critique.get("regressed") or "").split())
+            # The label gets a sentence; the whole story rides the
+            # tooltip. A paragraph in the intent panel shoved the list
+            # into the buttons on a laptop panel.
+            short_fault = fault[:140] + ("…" if len(fault) > 140 else "")
+            rounds.append({
+                "id": f"kimiya-round-{stamp.lower()}-{number}",
+                "kind": "round",
+                "name": f"Round {number}",
+                "round": number,
+                "warranted": blessed,
+                "run_status": standing,
+                "proof": str(record.get("render") or ""),
+                "intent": " · ".join(told)
+                + (f"\nIts own critique: {short_fault}" if short_fault else "")
+                + ("" if blessed else "\nNot warranted -- judge it yourself."),
+                "story": " · ".join(told)
+                + (f"\nIts own critique: {fault}" if fault else "")
+                + f"\n{standing}",
+                "recipe": recipe,
+            })
+        return rounds
+
     def treatments(self, photo: str) -> list[dict]:
         """The treatments that can actually be rendered for one photograph.
 
@@ -450,6 +525,7 @@ class DevelopmentWorkspace:
                 "intent": str(preset.get("intent") or ""),
                 "kind": "preset",
                 "origin": str(preset.get("origin") or "built-in")})
+        available.extend(self.treatment_rounds(photo))
         available.append({
             "id": "as-shot", "name": "As shot",
             "intent": "The camera's own rendering of this frame, delivered "
@@ -560,11 +636,18 @@ class DevelopmentWorkspace:
         preset = next(
             (item for item in self.presets() if item["id"] == style), None)
         # A finished Kimiya Treatment carries its own recipe, so like a
-        # preset it asks nothing of the edit directions.
-        treatment = next(
-            (item for item in self.finished_treatments(photo)
-             if item["id"] == style),
-            None) if style.startswith("kimiya-") else None
+        # preset it asks nothing of the edit directions. So does any one
+        # of its rounds -- warranted or not, a round's recipe is complete
+        # and renders exactly what the loop rendered.
+        treatment = None
+        if style.startswith("kimiya-round-"):
+            treatment = next(
+                (item for item in self.treatment_rounds(photo)
+                 if item["id"] == style), None)
+        elif style.startswith("kimiya-"):
+            treatment = next(
+                (item for item in self.finished_treatments(photo)
+                 if item["id"] == style), None)
         if entry is None:
             if style != "calibrated" and preset is None and treatment is None:
                 raise ValueError("photograph has no edit direction")

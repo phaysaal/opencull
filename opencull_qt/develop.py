@@ -80,6 +80,7 @@ TILES_SHOWN_LEAST = 4
 # What the heading row carries where a treatment carries its id. No
 # treatment can be called this, so the two can never be confused.
 PRESETS_ROW = "\u00b7presets\u00b7"
+ROUNDS_ROW = "\u00b7rounds\u00b7"
 
 # The filters a photographer actually puts on the front of a lens. Naming
 # them beats a free number: these are the three that exist as products,
@@ -772,6 +773,10 @@ class DevelopPage(QWidget):
         # was written for the frame should not scroll past nine looks to
         # reach the camera's own rendering.
         self.presets_open = False
+        # Rounds start folded for the same reason presets do -- and a
+        # run the panel refused still deserves its heading, because the
+        # photographer paid for those pictures.
+        self.rounds_open = False
         # The frames whose treatment runs were active at the last poll,
         # so a completion is an event rather than a state nobody reads.
         self._treating_last: set[str] = set()
@@ -1279,17 +1284,26 @@ class DevelopPage(QWidget):
             self._report(str(exc), "alarm")
         self.available = available
         previous = self.treatment
-        written = [item for item in available if item.get("kind") != "preset"]
+        written = [item for item in available
+                   if item.get("kind") not in {"preset", "round"}]
         stated = [item for item in available if item.get("kind") == "preset"]
+        rounds = [item for item in available if item.get("kind") == "round"]
         # A preset the photographer is already on keeps the section open,
         # so refilling the list on the way to the next frame does not shut
         # the thing they are working in.
         if any(item["id"] == previous for item in stated):
             self.presets_open = True
+        if any(item["id"] == previous for item in rounds):
+            self.rounds_open = True
         self.treatments.blockSignals(True)
         self.treatments.clear()
         for item in written:
             self.treatments.addItem(self._treatment_row(item))
+        if rounds:
+            self.treatments.addItem(self._rounds_row(rounds))
+            if self.rounds_open:
+                for item in rounds:
+                    self.treatments.addItem(self._treatment_row(item))
         if stated:
             self.treatments.addItem(self._presets_row(len(stated)))
             if self.presets_open:
@@ -1309,14 +1323,46 @@ class DevelopPage(QWidget):
             self.develop_button.setEnabled(False)
 
     def _treatment_row(self, item: dict) -> QListWidgetItem:
+        if (item.get("kind") == "round"
+                and (self.current, str(item["id"])) not in self.previews):
+            proof = Path(str(item.get("proof") or ""))
+            if proof.is_file():
+                # The round was already rendered once, by the run that
+                # made it; its proof is its own thumbnail for nothing.
+                picture = load_for_screen(str(proof))
+                if picture is not None and not picture.isNull():
+                    self.previews[(self.current, str(item["id"]))] = scaled(
+                        picture, THUMB_EDGE, THUMB_EDGE)
         entry = QListWidgetItem(f"  {item['name']}")
         entry.setData(Qt.ItemDataRole.UserRole, item["id"])
         entry.setToolTip(tooltip(
-            f"{item['name']}\n{item.get('intent', '')}".strip()))
+            f"{item['name']}\n{item.get('story') or item.get('intent', '')}".strip()))
         entry.setSizeHint(QSize(0, TREATMENT_TILE))
         preview = self.previews.get((self.current, str(item["id"])))
         if preview is not None:
             entry.setIcon(plain_icon(preview))
+        return entry
+
+    def _rounds_row(self, rounds: list[dict]) -> QListWidgetItem:
+        """The heading over a treatment run's rounds, carrying its verdict.
+
+        A run the panel declined is not hidden behind silence: the
+        heading says so, and every round under it stays choosable --
+        the photographs are real and the photographer paid for them.
+        """
+        blessed = bool(rounds and rounds[0].get("warranted"))
+        entry = QListWidgetItem(
+            f"  {'▾' if self.rounds_open else '▸'}  TREATMENT ROUNDS · "
+            f"{len(rounds)}" + ("" if blessed else "  — not warranted"))
+        entry.setData(Qt.ItemDataRole.UserRole, ROUNDS_ROW)
+        entry.setToolTip(tooltip(
+            "Every round the newest Kimiya Treatment run rendered for "
+            "this frame, each with its measurements and its own "
+            f"critique. {rounds[0].get('run_status', '')} Choosing one "
+            "renders exactly what that round rendered, at full quality."))
+        entry.setFont(theme.display(8))
+        entry.setSizeHint(QSize(0, PRESETS_HEADING))
+        entry.setFlags(Qt.ItemFlag.ItemIsEnabled)
         return entry
 
     def _presets_row(self, count: int) -> QListWidgetItem:
@@ -1477,6 +1523,10 @@ class DevelopPage(QWidget):
         if item.data(Qt.ItemDataRole.UserRole) == PRESETS_ROW:
             self.toggle_presets()
             return
+        if item.data(Qt.ItemDataRole.UserRole) == ROUNDS_ROW:
+            self.rounds_open = not self.rounds_open
+            self._fill_treatments()
+            return
         self.develop_current(arriving=True)
 
     def _chose_treatment(self, row: int) -> None:
@@ -1485,6 +1535,9 @@ class DevelopPage(QWidget):
             return
         self.treatment = str(chosen["id"])
         self.intent.setText(str(chosen.get("intent") or ""))
+        # The intent's height just changed; the list's ceiling is what
+        # the panel can spare after it, so it must be asked again.
+        self._size_treatments()
         self.develop_button.setEnabled(True)
         self.engine_note.setText(self._engine_note())
         if chosen.get("kind") == "preset":
