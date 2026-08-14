@@ -482,6 +482,97 @@ class InsertRenderTests(unittest.TestCase):
             1)
 
 
+class SectionResetTests(FineTunePageTests):
+    """One section back to asked, the others' moves left standing.
+
+    The page-wide reset was all or nothing: a photographer who had
+    tuned tone for ten minutes and then wandered colour into the weeds
+    could only abandon both.
+    """
+
+    def reset_buttons(self, page) -> dict[str, object]:
+        from PySide6.QtWidgets import QPushButton
+
+        found = {}
+        for button in page.findChildren(QPushButton):
+            if button.text() == "reset":
+                found[button.toolTip()] = button
+        return found
+
+    def test_an_untouched_page_offers_no_section_resets(self):
+        page = self.page()
+        self.assertEqual(self.reset_buttons(page), {})
+
+    def test_a_moved_section_grows_the_reset_word(self):
+        page = self.page()
+        moved = self.control(page, "tone.exposure")
+        moved.slider.setValue(900)
+        page._show_controls()
+        self.assertEqual(page._touched_sections(), {"Tone"})
+        self.assertEqual(len(self.reset_buttons(page)), 1)
+
+    def test_resetting_one_section_leaves_the_others_moves_alone(self):
+        page = self.page()
+        self.control(page, "tone.exposure").slider.setValue(900)
+        colour = next((item for item in page.controls
+                       if item.control["section"] == "Colour"), None)
+        if colour is None:
+            page.changes["color.saturation"] = {"value": -30.0}
+        else:
+            colour.slider.setValue(100)
+        page.reset_section("Tone")
+        self.assertNotIn("Tone", page._touched_sections())
+        self.assertIn("Colour", page._touched_sections())
+
+    def test_an_inserted_control_is_undone_by_its_sections_reset(self):
+        page = self.page()
+        page._control_wanted("detail.dehaze", 12.0)
+        self.assertIn("detail.dehaze",
+                      [item["op"] for item in
+                       page.recipe.get("operations", [])])
+        page.reset_section("Detail")
+        self.assertEqual(page.changes.get("+insert", []), [])
+        self.assertNotIn("detail.dehaze",
+                         [item["op"] for item in
+                          page.recipe.get("operations", [])])
+
+    def test_the_masks_section_resets_geometry_and_added_masks(self):
+        page = self.page()
+        page._add_mask_direct = getattr(page, "_add_mask_direct", None)
+        made = {"shape": "radial",
+                "geometry": {"centre_x": 50.0, "centre_y": 50.0,
+                             "radius": 30.0, "feather": 100},
+                "effects": [{"op": "tone.exposure", "value": 0.3}]}
+        page.changes.setdefault("+mask", []).append(made)
+        page.recipe = adjustments.apply(page.recipe, {"+mask": [made]})
+        before = len(adjustments.masks(page._pristine))
+        self.assertEqual(len(adjustments.masks(page.recipe)), before + 1)
+        page.reset_section("Masks")
+        self.assertEqual(len(adjustments.masks(page.recipe)), before)
+        self.assertNotIn("+mask", page.changes)
+
+    def test_the_page_wide_reset_undoes_structure_too(self):
+        page = self.page()
+        page._control_wanted("detail.dehaze", 12.0)
+        page.reset()
+        self.assertEqual(page.changes, {})
+        self.assertEqual(
+            [item["op"] for item in page.recipe.get("operations", [])],
+            [item["op"] for item in page._pristine.get("operations", [])])
+
+    def test_after_a_section_reset_the_survivors_still_render(self):
+        """The mirror is derived, never edited: pristine plus what
+        remains must equal what the renderer will be sent."""
+        page = self.page()
+        self.control(page, "tone.exposure").slider.setValue(900)
+        page._control_wanted("detail.dehaze", 12.0)
+        page.reset_section("Tone")
+        rendered = adjustments.apply(page._pristine, page.changes)
+        self.assertEqual(
+            [item["op"] for item in page.recipe["operations"]],
+            [item["op"] for item in rendered["operations"]])
+
+
 class HoldTests(FineTunePageTests):
     """Press-and-hold: the judgement happens in one place at one size."""
 

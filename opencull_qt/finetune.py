@@ -20,6 +20,7 @@ rendering against a claim it no longer makes.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -368,6 +369,7 @@ class FineTunePage(QWidget):
         self.controls: list[Control] = []
         # Which sections have their absent controls unfolded.
         self._open_sections: dict[str, bool] = {}
+        self._pristine: dict[str, Any] = {}
         self._mask_cards: list[MaskCard] = []
         # Which mask is being shown as a tint, if any, and the plain
         # pixmap underneath it.
@@ -646,9 +648,29 @@ class FineTunePage(QWidget):
                 self.current, treatment, self.engine())
         except Exception as exc:                     # noqa: BLE001 - reported
             self.recipe = {}
+            self._pristine = {}
             self._clear()
             self._report(f"That treatment could not be read: {exc}", "alarm")
             return
+        # The compile as it arrived, before any hand touched it: what
+        # every reset rebuilds from. The mirror above accumulates the
+        # photographer's structure -- inserts, masks -- and without a
+        # pristine copy, "back to asked" could only be approximated by
+        # remembering what to subtract.
+        self._pristine = json.loads(json.dumps(self.recipe))
+        self._show_controls()
+        self.render()
+
+    def _rebuild_mirror(self) -> None:
+        """The page's recipe, recomputed as pristine plus what remains.
+
+        Every reset filters self.changes and calls this: the mirror can
+        never drift from the changes dict, because it is never edited --
+        only derived.
+        """
+        self.recipe = (adjustments.apply(self._pristine, self.changes)
+                       if self.changes
+                       else json.loads(json.dumps(self._pristine)))
         self._show_controls()
         self.render()
 
@@ -763,15 +785,13 @@ class FineTunePage(QWidget):
         by_section: dict[str, list[dict]] = {}
         for control in surface:
             by_section.setdefault(control["section"], []).append(control)
+        touched = self._touched_sections()
         for section, members in by_section.items():
             present = [item for item in members if not item.get("absent")]
             absent = [item for item in members if item.get("absent")]
-            heading = QLabel(
-                section.upper()
-                + (f"  ·  {len(present)}" if present else ""))
-            heading.setObjectName("axisName")
-            heading.setFont(theme.display(7))
-            self.body.addWidget(heading)
+            self.body.addWidget(self._heading(
+                section.upper() + (f"  ·  {len(present)}" if present else ""),
+                section if section in touched else ""))
             for control in present:
                 widget = Control(control, advice.get(control["op"]))
                 widget.changed.connect(self._control_changed)
@@ -796,12 +816,9 @@ class FineTunePage(QWidget):
                     lambda _=False, s=section: self._toggle_section(s))
                 self.body.addWidget(more)
         placed = adjustments.masks(self.recipe)
-        if placed or True:
-            heading = QLabel(
-                f"MASKS  ·  {len(placed)}" if placed else "MASKS")
-            heading.setObjectName("axisName")
-            heading.setFont(theme.display(7))
-            self.body.addWidget(heading)
+        self.body.addWidget(self._heading(
+            f"MASKS  ·  {len(placed)}" if placed else "MASKS",
+            "Masks" if "Masks" in touched else ""))
         for mask in placed:
             card = MaskCard(mask, advice)
             card.changed.connect(self._mask_changed)
@@ -857,6 +874,55 @@ class FineTunePage(QWidget):
         self._report(
             f"Asked. The bands for {self.current} land beside the recipes "
             "and paint the next time this frame's controls are opened.")
+
+    def _heading(self, title: str, resettable: str) -> QWidget:
+        """A section's name -- and, where the section has been moved,
+        the small word that puts it back.
+
+        A widget, not a bare layout: _clear() walks the body deleting
+        widgets, and a layout's children are invisible to it -- the
+        first build of this as a QHBoxLayout left every heading's
+        corpse painted over the next fill.
+        """
+        holder = QWidget()
+        row = QHBoxLayout(holder)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(8)
+        heading = QLabel(title)
+        heading.setObjectName("axisName")
+        heading.setFont(theme.display(7))
+        row.addWidget(heading)
+        row.addStretch(1)
+        if resettable:
+            undo = QPushButton("reset")
+            undo.setObjectName("ghost")
+            undo.setFont(theme.body(8))
+            undo.setCursor(Qt.CursorShape.PointingHandCursor)
+            undo.setToolTip(tooltip(
+                f"Put every {resettable.lower()} move back to what the "
+                "model asked for, leaving the other sections alone."))
+            undo.clicked.connect(
+                lambda _=False, s=resettable: self.reset_section(s))
+            row.addWidget(undo)
+        return holder
+
+    def _touched_sections(self) -> set[str]:
+        """Which sections the photographer has moved, for the reset word."""
+        surface = {item["id"]: item["section"]
+                   for item in adjustments.full_surface(self.recipe)}
+        touched: set[str] = set()
+        for key, change in self.changes.items():
+            if str(key).startswith("mask:") or key == "+mask":
+                touched.add("Masks")
+            elif key == "+insert":
+                for item in change:
+                    touched.add(
+                        adjustments._section_of(str(item.get("op", ""))))
+            else:
+                touched.add(surface.get(
+                    key, adjustments._section_of(str(key))))
+        touched.discard("Other")
+        return touched
 
     def _toggle_section(self, section: str) -> None:
         self._open_sections[section] = not self._open_sections.get(section)
@@ -933,11 +999,44 @@ class FineTunePage(QWidget):
             self.prompt.clear()
 
     def reset(self) -> None:
-        """Put every control back to what the model asked for."""
+        """Put every control back to what the model asked for.
+
+        Structure too: an inserted operation or an added mask is a
+        change like any other, and "as suggested" that kept them would
+        be a third state with nobody's name on it.
+        """
         self.changes = {}
-        self._show_controls()
-        self.render()
+        self._rebuild_mirror()
         self._report("Back to the treatment as it was suggested.")
+
+    def reset_section(self, section: str) -> None:
+        """Put one section back, leaving every other section's moves alone."""
+        surface = {item["id"]: item["section"]
+                   for item in adjustments.full_surface(self.recipe)}
+        kept: dict[str, Any] = {}
+        for key, change in self.changes.items():
+            if section == "Masks":
+                if str(key).startswith("mask:") or key == "+mask":
+                    continue
+                kept[key] = change
+                continue
+            if key == "+insert":
+                remaining = [
+                    item for item in change
+                    if adjustments._section_of(str(item.get("op", "")))
+                    != section]
+                if remaining:
+                    kept[key] = remaining
+                continue
+            if str(key).startswith("mask:") or key == "+mask":
+                kept[key] = change
+                continue
+            if surface.get(key, adjustments._section_of(str(key))) == section:
+                continue
+            kept[key] = change
+        self.changes = kept
+        self._rebuild_mirror()
+        self._report(f"{section} is back to what was asked.")
 
     def moved(self) -> int:
         return len(adjustments.moved(
@@ -1065,8 +1164,6 @@ class FineTunePage(QWidget):
         and render identically. The whole recipe travels, masks and
         all; a preset deliberately carries only the portable moves.
         """
-        import json as json_module
-
         from PySide6.QtWidgets import QFileDialog
 
         if not self.recipe:
@@ -1088,7 +1185,7 @@ class FineTunePage(QWidget):
         }
         try:
             Path(chosen).write_text(
-                json_module.dumps(payload, indent=2, sort_keys=True),
+                json.dumps(payload, indent=2, sort_keys=True),
                 encoding="utf-8")
         except OSError as exc:
             self._report(f"That could not be written: {exc}", "alarm")
