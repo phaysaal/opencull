@@ -37,6 +37,19 @@ def frame(path: Path, bright=(700, 400)) -> Path:
     return path
 
 
+def veiled(path: Path, level: int = 45) -> Path:
+    """The same light, but sitting in a bright haze -- the veiled frame."""
+    pixels = np.full((600, 900, 3), level, dtype=np.uint8)
+    ys, xs = np.ogrid[:600, :900]
+    glow = np.exp(-(((xs - 700) ** 2 + (ys - 400) ** 2) / 1200.0))
+    for channel in range(3):
+        pixels[..., channel] = np.clip(
+            pixels[..., channel] + glow * 400, 0, 255).astype(np.uint8)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    Image.fromarray(pixels).save(path, quality=95)
+    return path
+
+
 def critique(finished: bool, change: str = "lift the ghost") -> str:
     return json.dumps({"improved": "the silhouette reads", "regressed": "",
                        "next_change": change, "finished": finished,
@@ -56,7 +69,7 @@ class MeasuringTests(unittest.TestCase):
         across, down = measured["brightest_at"]
         self.assertAlmostEqual(across, 700 / 899, places=1)
         self.assertAlmostEqual(down, 400 / 599, places=1)
-        self.assertGreater(measured["subject_contrast"], 50)
+        self.assertGreater(measured["subject_separation"], 50)
 
     def test_it_reports_what_is_clipped_and_what_is_already_black(self):
         measured = treatment.measure_frame(frame(self.root / "a.jpg"))
@@ -70,7 +83,44 @@ class MeasuringTests(unittest.TestCase):
         self.assertEqual(evidence["spectrum"], "infrared")
         self.assertEqual(evidence["cutoff_nm"], 760.0)
         self.assertIn("crescent is the sun", evidence["about"])
-        self.assertIn("subject_contrast", evidence["baseline"])
+        self.assertIn("subject_separation", evidence["baseline"])
+
+
+class SeparationTests(unittest.TestCase):
+    """What "stands out" has to mean, for the loop to optimise it.
+
+    It was the difference in levels between the subject and its
+    surround. That is dominated by how bright the frame is, so on one
+    eclipse frame it scored the untouched render 126.5 and the best
+    hand-graded version 110.4 -- a loop following it would have learned
+    to leave the veil alone. It is a ratio now.
+    """
+
+    def setUp(self):
+        self._temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self._temporary.name)
+        self.addCleanup(self._temporary.cleanup)
+
+    def test_dropping_the_whole_frame_does_not_count_as_separating_it(self):
+        light = treatment.measure_frame(frame(self.root / "a.jpg"))
+        pixels = np.asarray(Image.open(self.root / "a.jpg").convert("RGB"))
+        Image.fromarray((pixels * 0.45).astype(np.uint8)).save(
+            self.root / "dark.jpg", quality=95)
+        dark = treatment.measure_frame(self.root / "dark.jpg")
+        self.assertLess(dark["mean"], light["mean"] * 0.6)
+        self.assertAlmostEqual(
+            dark["subject_separation"], light["subject_separation"], delta=6)
+
+    def test_a_veiled_frame_scores_below_a_clean_one(self):
+        clean = treatment.measure_frame(frame(self.root / "a.jpg"))
+        hazed = treatment.measure_frame(veiled(self.root / "veiled.jpg"))
+        self.assertGreater(clean["subject_separation"],
+                           hazed["subject_separation"] + 10)
+
+    def test_both_levels_are_reported_so_nothing_is_hidden_by_the_ratio(self):
+        measured = treatment.measure_frame(frame(self.root / "a.jpg"))
+        self.assertGreater(measured["subject_level"],
+                           measured["surround_level"])
 
 
 class BudgetTests(unittest.TestCase):
@@ -358,6 +408,46 @@ class DecisionTests(unittest.TestCase):
         self.assertTrue((Path(where) / "mask-2.json").is_file())
 
 
+class AnchorTests(unittest.TestCase):
+    """A round is a change to the renderer's own untouched frame.
+
+    The first live run measured its rounds against a darktable export.
+    The two engines sit two stops apart at rest, so every critique read
+    that gap as damage and asked for more darkening; three rounds went
+    the wrong way and the panel refused all of them.
+    """
+
+    def setUp(self):
+        self.asked = []
+        self.root = Path(tempfile.mkdtemp())
+        stand_in = self.root / "rendered.jpg"
+        stand_in.write_bytes(b"\xff\xd8rendered")
+
+        def _render(photos, photo, recipe_text, maximum):
+            self.asked.append(json.loads(recipe_text))
+            return str(stand_in)
+
+        self.original = treatment._render
+        treatment._render = _render
+        self.addCleanup(lambda: setattr(treatment, "_render", self.original))
+
+    def test_the_starting_frame_has_nothing_done_to_it(self):
+        treatment.starting_frame("/photos", "A.ARW", str(self.root), 1100)
+        self.assertEqual(self.asked[0]["operations"], [])
+        self.assertEqual(self.asked[0]["source_photo"], "A.ARW")
+
+    def test_it_is_kept_on_disk_as_the_honest_before(self):
+        where = treatment.starting_frame("/photos", "A.ARW", str(self.root), 1100)
+        self.assertEqual(Path(where).name, "start.jpg")
+        self.assertTrue(Path(where).is_file())
+
+    def test_it_does_not_take_a_round_number_from_the_budget(self):
+        treatment.starting_frame("/photos", "A.ARW", str(self.root), 1100)
+        first = treatment.render_round(
+            "/photos", "A.ARW", "{}", str(self.root), [], 1100)
+        self.assertEqual(Path(first).name, "round-1.jpg")
+
+
 class BoundaryTests(unittest.TestCase):
     """Nothing crossing from the program assumes what shape it is in.
 
@@ -385,9 +475,9 @@ class BoundaryTests(unittest.TestCase):
             "A.ARW", {}, json.dumps({"global_exposure": ["Contrast +12"]}))
         record = json.loads(treatment.round_record(
             where, [], compiled, "{}", "r.jpg",
-            {"subject_contrast": 70},
+            {"subject_separation": 70},
             {"improved": "x", "finished": True, "next_change": ""}))
-        self.assertEqual(record["measurements"]["subject_contrast"], 70)
+        self.assertEqual(record["measurements"]["subject_separation"], 70)
         self.assertTrue(record["critique"]["finished"])
 
     def test_the_budget_reads_records_whatever_shape_they_are(self):
@@ -404,16 +494,15 @@ class BoundaryTests(unittest.TestCase):
         """A prompt that concatenates its inputs has to survive all three."""
         evidence = json.dumps({"about": "an eclipse", "spectrum": "visible",
                                "baseline": {"brightest_at": [0.4, 0.5]}})
-        strategy = {"protect": ["the clipped core"], "reveal": ["the skyline"]}
+        plan = {"protect": ["the clipped core"], "reveal": ["the skyline"],
+                "mask_count": 1}
         for built in (
-            treatment.strategy_prompt(evidence, {"irrecoverable": "the core"}),
-            treatment.structure_prompt(evidence, strategy),
-            treatment.recipe_prompt(evidence, strategy, {"masks": ["radial"]}),
-            treatment.critique_prompt(evidence, strategy, evidence,
+            treatment.plan_prompt(evidence, plan),
+            treatment.mask_prompt(evidence, plan, 0, 1, []),
+            treatment.critique_prompt(evidence, plan,
                                       json.dumps({"mean": 30}), 1, 3),
         ):
-            self.assertIn("the clipped core", built) if "protect" in built \
-                else self.assertTrue(built)
+            self.assertIn("the clipped core", built)
 
 
 class KeepingTheWorkingTests(unittest.TestCase):
@@ -434,7 +523,7 @@ class KeepingTheWorkingTests(unittest.TestCase):
             "A.ARW", {"title": "t", "intent": "i"},
             json.dumps({"global_exposure": ["Contrast +12"]}))
         treatment.round_record(where, [], compiled, "{}", "render.jpg",
-                               json.dumps({"subject_contrast": 70}),
+                               json.dumps({"subject_separation": 70}),
                                critique(False))
         written = Path(where) / "round-1.json"
         self.assertTrue(written.is_file())
@@ -449,23 +538,23 @@ class KeepingTheWorkingTests(unittest.TestCase):
         for _ in range(3):
             records.append(treatment.round_record(
                 where, records, compiled, "{}", "r.jpg",
-                json.dumps({"subject_contrast": 70}), critique(False)))
+                json.dumps({"subject_separation": 70}), critique(False)))
         self.assertEqual([json.loads(item)["round"] for item in records],
                          [1, 2, 3])
 
     def test_the_round_offered_is_the_one_that_measured_best(self):
         """Not merely the last one tried."""
         rounds = [
-            json.dumps({"round": 1, "measurements": {"subject_contrast": 70}}),
-            json.dumps({"round": 2, "measurements": {"subject_contrast": 92}}),
-            json.dumps({"round": 3, "measurements": {"subject_contrast": 81}}),
+            json.dumps({"round": 1, "measurements": {"subject_separation": 70}}),
+            json.dumps({"round": 2, "measurements": {"subject_separation": 92}}),
+            json.dumps({"round": 3, "measurements": {"subject_separation": 81}}),
         ]
         self.assertEqual(treatment.best_round(rounds), 2)
 
     def test_a_tie_goes_to_the_round_that_heard_more_criticism(self):
         rounds = [
-            json.dumps({"round": 1, "measurements": {"subject_contrast": 88}}),
-            json.dumps({"round": 2, "measurements": {"subject_contrast": 88}}),
+            json.dumps({"round": 1, "measurements": {"subject_separation": 88}}),
+            json.dumps({"round": 2, "measurements": {"subject_separation": 88}}),
         ]
         self.assertEqual(treatment.best_round(rounds), 2)
 
@@ -475,19 +564,18 @@ class WarrantTests(unittest.TestCase):
 
     def report(self, rounds=2, renders=True) -> str:
         made = [json.dumps({
-            "round": n, "sections": "{}",
+            "round": n, "sections": "protect the core, reveal the skyline",
             "recipe": {"operations": [{"op": "tone.exposure", "value": -1.8}]},
             "unsupported": "",
             "render": f"round-{n}.jpg" if renders else "",
-            "measurements": {"subject_contrast": 70 + n, "clipped_percent": 0.2},
+            "measurements": {"subject_separation": 70 + n, "clipped_percent": 0.2},
             "critique": json.loads(critique(n == rounds)),
         }) for n in range(1, rounds + 1)]
         return treatment.treatment_report(
             "/where", "A.ARW",
             json.dumps({"photo": "A.ARW", "about": "an eclipse",
-                        "baseline": {"subject_contrast": 60}}),
-            "the sun is clipped beyond recovery", "protect the core",
-            "one mask and its inverse", made, treatment.best_round(made))
+                        "baseline": {"subject_separation": 60}}),
+            made, treatment.best_round(made))
 
     def test_a_finished_treatment_passes_its_own_checks(self):
         self.assertTrue(treatment.treatment_valid(self.report()))
@@ -495,9 +583,14 @@ class WarrantTests(unittest.TestCase):
     def test_a_treatment_that_never_rendered_does_not(self):
         self.assertFalse(treatment.treatment_valid(self.report(renders=False)))
 
+    def test_the_panel_is_shown_what_the_treatment_said_it_would_do(self):
+        """It was shown three empty strings, and refused -- correctly."""
+        warrant = treatment.treatment_evidence(self.report())
+        self.assertIn("protect the core, reveal the skyline", warrant)
+
     def test_the_panel_is_shown_the_plan_and_the_numbers_not_the_picture(self):
         warrant = treatment.treatment_evidence(self.report())
-        self.assertIn("subject_contrast", warrant)
+        self.assertIn("subject_separation", warrant)
         self.assertIn("protect the core", warrant)
         self.assertNotIn(".jpg", warrant)
 

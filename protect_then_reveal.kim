@@ -17,7 +17,6 @@
 
 param photos: text = "."
 param photo: text = ""
-param baseline: text = ""
 param output: text = "treatment.json"
 param spectrum: text = "visible"
 param cutoff_nm: num = 0
@@ -70,11 +69,16 @@ schema Critique:
 
 stamp := now_stamp()
 directory := treatment_directory(photos, photo, stamp)
-evidence := evidence_json(photo, baseline, spectrum, cutoff_nm, about)
 
--- The frame as it stands. Every question after this is asked about a
--- rendering the program made itself.
-start := observe image(baseline)
+-- The frame with nothing done to it, through the renderer every round
+-- will use. Anchoring the loop anywhere else -- an export from another
+-- pipeline, however good -- makes the two engines' disagreement look
+-- like damage the round did, and the critique spends the budget asking
+-- for a correction that was never the problem.
+origin := starting_frame(photos, photo, directory, proof_edge)
+evidence := evidence_json(photo, origin, spectrum, cutoff_nm, about)
+
+start := observe image(origin)
 check start.exists
 
 critique := ""
@@ -103,14 +107,14 @@ forall attempt in range(rounds):
             measured := measure_frame_json(render)
             proof := observe image(render)
             check proof.exists
-            critique := memo gen<Critique>(critique_prompt(evidence, plan, evidence, measured, round_number(records), rounds), images=[proof]) by B
+            critique := memo gen<Critique>(critique_prompt(evidence, plan, measured, round_number(records), rounds), images=[proof]) by B
             records := records + [round_record(directory, records, recipe, said(plan), render, measured, critique)]
         else:
             records := records + [round_record(directory, records, recipe, said(plan), "", "", "", plan)]
 
 check len(records) > 0
 chosen := best_round(records)
-report := treatment_report(directory, photo, evidence, "", "", "", records, chosen)
+report := treatment_report(directory, photo, evidence, records, chosen)
 check treatment_valid(report)
 warrant := treatment_evidence(report)
 

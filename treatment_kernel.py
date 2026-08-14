@@ -86,7 +86,7 @@ def measure_frame(path: str) -> dict[str, Any]:
     A model handed a JPEG can see that a photograph is dark. It cannot
     see that 22% of it is already at black, that a fifth of a percent is
     clipped past recovery, or that the brightest thing in the frame
-    stands 105 levels above what surrounds it. Those decide the
+    stands nine times clear of what surrounds it. Those decide the
     strategy, and they cost nothing.
     """
     with Image.open(str(path)) as opened:
@@ -117,6 +117,16 @@ def measure_frame(path: str) -> dict[str, Any]:
     unit = max(height, width) / 100.0
     core = grey[radius < 2.2 * unit]
     ring = grey[(radius > 5 * unit) & (radius < 9 * unit)]
+    # As a ratio, not a difference in levels. The difference is dominated
+    # by how bright the frame is overall: on one eclipse frame it scored
+    # the untouched render 126.5 and the best hand-graded version 110.4,
+    # so a loop optimising it would have learned to leave the veil alone.
+    # The ratio is what "stands out from its surroundings" means -- it
+    # holds still when the whole frame moves and only rises when the two
+    # separate. Scaled to 0-100 so it reads like the other percentages.
+    separation = (
+        float(core.mean() - ring.mean()) / max(float(core.mean() + ring.mean()), 1e-6) * 100
+        if core.size and ring.size else 0.0)
 
     hsv = np.asarray(image.convert("HSV"), dtype=np.float32)
     saturation = hsv[..., 1] / 255.0
@@ -130,8 +140,9 @@ def measure_frame(path: str) -> dict[str, Any]:
         "silhouette_percent": round(float((grey < 26).mean() * 100), 2),
         "veil_percent": round(float(((grey > 25) & (grey < 60)).mean() * 100), 2),
         "grain": round(float(np.abs(grey - smooth).mean()), 3),
-        "subject_contrast": round(
-            float(core.mean() - ring.mean()) if core.size and ring.size else 0.0, 1),
+        "subject_separation": round(separation, 1),
+        "subject_level": round(float(core.mean()) if core.size else 0.0, 1),
+        "surround_level": round(float(ring.mean()) if ring.size else 0.0, 1),
         "brightest_at": [round(float(xx / max(width - 1, 1)), 3),
                          round(float(yy / max(height - 1, 1)), 3)],
         "saturation_percent": round(float(saturation.mean() * 100), 1),
@@ -220,13 +231,14 @@ are not obvious:
   • A luma mask on the shadows selects the sky in a night frame, because
     the sky is the shadow. To reach the ground, use a linear gradient
     from the bottom.
-  • To make a clipped subject stand out, take the WHOLE FRAME DOWN
-    rather than lifting around it. A clipped core is far above white and
-    stays white however far you drop the exposure, while everything
-    around it darkens. Lifting instead raises the veil with the subject
-    and the separation is lost -- measured on one frame: subject
-    contrast 164.8 before, 52.6 after a lift, and it never recovered
-    across three rounds of trying."""
+  • Global exposure alone does not separate a subject from its
+    surround. It moves both. On one infrared frame, three rounds of
+    nothing but exposure -- down to -1.5 EV -- took subject contrast
+    from 60.6 to 39.3, worse than leaving the photograph alone. What
+    worked on the same frame, measured at 89.3: take the whole frame
+    down HARD, add contrast, then use one radial mask centred on the
+    subject and INVERTED, lifting everything except it. The pair is the
+    move; either half on its own loses."""
 
 _VOICE = (
     "You are developing one photograph, the way a professional would: by "
@@ -305,8 +317,11 @@ def mask_prompt(evidence_text: str, plan: Any, index: float, total: float,
     return "\n\n".join([
         _VOICE,
         f"MASK {int(index) + 1} OF {int(total)}. You said this photograph "
-        "needs its regions treated separately. Describe this one in "
-        "numbers.",
+        "needs its regions treated separately. Describe this one.",
+        "In 'region', NAME THE THING this mask is around, in the words a "
+        "photographer would use -- 'the solar crescent', 'the rooftop "
+        "and tree line'. Not a number. In 'purpose', say what it is for. "
+        "Everything else is numbers.",
         "shape: 'radial' for a region around a point; 'linear' for a "
         "gradient from an edge; 'luma' for a band of brightness.",
         "For a radial mask give centre_x and centre_y as percentages "
@@ -325,104 +340,11 @@ def mask_prompt(evidence_text: str, plan: Any, index: float, total: float,
     ])
 
 
-def strategy_prompt(evidence_text: str, diagnosis: str) -> str:
-    return "\n\n".join([
-        _VOICE,
-        "STEP 2 of 4 -- DECIDE. Given that diagnosis, say what must be "
-        "PROTECTED (left alone, because touching it can only cost) and what "
-        "must be REVEALED (worth spending the development on), in priority "
-        "order. Two or three of each at most; a photograph with six "
-        "priorities has none.",
-        f"YOUR DIAGNOSIS:\n{said(diagnosis)}",
-        _context(data(evidence_text) or {}),
-    ])
 
 
-def structure_prompt(evidence_text: str, strategy: str) -> str:
-    evidence = data(evidence_text) or {}
-    at = evidence["baseline"]["brightest_at"]
-    return "\n\n".join([
-        _VOICE,
-        "STEP 3 of 4 -- STRUCTURE. Two parts of a frame that need opposite "
-        "things need a mask between them. Say which regions this "
-        "photograph must be worked on separately, and therefore which "
-        "masks. Where something must be protected while everything around "
-        "it is revealed, that is one mask and its inverse.",
-        "The masks available, written as instructions:\n"
-        "  • Radial gradient on the sun, inverted, radius 18%, feather 90%\n"
-        "      -- finds the brightest region itself and centres on it; "
-        "'inverted' means everywhere except it\n"
-        "  • Linear gradient from the bottom, feather 60%  -- the ground, "
-        "not the sky\n"
-        "  • Luma mask on the shadows / midtones / highlights  -- by "
-        "brightness band\n"
-        "  • Colour range masks by colour family",
-        f"The brightest point sits at {at[0]:.2f} across and {at[1]:.2f} down.",
-        f"YOUR STRATEGY:\n{said(strategy)}",
-    ])
 
-
-# The grammar, stated once, because a recipe that does not compile is a
-# round of the budget spent on nothing.
-_GRAMMAR = """
-Write instructions in these sections. Only these compile; anything else
-is recorded as unsupported and does nothing.
-
-  global_exposure      Exposure +0.35 | Contrast +12 | Brightness -4 | Saturation -25
-  hdr_levels_curves    Highlights -20 | Shadows +8 | Whites +5 | Blacks -30
-  white_balance_and_color   Temperature +400 kelvin | Tint +4 | Neutralise
-  color_editor         Blue saturation +10 | Green lightness -6 |
-                       Monochrome mix: red 50, green 40, blue 10 |
-                       Swap red and blue channels
-  detail_and_noise     Clarity +8 | Structure +5 | Dehaze +10 |
-                       Sharpening amount 40 | Luminance noise reduction 60 |
-                       Color noise reduction 60
-  layers_and_masks     <mask description>, feather 80%: <effects>
-                       effects may be exposure, contrast, brightness,
-                       saturation, clarity, structure, highlight, temperature
-  finishing_and_output Vignette -10
-  composition          Crop to 4:3 | Rotate -0.5
-
-Return the recipe as a JSON object: section name to a list of
-instruction strings. Sections you have nothing to say about, leave out.
-
-Two things learned by rendering, which the numbers alone will not tell you:
-
-  • Contrast pivots at middle grey. On a subject sitting at seven
-    percent brightness, positive contrast drives it toward black. To
-    lift something dark, use exposure, which multiplies.
-  • A luma mask on the shadows selects the sky in a night frame,
-    because the sky is the shadow. To reach the ground, use a linear
-    gradient from the bottom.
-"""
-
-
-def recipe_prompt(evidence_text: str, strategy: str, structure: str,
-                  critique: str = "", previous: str = "") -> str:
-    parts = [
-        _VOICE,
-        "STEP 4 of 4 -- WRITE IT. Produce the instructions that carry out "
-        "the plan. Protect what you said to protect: do not apply "
-        "highlight recovery, exposure reduction or contrast to a region "
-        "you have called irrecoverable.",
-        f"YOUR STRATEGY:\n{said(strategy)}",
-        f"YOUR STRUCTURE:\n{said(structure)}",
-        _GRAMMAR,
-    ]
-    if previous:
-        parts.append(f"WHAT YOU WROTE LAST ROUND:\n{said(previous)}")
-    if critique:
-        parts.append(
-            "WHAT THE RENDER SHOWED, AND WHAT YOU SAID TO CHANGE:\n"
-            f"{said(critique)}\n\nRevise. Change what the critique named and "
-            "leave the rest alone -- a rewrite that moves everything "
-            "cannot be judged.")
-    parts.append(_context(data(evidence_text) or {}))
-    return "\n\n".join(parts)
-
-
-def critique_prompt(evidence_text: str, strategy: str, before: str,
-                    after: str, round_number: int, rounds: int) -> str:
+def critique_prompt(evidence_text: str, strategy: str, after: str,
+                    round_number: int, rounds: int) -> str:
     """Ask what the render actually did -- with the numbers beside it."""
     evidence = data(evidence_text) or {}
     subject = (f" It is an infrared frame at {evidence['cutoff_nm']:.0f}nm."
@@ -439,7 +361,8 @@ def critique_prompt(evidence_text: str, strategy: str, before: str,
         "not.",
         "Judge against your own strategy, not against a general idea of a "
         "good photograph:\n" + said(strategy),
-        "BEFORE:\n" + json.dumps(data(before) or {}, indent=2),
+        "BEFORE, the same frame with nothing done to it:\n"
+        + json.dumps(evidence.get("baseline") or {}, indent=2),
         "AFTER:\n" + json.dumps(data(after) or {}, indent=2),
     ])
 
@@ -625,15 +548,8 @@ def unsupported_note(recipe_text: str) -> str:  # noqa: D401
 
 # --- rendering the attempt, which is the point ---------------------------
 
-def render_round(photos: str, photo: str, recipe_text: str, directory: str,
-                 records: list[str], maximum: float = 1400) -> str:
-    """Render one round's recipe and file the picture beside its round.
-
-    This is what makes the program a development rather than a
-    suggestion: the next question is asked of the answer to the last
-    one. Rendered at proof size, because the loop pays for it several
-    times and nothing here is judged on resolution.
-    """
+def _render(photos: str, photo: str, recipe_text: str, maximum: float) -> str:
+    """Put one recipe through the renderer the photographer's exports use."""
     from opencull_gui.development import DevelopmentWorkspace
     from opencull_gui.project import (
         ensure_project_layout,
@@ -657,10 +573,45 @@ def render_round(photos: str, photo: str, recipe_text: str, directory: str,
         project_path, layout,
         RawSourceStore(
             layout["Reports"] / f"{report.path.stem}.raw-source.json", report))
-    rendered = workspace.render_prepared(
+    return workspace.render_prepared(
         str(photo), data(recipe_text) or {}, int(maximum))
+
+
+def render_round(photos: str, photo: str, recipe_text: str, directory: str,
+                 records: list[str], maximum: float = 1400) -> str:
+    """Render one round's recipe and file the picture beside its round.
+
+    This is what makes the program a development rather than a
+    suggestion: the next question is asked of the answer to the last
+    one. Rendered at proof size, because the loop pays for it several
+    times and nothing here is judged on resolution.
+    """
     destination = Path(str(directory)) / f"round-{round_number(records)}.jpg"
-    destination.write_bytes(Path(rendered).read_bytes())
+    destination.write_bytes(
+        Path(_render(photos, photo, recipe_text, maximum)).read_bytes())
+    return str(destination)
+
+
+def starting_frame(photos: str, photo: str, directory: str,
+                   maximum: float = 1400) -> str:
+    """The frame with nothing done to it, through this same renderer.
+
+    Every round is a change to THIS, so this is what a round has to be
+    measured against. An earlier version anchored the loop to an export
+    made by a different pipeline; the two disagreed by about two stops
+    at rest, so each critique read the pipelines' difference as damage
+    the round had done and asked for more of the correction that was
+    already failing. Three rounds went the wrong way and the panel
+    refused the lot. It is also the honest "before" to keep on disk.
+    """
+    destination = Path(str(directory)) / "start.jpg"
+    untouched = json.dumps({
+        "format": "opencull-development-recipe-v1",
+        "source_photo": str(photo),
+        "operations": [],
+    })
+    destination.write_bytes(
+        Path(_render(photos, photo, untouched, maximum)).read_bytes())
     return str(destination)
 
 
@@ -849,21 +800,25 @@ def round_record(directory: str, records: list[str], recipe_text: str,
 
 
 def treatment_report(directory: str, photo: str, evidence_text: str,
-                     diagnosis: str, strategy: str, structure: str,
                      rounds: list[str], chosen: int) -> str:
-    """The finished treatment: the reasoning, every round, and the choice."""
+    """The finished treatment: the reasoning, every round, and the choice.
+
+    The reasoning is the plan of the round being offered, not a separate
+    thing recorded once at the top. An earlier shape kept three sections
+    from a question chain that no longer exists, and shipped them empty
+    -- so the panel was asked to warrant that the treatment did what it
+    said while being shown nothing it had said, and refused.
+    """
     kept = [data(item) or {} for item in rounds]
+    leading = next((item for item in kept
+                    if int(item.get("round", 0)) == int(chosen)), {})
     return json.dumps({
         "format": TREATMENT_FORMAT,
         "strategy": STRATEGY,
         "photo": str(photo),
         "created_at": datetime.now(UTC).isoformat(),
         "evidence": data(evidence_text) or {},
-        "reasoning": {
-            "diagnosis": said(diagnosis),
-            "strategy": said(strategy),
-            "structure": said(structure),
-        },
+        "reasoning": str(leading.get("sections", "")),
         "rounds": kept,
         "chosen_round": int(chosen),
         "directory": str(directory),
@@ -873,7 +828,7 @@ def treatment_report(directory: str, photo: str, evidence_text: str,
     }, indent=2, sort_keys=True)
 
 
-def best_round(rounds: list[str], target: str = "subject_contrast") -> int:
+def best_round(rounds: list[str], target: str = "subject_separation") -> int:
     """Which round to offer first.
 
     The critique decides when to stop; this decides which of the kept
@@ -941,8 +896,8 @@ def treatment_evidence(report_text: str) -> str:
                 {"round": item.get("round"),
                  "operations": len((item.get("recipe") or {}).get("operations", [])),
                  "unsupported": item.get("unsupported", ""),
-                 "subject_contrast": (item.get("measurements") or {}).get(
-                     "subject_contrast"),
+                 "subject_separation": (item.get("measurements") or {}).get(
+                     "subject_separation"),
                  "clipped_percent": (item.get("measurements") or {}).get(
                      "clipped_percent"),
                  "critique": (item.get("critique") or {}).get("next_change", ""),
