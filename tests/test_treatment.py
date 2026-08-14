@@ -624,6 +624,45 @@ class WhatThePanelIsAskedTests(unittest.TestCase):
         self.assertLessEqual(policy.count(";"), 1)
 
 
+class UnculledFolderTests(unittest.TestCase):
+    """Developing one frame must not require having culled its folder.
+
+    The renderer wanted the folder's cull report, so a folder of 300
+    raws that nobody had culled could not be treated at all -- and
+    culling 300 frames to develop one is not a thing to make somebody
+    pay for.
+    """
+
+    def setUp(self):
+        self._temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self._temporary.name)
+        self.addCleanup(self._temporary.cleanup)
+        (self.root / "DSCF1221.RAF").write_bytes(b"not really a raw")
+        self.layout = {"Reports": self.root / ".darkimiya" / "Reports"}
+        self.layout["Reports"].mkdir(parents=True)
+
+    def test_a_folder_with_no_cull_still_names_its_photograph(self):
+        roster = treatment._roster(self.root, self.layout, "DSCF1221.RAF")
+        self.assertEqual(roster.photo_names, ("DSCF1221.RAF",))
+
+    def test_the_roster_is_never_written_to_the_photographers_folder(self):
+        treatment._roster(self.root, self.layout, "DSCF1221.RAF")
+        self.assertEqual(list(self.layout["Reports"].glob("*")), [])
+
+    def test_a_photograph_that_is_not_there_is_refused(self):
+        with self.assertRaises(ValueError):
+            treatment._roster(self.root, self.layout, "MISSING.RAF")
+
+    def test_a_real_cull_is_preferred_where_there_is_one(self):
+        report = self.layout["Reports"] / "shoot-results.json"
+        report.write_text(json.dumps({
+            "format": "opencull-report-v2",
+            "clusters": [{"cluster_id": "c1", "photos": ["DSCF1221.RAF"]}],
+            "keep": [{"cluster_id": "c1", "photos": ["DSCF1221.RAF"]}]}))
+        roster = treatment._roster(self.root, self.layout, "DSCF1221.RAF")
+        self.assertEqual(roster.path, report)
+
+
 class ContactSheetTests(unittest.TestCase):
     """Every round on one sheet, so the argument can be looked at."""
 

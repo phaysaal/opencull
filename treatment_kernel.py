@@ -626,6 +626,32 @@ def unsupported_note(recipe_text: str) -> str:  # noqa: D401
 
 # --- rendering the attempt, which is the point ---------------------------
 
+def _roster(root: Path, layout: dict[str, Path], photo: str) -> Any:
+    """Which photographs this folder holds, for the renderer to work from.
+
+    The folder's own cull where there is one. Where there is not, a
+    roster of the one frame being treated, held in memory and never
+    written: developing a photograph should not require having culled
+    its folder first, and a folder of 300 raws that nobody has culled is
+    the ordinary case for "treat this frame". The workspace wants a
+    roster only to know the name exists; it resolves a raw by falling
+    back to the photograph in the folder, which for a raw folder is the
+    photograph itself.
+    """
+    from opencull_gui.report import ReportIndex, load_report
+
+    found = sorted(layout["Reports"].glob("*-results.json"))
+    if found:
+        return load_report(found[-1])
+    name = Path(str(photo)).name
+    if not (root / name).is_file():
+        raise ValueError(f"no such photograph in {root}: {name}")
+    return ReportIndex(
+        path=layout["Reports"] / f"{root.name}-results.json",
+        sha256="", data={}, cluster_by_id={}, decision_by_id={},
+        photo_names=(name,))
+
+
 def _render(photos: str, photo: str, recipe_text: str, maximum: float) -> str:
     """Put one recipe through the renderer the photographer's exports use."""
     from opencull_gui.development import DevelopmentWorkspace
@@ -634,16 +660,10 @@ def _render(photos: str, photo: str, recipe_text: str, maximum: float) -> str:
         load_or_create_folder_project,
     )
     from opencull_gui.raw_sources import RawSourceStore
-    from opencull_gui.report import load_report
 
     root = Path(str(photos)).expanduser().resolve()
     layout = ensure_project_layout(root)
-    # The folder's own cull, which is what pairs a frame with its raw and
-    # tells the workspace what it is looking at.
-    reports = sorted(layout["Reports"].glob("*-results.json"))
-    if not reports:
-        raise ValueError(f"no culling report under {layout['Reports']}")
-    report = load_report(reports[-1])
+    report = _roster(root, layout, photo)
     project_path, _ = load_or_create_folder_project(
         root, report.path.stem,
         report.path.with_suffix(".opencull-project.json"))
@@ -1017,13 +1037,18 @@ def treatment_valid(report_text: str) -> bool:
     # true or false by inspection, and a model asked to certify them can
     # only add noise. What is left for the panel is the photographic
     # judgement, which is the part a program cannot check.
-    scored = [(int(item.get("round", 0)),
-               (item.get("measurements") or {}).get("subject_separation"))
-              for item in rounds if item.get("render")]
-    if any(value is None for _, value in scored):
+    scored = []
+    for item in rounds:
+        if not item.get("render"):
+            continue
+        measured = (item.get("measurements") or {}).get("subject_separation")
+        if not isinstance(measured, (int, float)):
+            return False
+        scored.append((int(item.get("round", 0)), float(measured)))
+    if not scored:
         return False
     chosen = int(report.get("chosen_round", 0))
-    return bool(scored) and chosen == max(scored, key=lambda pair: pair[1])[0]
+    return chosen == max(scored, key=lambda pair: pair[1])[0]
 
 
 def treatment_evidence(report_text: str) -> str:
