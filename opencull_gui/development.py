@@ -571,7 +571,11 @@ class DevelopmentWorkspace:
                 str(entry.get(f"{style}_intent", "")), recipe_value,
                 str(entry.get("guardrails", "")), source_kind)
         return {"recipe": recipe, "source": source, "reference": reference,
-                "source_kind": source_kind}
+                "source_kind": source_kind,
+                # What this treatment is a departure from. Almost always
+                # the raw; a preset may say the camera's own rendering
+                # instead, where that is the better photograph to correct.
+                "base": str((preset or {}).get("base") or "raw")}
 
 
     def _native_decode(
@@ -650,10 +654,26 @@ class DevelopmentWorkspace:
             frame.save(smaller, "JPEG", quality=95, icc_profile=srgb_profile())
         return smaller
 
+    def render_prepared(
+        self, photo: str, recipe: dict, maximum: int,
+        engine: str = "darktable", demosaic: str = "markesteijn-3-pass",
+    ) -> Path:
+        """Render a recipe nobody has registered as a treatment.
+
+        A treatment normally comes from an edit direction or a preset,
+        and is asked for by name. A treatment program writes its own and
+        needs to see it rendered before deciding what to write next --
+        several times, changing it each round. Filed under the recipe
+        like every other proof, so a round is never confused with the
+        round before it.
+        """
+        return self.recipe_preview(
+            photo, "calibrated", engine, demosaic, maximum, recipe=recipe)
+
     def recipe_preview(
         self, photo: str, style: str, engine: str, demosaic: str,
         maximum: int, adjustments: dict | None = None,
-        progress: Any = None,
+        progress: Any = None, recipe: dict | None = None,
     ) -> Path:
         """Render one bounded local proof without registering an export artifact.
 
@@ -669,7 +689,10 @@ class DevelopmentWorkspace:
             # A proof of it is the same picture, smaller.
             return self._as_shot_preview(photo, maximum)
         prepared = self._prepare(photo, style, engine)
-        recipe = prepared["recipe"]
+        # A caller may supply the recipe outright -- a treatment program
+        # writing its own. The frame, its source and its base still come
+        # from the workspace; only what is executed is theirs.
+        recipe = recipe if recipe is not None else prepared["recipe"]
         source = prepared["source"]
         reference = prepared["reference"]
         source_kind = prepared["source_kind"]
@@ -693,6 +716,9 @@ class DevelopmentWorkspace:
             # rendered frame would go on showing the old base -- which is
             # how three earlier renderer fixes stayed invisible.
             "spectrum": self.spectrum(),
+            # Developing from the camera's rendering is a different
+            # photograph from developing the raw, so it is filed apart.
+            "base": prepared["base"],
         }, sort_keys=True).encode()).hexdigest()[:24]
         destination = self.project_layout["Previews"] / "DevelopRecipes" / (
             f"{Path(photo).stem}.{style}.{engine}.{identity}.jpg")
@@ -716,7 +742,14 @@ class DevelopmentWorkspace:
             small_reference = work / "reference.jpg"
             small.save(small_reference, "JPEG", quality=94,
                        icc_profile=srgb_profile())
-            if engine == "darktable":
+            if prepared["base"] == "camera":
+                # The camera's own rendering, corrected rather than
+                # replaced: its highlight rolloff is steeper than any
+                # decode here produces, and on an infrared frame that is
+                # the difference between a crescent and a white mass.
+                baseline = self._from_display(small_reference, work)
+                calibration_reference = None
+            elif engine == "darktable":
                 baseline = self._from_display(
                     self._native_decode(
                         source, source_stat, maximum, demosaic, work),

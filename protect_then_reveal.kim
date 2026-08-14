@@ -1,0 +1,133 @@
+-- Protect then reveal: one photograph, developed in steps.
+--
+-- Not a suggestion. The program writes a recipe, renders it, measures
+-- what it did, looks at its own result, and revises -- within a budget,
+-- because a photographer does not give one frame infinite time. Every
+-- round is written to disk before the next one starts: as evidence that
+-- the process did what it claims, and because round two is sometimes the
+-- better photograph.
+--
+-- The method is the darkroom's, and Adams' after it: decide first what
+-- cannot be saved, refuse to spend the print trying, and do the work
+-- everywhere else.
+--
+-- The loop stops two ways. The critique says the treatment is finished,
+-- which is the cheap and usual one; or the budget runs out, which is
+-- there for the frame where it never is.
+
+param photos: text = "."
+param photo: text = ""
+param baseline: text = ""
+param output: text = "treatment.json"
+param spectrum: text = "visible"
+param cutoff_nm: num = 0
+param about: text = ""
+param rounds: num = 3
+param proof_edge: num = 1400
+
+use "agents.kim"
+use python "treatment_kernel.py"
+
+context k_treatment:
+    domain = "professional photographic development by staged reasoning"
+    preserve = [subject_identity, irrecoverable_facts, stated_strategy, measured_evidence]
+    allow_loss = [wording, slider_precision]
+
+schema Diagnosis:
+    subject: text
+    condition: text
+    irrecoverable: text
+    confidence: num
+
+schema Strategy:
+    protect: text
+    reveal: text
+    order: text
+    rationale: text
+
+schema Structure:
+    regions: text
+    masks: text
+    rationale: text
+
+schema TreatmentRecipe:
+    title: text
+    intent: text
+    -- The instructions themselves, as a JSON object: section name to a
+    -- list of instruction lines. Carried as text the way edit directions
+    -- are, because that is what the compiler reads.
+    recipe: text
+
+schema Critique:
+    improved: text
+    regressed: text
+    next_change: text
+    finished: bool
+    rationale: text
+
+stamp := now_stamp()
+directory := treatment_directory(photos, photo, stamp)
+evidence := evidence_json(photo, baseline, spectrum, cutoff_nm, about)
+
+-- The frame as it stands. Every question after this is asked about a
+-- rendering the program made itself.
+start := observe image(baseline)
+check start.exists
+
+-- 1. Diagnose: what this is, and what about it cannot be recovered.
+diagnosis := memo gen<Diagnosis>(diagnosis_prompt(evidence), images=[start]) by A
+check len(diagnosis.irrecoverable) > 0
+act file.overwrite(directory + "/diagnosis.json", diagnosis)
+
+-- 2. Decide what to protect and what to reveal, in order.
+strategy := memo gen<Strategy>(strategy_prompt(evidence, diagnosis), images=[start]) by A
+check len(strategy.protect) > 0
+act file.overwrite(directory + "/strategy.json", strategy)
+
+-- 3. Two parts of a frame needing opposite things need a mask between
+--    them. Which regions, and therefore which masks.
+structure := memo gen<Structure>(structure_prompt(evidence, strategy), images=[start]) by A
+check len(structure.masks) > 0
+act file.overwrite(directory + "/structure.json", structure)
+
+-- 4..7. Write it, render it, measure it, look at it, revise. The guard
+--       carries the budget and the critique's own verdict, so a
+--       treatment that is finished in one round costs one round.
+records := []
+forall attempt in range(rounds):
+    if check keep_going(records, rounds):
+        answer := memo gen<TreatmentRecipe>(recipe_prompt(evidence, strategy, structure, latest_critique(records), latest_sections(records)), images=[start]) by A
+        sections := recipe_sections(answer.recipe)
+        recipe := compiled_treatment(photo, answer.title, answer.intent, sections)
+        if check treatment_usable(recipe):
+            render := render_round(photos, photo, recipe, directory, records, proof_edge)
+            measured := measure_frame_json(render)
+            proof := observe image(render)
+            check proof.exists
+            critique := memo gen<Critique>(critique_prompt(evidence, strategy, evidence, measured, round_number(records), rounds), images=[proof]) by B
+            records := records + [round_record(directory, records, recipe, sections, render, measured, critique)]
+        else:
+            -- Nothing in it would have happened. Kept anyway, so the next
+            -- round is told what failed to compile rather than repeating it.
+            records := records + [round_record(directory, records, recipe, sections)]
+
+check len(records) > 0
+chosen := best_round(records)
+report := treatment_report(directory, photo, evidence, diagnosis, strategy, structure, records, chosen)
+check treatment_valid(report)
+warrant := treatment_evidence(report)
+
+-- The rounds are already on disk; what is warranted here is the finished
+-- treatment: that it did what it said it would, protected what it said
+-- was irrecoverable, and is offering the round it measured best.
+if memo judge<5,4/5> (warrant |= treatment_policy(evidence)) under k_treatment panel [C, D]:
+    act file.overwrite(output, report)
+    settle until check file_exists(output) within 5
+    commit(report)
+else:
+    -- An abstention keeps its evidence, and the rounds stay on disk: the
+    -- work is still there to look at even when nobody will vouch for it.
+    refusal := treatment_abstention(warrant)
+    check len(refusal) > 0
+    act file.overwrite(output + ".abstained.txt", refusal)
+    abstain

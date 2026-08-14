@@ -7,6 +7,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
@@ -578,8 +579,41 @@ def _spatial_mask(rgb: np.ndarray, shape: str, value: dict[str, Any]) -> np.ndar
             return xx
         return 1 - yy
     if shape == "radial":
-        distance = np.sqrt((xx - 0.5) ** 2 + (yy - 0.5) ** 2) / 0.7072
-        return np.clip(1 - distance, 0, 1)
+        centre_x, centre_y, reach = 0.5, 0.5, 0.7072
+        if "bright" in anchor or "sun" in anchor:
+            # Anchored to the light rather than to the frame. A shoot
+            # follows its subject around the picture -- the sun is in a
+            # different place in all eight of these -- so a mask pinned
+            # to the middle is a mask for one photograph.
+            lum = (rgb * np.array([0.2126, 0.7152, 0.0722])).sum(axis=2)
+            # Half the brightest thing in the frame, not a percentile: a
+            # sun is a handful of pixels in a dark sky, and any
+            # percentile wide enough to be robust is wide enough to
+            # select the sky as well -- which centres the mask on the
+            # middle of the frame and quietly does nothing.
+            found = np.nonzero(lum >= 0.5 * float(lum.max()))
+            if found[0].size:
+                centre_y = float(found[0].mean()) / max(height - 1, 1)
+                centre_x = float(found[1].mean()) / max(width - 1, 1)
+                # As wide as the bright part itself, unless told otherwise.
+                spread = max(
+                    float(np.std(found[0])) / max(height - 1, 1),
+                    float(np.std(found[1])) / max(width - 1, 1))
+                reach = max(spread * 4.0, 0.04)
+        stated = re.search(r"(?i)radius\s*(\d+(?:\.\d+)?)\s*%", anchor)
+        if stated:
+            reach = max(float(stated.group(1)) / 100.0, 0.01)
+        # Circular on the photograph, not on the unit square.
+        aspect = width / max(height, 1)
+        distance = np.sqrt(
+            ((xx - centre_x) * aspect) ** 2 + (yy - centre_y) ** 2) / reach
+        mask = np.clip(1 - distance, 0, 1)
+        # Smoothstep: no visible edge where the mask runs out, which is
+        # the whole difference between a local adjustment and a halo.
+        mask = mask * mask * (3.0 - 2.0 * mask)
+        if "invert" in anchor or "outside" in anchor or "except" in anchor:
+            return 1.0 - mask
+        return mask
     if shape == "luma":
         lum = (rgb * np.array([0.2126, 0.7152, 0.0722])).sum(axis=2)
         if "midtone" in anchor or "mid tone" in anchor or "middle" in anchor:

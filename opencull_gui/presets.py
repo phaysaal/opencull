@@ -287,6 +287,28 @@ BUILT_IN: tuple[dict[str, Any], ...] = (
         },
     },
     {
+        "slug": "infrared-as-shot-corrected",
+        "name": "Infrared · as shot, corrected",
+        "base": "camera",
+        "intent": "The camera's own infrared rendering with the one thing "
+                  "wrong with it put right. Measured on a 760nm frame the "
+                  "hue is already coherent -- 232 degrees, with four fifths "
+                  "of the frame inside a sixteen-degree band -- so there is "
+                  "no cast to correct and no temperature to hunt. What is "
+                  "wrong is that the sun is blue: a light source that bright "
+                  "should read white, and at 27% saturation it does not. "
+                  "The highlights are taken to neutral so the sun goes white "
+                  "and the glow cools into the blue, and the whole frame "
+                  "loses a quarter of its colour, which was loud rather "
+                  "than deliberate.",
+        "instructions": {
+            "global_exposure": ["Saturation -25"],
+            "layers_and_masks": [
+                "Luma mask on the highlights: saturation -85",
+            ],
+        },
+    },
+    {
         "slug": "infrared-760-blue-violet",
         "name": "Infrared · 760nm blue-violet",
         "intent": "The false-colour reading of the same frame, kept "
@@ -395,6 +417,14 @@ def built_in() -> list[dict[str, Any]]:
             "name": item["name"],
             "intent": item["intent"],
             "origin": "built-in",
+            # Almost every look is developed from the raw, which is the
+            # point of having a raw. One is not: where the camera's own
+            # rendering is the better starting point -- a steeper
+            # highlight rolloff and its own noise reduction, both of
+            # which an infrared frame benefits from -- a preset can say
+            # so, and then it is correcting a photograph rather than
+            # developing a negative.
+            "base": str(item.get("base") or "raw"),
             "instructions": item["instructions"],
             "operations": _compiled(
                 item["slug"], item["name"], item["intent"],
