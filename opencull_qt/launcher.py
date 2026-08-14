@@ -1772,6 +1772,7 @@ class Launcher(QMainWindow):
         page.treatment_wanted.connect(
             lambda photo, rounds: self.treat_frame(
                 bench.workspace, photo, rounds))
+        page.finetune_wanted.connect(self.open_finetune)
         return page
 
     def _finetune_page(self, bench: Bench):
@@ -2028,6 +2029,20 @@ class Launcher(QMainWindow):
         # So the phase turns into its progress page now rather than at the
         # next tick of the clock.
         self.refresh()
+
+    def open_finetune(self, photo: str, treatment: str) -> None:
+        """From the develop page into the same treatment's controls."""
+        shell = self.review_page
+        if not isinstance(shell, ProjectShell):
+            return
+        if not shell.open_phase(phases.FINE_TUNING):
+            self._say("Fine-tuning is not available for this folder yet.",
+                      "alarm")
+            return
+        page = shell.page_for(phases.FINE_TUNING)
+        if isinstance(page, FineTunePage):
+            page.show_photo(photo)
+            page.show_treatment(treatment)
 
     def treat_frame(self, workspace, photo: str, rounds: int) -> None:
         """Queue a Kimiya Treatment: one frame, developed in rounds."""

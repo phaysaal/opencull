@@ -755,6 +755,7 @@ class DevelopPage(QWidget):
     verification_wanted = Signal(dict)
     why_wanted = Signal(str)        # the frame whose story is asked for
     treatment_wanted = Signal(str, int)   # photo, rounds of budget
+    finetune_wanted = Signal(str, str)    # photo, treatment to open on
 
     def __init__(self, report, workspace: DevelopmentWorkspace,
                  loader: PreviewLoader, parent: QWidget | None = None):
@@ -1074,12 +1075,20 @@ class DevelopPage(QWidget):
         layout.addWidget(self.sweep_note)
         layout.addStretch(1)
 
-        self.develop_button = QPushButton("Develop this frame")
-        self.develop_button.setObjectName("primary")
-        self.develop_button.setFont(theme.body(10))
-        self.develop_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.develop_button.clicked.connect(self.develop_current)
-        layout.addWidget(self.develop_button)
+        # Clicking a treatment already develops it into the comparison,
+        # so a primary button that does the same again was a light that
+        # said "important" and a switch that did nothing new. The primary
+        # action from here is to go deeper into the chosen treatment.
+        self.finetune_button = QPushButton("Advanced fine-tune…")
+        self.finetune_button.setObjectName("primary")
+        self.finetune_button.setFont(theme.body(10))
+        self.finetune_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.finetune_button.setToolTip(tooltip(
+            "Open this treatment's recipe as controls: move what it "
+            "asked for, switch operations off, and keep the result as "
+            "your own preset."))
+        self.finetune_button.clicked.connect(self.finetune_current)
+        layout.addWidget(self.finetune_button)
 
         self.export_button = QPushButton("Export…")
         self.export_button.setObjectName("ghost")
@@ -1320,7 +1329,7 @@ class DevelopPage(QWidget):
             self.treatment = ""
             self.intent.setText(
                 "This photograph has no treatment available.")
-            self.develop_button.setEnabled(False)
+            self.finetune_button.setEnabled(False)
 
     def _treatment_row(self, item: dict) -> QListWidgetItem:
         if (item.get("kind") == "round"
@@ -1538,7 +1547,7 @@ class DevelopPage(QWidget):
         # The intent's height just changed; the list's ceiling is what
         # the panel can spare after it, so it must be asked again.
         self._size_treatments()
-        self.develop_button.setEnabled(True)
+        self.finetune_button.setEnabled(True)
         self.engine_note.setText(self._engine_note())
         if chosen.get("kind") == "preset":
             # Its picture was not swept for, so it is asked for now --
@@ -1626,6 +1635,12 @@ class DevelopPage(QWidget):
         return str((self.workspace.payload().get("rendering") or {}).get(
             "demosaic") or "markesteijn-3-pass")
 
+    def finetune_current(self) -> None:
+        """Go deeper into the chosen treatment: its recipe as controls."""
+        if not self.current or not self.treatment:
+            return
+        self.finetune_wanted.emit(self.current, self.treatment)
+
     def develop_current(self, arriving: bool = False) -> None:
         if not self.current or not self.treatment:
             return
@@ -1633,7 +1648,6 @@ class DevelopPage(QWidget):
         if (self.current, self.treatment) in self.rendered:
             self._show_treated(arriving=arriving)
             return
-        self.develop_button.setEnabled(False)
         self._report(f"Developing {self.current}. This takes a moment.")
         self.renderer.render(
             self.current, self.treatment, self.engine_for(self.current),
@@ -1695,7 +1709,7 @@ class DevelopPage(QWidget):
 
     def _rendered(self, photo: str, treatment: str, pixmap) -> None:
         self.rendered[(photo, treatment)] = pixmap
-        self.develop_button.setEnabled(True)
+        self.finetune_button.setEnabled(True)
         if photo == self.current and treatment == self.treatment:
             self.stage.set_treated(
                 pixmap, self._treatment_name(),
@@ -1706,7 +1720,7 @@ class DevelopPage(QWidget):
                 "itself is unchanged.", "ok")
 
     def _render_failed(self, photo: str, reason: str) -> None:
-        self.develop_button.setEnabled(True)
+        self.finetune_button.setEnabled(True)
         if photo == self.current:
             self._report(reason, "alarm")
 

@@ -457,6 +457,64 @@ class TreatmentRoundsTests(unittest.TestCase):
              if item["kind"] == "round"], [])
 
 
+class FinetuneDoorTests(unittest.TestCase):
+    """The primary action goes deeper, not sideways.
+
+    Clicking a treatment already develops it into the comparison, so
+    "Develop this frame" was a primary-coloured button that did nothing
+    new. Its place goes to the door into the treatment's own controls.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.application = QApplication.instance() or QApplication([])
+
+    def setUp(self):
+        self._temporary = tempfile.TemporaryDirectory()
+        root = Path(self._temporary.name)
+        self.report_path, self.photos_path = build_shoot(root)
+        self.report = load_report(self.report_path)
+        self.photos = PhotoStore(self.photos_path, root / "cache")
+        self.addCleanup(self._temporary.cleanup)
+
+    def page(self):
+        from opencull_qt.develop import DevelopPage, workspace_for
+        from opencull_qt.previews import PreviewLoader
+
+        loader = PreviewLoader(self.photos)
+        page = DevelopPage(
+            self.report,
+            workspace_for(self.report, self.photos.root, decoders=set()),
+            loader)
+        page.resize(900, 600)
+        page.show()
+        self.addCleanup(page.shutdown)
+        self.addCleanup(loader.shutdown)
+        self.addCleanup(page.deleteLater)
+        return page
+
+    def test_the_primary_button_opens_the_controls(self):
+        page = self.page()
+        heard = []
+        page.finetune_wanted.connect(
+            lambda photo, treatment: heard.append((photo, treatment)))
+        self.assertEqual(page.finetune_button.text(), "Advanced fine-tune…")
+        page.finetune_button.click()
+        self.assertEqual(heard, [(page.current, page.treatment)])
+
+    def test_there_is_no_develop_this_frame_button_left(self):
+        page = self.page()
+        self.assertFalse(hasattr(page, "develop_button"))
+
+    def test_clicking_a_treatment_still_develops_it(self):
+        """The behaviour the button duplicated survives it."""
+        page = self.page()
+        asked = []
+        page.renderer.render = lambda *a, **k: asked.append(a)
+        page.develop_current(arriving=True)
+        self.assertEqual(len(asked), 1)
+
+
 class TreatmentMarkerTests(unittest.TestCase):
     """The page says a frame is being treated, and notices the arrival."""
 
@@ -499,7 +557,7 @@ class TreatmentMarkerTests(unittest.TestCase):
         self.assertEqual(positions[page.treat_button],
                          positions[page.treatments] + 1)
         self.assertLess(positions[page.treat_button],
-                        positions[page.develop_button])
+                        positions[page.finetune_button])
 
     def test_a_running_treatment_marks_the_frame_and_holds_the_button(self):
         page = self.page()
@@ -1019,7 +1077,7 @@ class DevelopPageTests(unittest.TestCase):
                    for row in range(page.treatments.count()))
         self.assertLessEqual(page.treatments.height(), rows + 10)
 
-    def test_a_short_window_still_leaves_the_develop_button_reachable(self):
+    def test_a_short_window_still_leaves_the_primary_button_reachable(self):
         page = self.page()
         page.resize(1280, 620)
         page.show()
@@ -1027,7 +1085,7 @@ class DevelopPageTests(unittest.TestCase):
         self.application.processEvents()
         self.assertLess(page.treatments.height(), page.height())
         self.assertGreater(
-            page.develop_button.visibleRegion().boundingRect().height(), 0,
+            page.finetune_button.visibleRegion().boundingRect().height(), 0,
             "the develop button was pushed out of a short window")
 
     def test_opening_the_presets_does_not_push_the_page_off_the_window(self):
@@ -1045,7 +1103,7 @@ class DevelopPageTests(unittest.TestCase):
         self.application.processEvents()
         self.assertLess(page.treatments.height(), page.height())
         self.assertGreater(
-            page.develop_button.visibleRegion().boundingRect().height(), 0,
+            page.finetune_button.visibleRegion().boundingRect().height(), 0,
             "the develop button was pushed out of the window")
 
     def test_no_preset_is_rendered_before_anybody_asks_for_one(self):
@@ -1453,7 +1511,7 @@ class DevelopPageTests(unittest.TestCase):
         self.assertEqual(
             [item["id"] for item in written(page.available)],
             ["calibrated", "as-shot"])
-        self.assertTrue(page.develop_button.isEnabled())
+        self.assertTrue(page.finetune_button.isEnabled())
 
     def test_nothing_is_rendered_until_it_is_asked_for(self):
         page = self.page()
@@ -1712,7 +1770,7 @@ class DevelopPageTests(unittest.TestCase):
     def test_a_failed_render_says_why_and_leaves_the_button_usable(self):
         page = self.page()
         page._render_failed("A.JPG", "the reference photograph is unavailable")
-        self.assertTrue(page.develop_button.isEnabled())
+        self.assertTrue(page.finetune_button.isEnabled())
         self.assertIn("unavailable", page.status.text())
         self.assertEqual(page.status.property("tone"), "alarm")
 
