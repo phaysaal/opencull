@@ -1,0 +1,52 @@
+-- Where the sliders' advice bands sit, for one photograph.
+--
+-- The fine-tune page paints every slider in three bands -- safe,
+-- artistic, damage -- from professional defaults that are right on
+-- average and wrong in particular. This program asks one model, once,
+-- looking at this frame rendered untouched and measured, to place the
+-- bands for THIS photograph, and writes them beside the recipes where
+-- the page already looks. Advice, not walls: the page lets the
+-- photographer travel the compiler's whole range regardless, which is
+-- why one call and a light panel are enough.
+
+param photos: text = "."
+param photo: text = ""
+param output: text = "control-zones.json"
+param spectrum: text = "visible"
+param cutoff_nm: num = 0
+param about: text = ""
+param proof_edge: num = 1100
+
+use "agents.kim"
+use python "zones_kernel.py"
+
+context k_zones:
+    domain = "professional retouching judgement about one photograph"
+    preserve = [measured_evidence, executable_bounds, frame_specificity]
+    allow_loss = [wording, band_precision]
+
+schema Zones:
+    -- Control name to {"safe": [low, high], "artistic": [low, high]},
+    -- as JSON. Omitted controls keep their defaults.
+    zones: text
+    rationale: text
+
+proof := zones_proof(photos, photo, proof_edge)
+frame := observe image(proof)
+check frame.exists
+evidence := zones_evidence(photo, proof, spectrum, cutoff_nm, about)
+
+answer := memo gen<Zones>(zones_prompt(evidence), images=[frame]) by A
+file := zones_file(photo, answer)
+check zones_valid(file)
+
+-- A light panel, because the stakes are advisory: what is warranted is
+-- that a working retoucher could sign these bands for this frame's
+-- measured state -- not that they are the only right ones.
+warrant := zones_warrant(evidence, file)
+if memo judge<3,2/3> (warrant |= zones_policy()) under k_zones panel [C, D]:
+    act file.overwrite(output, file)
+    settle until check file_exists(output) within 5
+    commit(file)
+else:
+    abstain

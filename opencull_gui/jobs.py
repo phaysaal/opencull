@@ -97,6 +97,15 @@ def kimiya_arguments(job: dict[str, Any]) -> tuple[str, list[str]]:
             f"about={job.get('about', '')}",
             "resume=true",
         ]
+    if kind == "control_zones":
+        return "control_zones.kim", [
+            f"photos={job['photos']}",
+            f"photo={job['photo']}",
+            f"output={job['output']}",
+            f"spectrum={job.get('spectrum', 'visible')}",
+            f"cutoff_nm={job.get('cutoff_nm', 0)}",
+            f"about={job.get('about', '')}",
+        ]
     if kind == "treatment":
         return "protect_then_reveal.kim", [
             f"photos={job['photos']}",
@@ -1062,6 +1071,93 @@ class JobManager:
         self._wake.set()
         return self.public()
 
+    def add_control_zones(
+        self,
+        photos: str,
+        photo: str,
+        provider_profile_id: str = "",
+    ) -> dict[str, Any]:
+        """Queue the advisory-band placement for one frame: one model
+        call and a light panel, writing the zones file the fine-tune
+        page reads."""
+        source = Path(photos).expanduser().resolve()
+        if not source.is_dir():
+            raise JobError(f"photo folder is not a directory: {source}")
+        name = Path(str(photo).strip()).name
+        if not name or not (source / name).is_file():
+            raise JobError(f"no such photograph in {source}: {name or photo!r}")
+        try:
+            project_path, project = load_or_create_folder_project(
+                source, source.name)
+            layout = ensure_project_layout(source)
+        except (OSError, ValueError) as exc:
+            raise JobError(f"cannot open the Darkimiya project: {exc}") from exc
+        chosen_output = (layout["Recipes"]
+                         / f"{Path(name).stem}.control-zones.json").resolve()
+        if chosen_output.exists():
+            # Advice is replaceable: a re-ask overwrites rather than
+            # numbering, because two zone files for one frame would
+            # leave the page guessing which advice is current.
+            chosen_output.unlink()
+        with self._lock:
+            job_id = uuid.uuid4().hex[:12]
+            provider_bundle = None
+            if provider_profile_id:
+                if self.providers is None:
+                    raise JobError("provider profiles are disabled")
+                try:
+                    provider_bundle = self.providers.materialize(
+                        job_id, provider_profile_id, "control_zones.kim")
+                    self.program_checker(Path(provider_bundle["program_path"]))
+                except (ProviderError, JobError) as exc:
+                    raise JobError(str(exc)) from exc
+            profile_data = provider_bundle["profile"] if provider_bundle else {}
+            job = {
+                "id": job_id,
+                "kind": "control_zones",
+                "project": str(project_path),
+                "project_id": project["id"],
+                "photos": str(source),
+                "photo": name,
+                "output": str(chosen_output),
+                "checkpoint": f"{chosen_output}.checkpoint.json",
+                "log": f"{chosen_output}.log",
+                "spectrum": str(
+                    (project.get("rendering") or {}).get("spectrum")
+                    or "visible"),
+                "cutoff_nm": float(
+                    (project.get("rendering") or {}).get("cutoff_nm") or 0),
+                "about": str(project.get("about") or ""),
+                "status": "queued",
+                "message": f"Waiting to place the bands for {name}.",
+                "pid": None, "created_at": _now(), "started_at": None,
+                "finished_at": None, "exit_code": None,
+                "provider_profile_id": provider_profile_id or None,
+                "requested_model": None,
+                "provider_profile_name": profile_data.get(
+                    "name", "Legacy agents.kim"),
+                "provider_kind": profile_data.get("kind", "legacy"),
+                "provider_privacy": (
+                    "local" if profile_data.get("kind") == "ollama"
+                    else "remote-zdr" if profile_data.get("kind") == "openrouter"
+                    and profile_data.get("zdr")
+                    else "declared-in-agents.kim" if not provider_bundle
+                    else "remote-provider-policy"),
+                "provider_config_sha256": (
+                    provider_bundle["agents_sha256"] if provider_bundle else None),
+                "program_sha256": (
+                    provider_bundle["program_sha256"] if provider_bundle else None),
+                "program_path": (
+                    provider_bundle["program_path"] if provider_bundle else None),
+                "credential_env": (
+                    provider_bundle["credential_env"]
+                    if provider_bundle else ""),
+            }
+            self._state["jobs"].append(job)
+            self._save()
+        self._wake.set()
+        return self.public()
+
     def add_edit_suggestions(
         self,
         shortlist: str,
@@ -1982,6 +2078,8 @@ class JobManager:
                 if job.get("kind") == "style_profile"
                 else "Kimiya treatment"
                 if job.get("kind") == "treatment"
+                else "Slider advice placement"
+                if job.get("kind") == "control_zones"
                 else "Kimiya culling")
             job.update(
                 status="running", pid=process.pid, started_at=_now(),
@@ -2015,6 +2113,8 @@ class JobManager:
                     if job.get("kind") == "style_profile"
                     else "The treatment is warranted; it is on the develop page."
                     if job.get("kind") == "treatment"
+                    else "Slider advice placed; it paints when the frame is next opened."
+                    if job.get("kind") == "control_zones"
                     else "Culling report is ready for review.",
                 )
             elif requested == "cancelled":

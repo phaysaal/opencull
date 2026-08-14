@@ -504,6 +504,7 @@ class ProviderStore:
             "opencull.kim", "professional_shortlist.kim",
             "edit_suggestions.kim", "semantic_verification.kim",
             "style_profile.kim", "protect_then_reveal.kim",
+            "control_zones.kim",
         }:
             raise ProviderError(f"unsupported Kimiya program: {program_name}")
         source = (self.project_root / program_name).read_text(encoding="utf-8")
@@ -535,6 +536,9 @@ class ProviderStore:
         elif program_name == "protect_then_reveal.kim":
             replacements['use python "treatment_kernel.py"'] = (
                 f'use python "{self.project_root / "treatment_kernel.py"}"')
+        elif program_name == "control_zones.kim":
+            replacements['use python "zones_kernel.py"'] = (
+                f'use python "{self.project_root / "zones_kernel.py"}"')
         else:
             replacements['use python "style_profile_kernel.py"'] = (
                 f'use python "{self.project_root / "style_profile_kernel.py"}"')

@@ -349,6 +349,7 @@ class FineTunePage(QWidget):
     """The operations behind one treatment, and the proof of moving them."""
 
     closed = Signal()
+    zones_wanted = Signal(str)   # the frame whose slider advice is asked for
 
     def __init__(self, report, workspace: DevelopmentWorkspace,
                  loader: PreviewLoader, pool: QThreadPool | None = None,
@@ -530,6 +531,18 @@ class FineTunePage(QWidget):
             "renders identically anywhere."))
         self.recipe_button.clicked.connect(self.save_recipe_file)
         actions.addWidget(self.recipe_button)
+        self.advise_button = QPushButton("Advise ranges…")
+        self.advise_button.setObjectName("ghost")
+        self.advise_button.setFont(theme.body(10))
+        self.advise_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.advise_button.setToolTip(tooltip(
+            "Ask a model to place each slider's safe and artistic bands "
+            "for THIS frame -- one paid call. Until then the bands are "
+            "professional defaults: right on average, wrong in "
+            "particular. The advice paints the next time this frame's "
+            "controls are opened."))
+        self.advise_button.clicked.connect(self._ask_zones)
+        actions.addWidget(self.advise_button)
         layout.addLayout(actions)
 
         self.keep_button = QPushButton("Keep this version")
@@ -836,6 +849,14 @@ class FineTunePage(QWidget):
             return
         self.changes.setdefault(key, {}).update(change)
         self.render()
+
+    def _ask_zones(self) -> None:
+        if not self.current:
+            return
+        self.zones_wanted.emit(self.current)
+        self._report(
+            f"Asked. The bands for {self.current} land beside the recipes "
+            "and paint the next time this frame's controls are opened.")
 
     def _toggle_section(self, section: str) -> None:
         self._open_sections[section] = not self._open_sections.get(section)

@@ -1776,7 +1776,10 @@ class Launcher(QMainWindow):
         return page
 
     def _finetune_page(self, bench: Bench):
-        return FineTunePage(bench.report, bench.workspace, self._loader)
+        page = FineTunePage(bench.report, bench.workspace, self._loader)
+        page.zones_wanted.connect(
+            lambda photo: self.advise_zones(bench.workspace, photo))
+        return page
 
     def _export_page(self, bench: Bench):
         return ExportPage(bench.workspace)
@@ -2043,6 +2046,21 @@ class Launcher(QMainWindow):
         if isinstance(page, FineTunePage):
             page.show_photo(photo)
             page.show_treatment(treatment)
+
+    def advise_zones(self, workspace, photo: str) -> None:
+        """Queue the per-frame slider advice: one call, a light panel."""
+        try:
+            self.services.jobs.add_control_zones(
+                photos=str(workspace.project.get("source_folder") or ""),
+                photo=photo,
+                provider_profile_id=self.provider_id())
+        except Exception as exc:
+            self._say(str(exc), "alarm")
+            return
+        self._say(
+            f"Placing the bands for {photo}. One model call; the sliders "
+            "pick the advice up the next time that frame's controls are "
+            "opened.", "ok")
 
     def treat_frame(self, workspace, photo: str, rounds: int) -> None:
         """Queue a Kimiya Treatment: one frame, developed in rounds."""
