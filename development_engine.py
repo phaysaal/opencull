@@ -600,6 +600,16 @@ def _spatial_mask(rgb: np.ndarray, shape: str, value: dict[str, Any]) -> np.ndar
                     float(np.std(found[0])) / max(height - 1, 1),
                     float(np.std(found[1])) / max(width - 1, 1))
                 reach = max(spread * 4.0, 0.04)
+        # An explicit centre, where something other than the brightest
+        # thing in the frame is being masked -- a face, a building, the
+        # second reflection. Stated as fractions of the frame so it
+        # survives being rendered at proof size and again at full size.
+        placed = re.search(
+            r"(?i)\bat\s*(\d+(?:\.\d+)?)\s*%[,\s]+(\d+(?:\.\d+)?)\s*%",
+            anchor)
+        if placed:
+            centre_x = min(max(float(placed.group(1)) / 100.0, 0.0), 1.0)
+            centre_y = min(max(float(placed.group(2)) / 100.0, 0.0), 1.0)
         stated = re.search(r"(?i)radius\s*(\d+(?:\.\d+)?)\s*%", anchor)
         if stated:
             reach = max(float(stated.group(1)) / 100.0, 0.01)

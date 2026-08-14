@@ -33,30 +33,33 @@ context k_treatment:
     preserve = [subject_identity, irrecoverable_facts, stated_strategy, measured_evidence]
     allow_loss = [wording, slider_precision]
 
-schema Diagnosis:
+schema Plan:
     subject: text
     condition: text
     irrecoverable: text
-    confidence: num
-
-schema Strategy:
     protect: text
     reveal: text
-    order: text
-    rationale: text
-
-schema Structure:
-    regions: text
-    masks: text
-    rationale: text
-
-schema TreatmentRecipe:
     title: text
-    intent: text
-    -- The instructions themselves, as a JSON object: section name to a
-    -- list of instruction lines. Carried as text the way edit directions
-    -- are, because that is what the compiler reads.
-    recipe: text
+    strategy: text
+    -- How many regions of this frame need opposite things. Zero is a
+    -- real answer and the usual one.
+    mask_count: num
+    -- The whole-frame moves, as a JSON object of named numbers.
+    global_adjustments: text
+    rationale: text
+
+schema Mask:
+    region: text
+    purpose: text
+    shape: text
+    centre_x: num
+    centre_y: num
+    radius: num
+    anchor: text
+    inverted: bool
+    feather: num
+    -- What happens inside it, as a JSON object of named numbers.
+    adjustments: text
 
 schema Critique:
     improved: text
@@ -74,46 +77,40 @@ evidence := evidence_json(photo, baseline, spectrum, cutoff_nm, about)
 start := observe image(baseline)
 check start.exists
 
--- 1. Diagnose: what this is, and what about it cannot be recovered.
-diagnosis := memo gen<Diagnosis>(diagnosis_prompt(evidence), images=[start]) by A
-check len(diagnosis.irrecoverable) > 0
-act file.overwrite(directory + "/diagnosis.json", diagnosis)
-
--- 2. Decide what to protect and what to reveal, in order.
-strategy := memo gen<Strategy>(strategy_prompt(evidence, diagnosis), images=[start]) by A
-check len(strategy.protect) > 0
-act file.overwrite(directory + "/strategy.json", strategy)
-
--- 3. Two parts of a frame needing opposite things need a mask between
---    them. Which regions, and therefore which masks.
-structure := memo gen<Structure>(structure_prompt(evidence, strategy), images=[start]) by A
-check len(structure.masks) > 0
-act file.overwrite(directory + "/structure.json", structure)
-
--- 4..7. Write it, render it, measure it, look at it, revise. The guard
---       carries the budget and the critique's own verdict, so a
---       treatment that is finished in one round costs one round.
+critique := ""
 records := []
 forall attempt in range(rounds):
     if check keep_going(records, rounds):
-        answer := memo gen<TreatmentRecipe>(recipe_prompt(evidence, strategy, structure, latest_critique(records), latest_sections(records)), images=[start]) by A
-        sections := recipe_sections(answer.recipe)
-        recipe := compiled_treatment(photo, answer.title, answer.intent, sections)
+        -- One plan: the diagnosis, what to protect and reveal, the moves
+        -- for the whole frame, and how many regions need separating.
+        plan := memo gen<Plan>(plan_prompt(evidence, critique), images=[start]) by A
+        check keep_reasoning(directory, "plan", plan)
+
+        -- The branch. Most photographs answer zero and the loop below
+        -- never runs; this one is asked about each region on its own.
+        masks := []
+        forall index in range(mask_count(plan)):
+            mask := memo gen<Mask>(mask_prompt(evidence, plan, index, mask_count(plan), masks), images=[start]) by A
+            check keep_mask(directory, masks, mask)
+            masks := masks + [mask]
+
+        -- Assembled here from numbers, not written as prose and hoped to
+        -- compile: a live round once produced two operations out of a
+        -- page of intent, and three produced none at all.
+        recipe := assemble_recipe(photo, plan, masks)
         if check treatment_usable(recipe):
             render := render_round(photos, photo, recipe, directory, records, proof_edge)
             measured := measure_frame_json(render)
             proof := observe image(render)
             check proof.exists
-            critique := memo gen<Critique>(critique_prompt(evidence, strategy, evidence, measured, round_number(records), rounds), images=[proof]) by B
-            records := records + [round_record(directory, records, recipe, sections, render, measured, critique)]
+            critique := memo gen<Critique>(critique_prompt(evidence, plan, evidence, measured, round_number(records), rounds), images=[proof]) by B
+            records := records + [round_record(directory, records, recipe, said(plan), render, measured, critique)]
         else:
-            -- Nothing in it would have happened. Kept anyway, so the next
-            -- round is told what failed to compile rather than repeating it.
-            records := records + [round_record(directory, records, recipe, sections)]
+            records := records + [round_record(directory, records, recipe, said(plan), "", "", "", plan)]
 
 check len(records) > 0
 chosen := best_round(records)
-report := treatment_report(directory, photo, evidence, diagnosis, strategy, structure, records, chosen)
+report := treatment_report(directory, photo, evidence, "", "", "", records, chosen)
 check treatment_valid(report)
 warrant := treatment_evidence(report)
 

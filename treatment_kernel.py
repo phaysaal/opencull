@@ -161,7 +161,72 @@ def evidence_json(photo: str, baseline: str, spectrum: str = "visible",
     }, sort_keys=True, indent=2)
 
 
-# --- the four questions, in order ---------------------------------------
+# --- one plan, then a branch --------------------------------------------
+#
+# The first shape of this asked four questions in the same order however
+# the photograph answered them: diagnose, decide, structure, write. That
+# is a chain, not a decision. A frame needing no mask paid for the mask
+# reasoning anyway; a frame needing three got one paragraph describing
+# all of them, which the recipe step then had to re-read.
+#
+# So the questions that always apply are asked together, and one of the
+# answers is how many masks this photograph needs. Zero is a real
+# answer and the common one. Where it is not zero, each mask is asked
+# for on its own, in numbers -- what it is around, where its centre is,
+# how wide, and what happens inside it -- and the recipe is assembled
+# here from those numbers rather than written as prose and hoped to
+# compile.
+
+# The moves, as numbers rather than as sentences. A model that answers
+# with these cannot half-compile: there is no prose to parse, and the
+# recipe is assembled here.
+MOVES = {
+    "exposure": ("tone.exposure", -5.0, 5.0, "EV"),
+    "contrast": ("tone.contrast", -100.0, 100.0, "percent"),
+    "brightness": ("tone.brightness", -100.0, 100.0, "percent"),
+    "saturation": ("color.saturation", -100.0, 100.0, "percent"),
+    "highlights": ("tone.highlight", -100.0, 100.0, "percent"),
+    "shadows": ("tone.shadow", -100.0, 100.0, "percent"),
+    "whites": ("tone.white", -100.0, 100.0, "percent"),
+    "blacks": ("tone.black", -100.0, 100.0, "percent"),
+    "clarity": ("detail.clarity", -100.0, 100.0, "percent"),
+    "structure": ("detail.structure", -100.0, 100.0, "percent"),
+    "dehaze": ("detail.dehaze", -100.0, 100.0, "percent"),
+    "temperature": ("color.temperature", -5000.0, 5000.0, "kelvin"),
+    "denoise": ("detail.denoise_luminance", 0.0, 100.0, "percent"),
+    "denoise_colour": ("detail.denoise_color", 0.0, 100.0, "percent"),
+    "vignette": ("finish.vignette", -100.0, 100.0, "percent"),
+}
+# Not every move can live inside a mask: the engine applies a mask by
+# rendering its effects and blending, and only these are meaningful
+# there.
+MASK_MOVES = ("exposure", "contrast", "brightness", "saturation",
+              "clarity", "structure", "highlights", "temperature")
+
+_GLOBAL_MOVES = (
+    "The whole-frame moves, each a number or left out:\n  "
+    + ", ".join(sorted(MOVES)))
+_MASK_MOVES = (
+    "The moves available inside a mask, each a number or left out:\n  "
+    + ", ".join(MASK_MOVES))
+
+# What rendering taught, which no amount of looking at a JPEG will.
+_LEARNED = """Three things this renderer has been measured doing, which
+are not obvious:
+
+  • Contrast pivots at middle grey. On a subject sitting at seven
+    percent brightness, positive contrast drives it toward black rather
+    than away from it. To lift something dark, use exposure.
+  • A luma mask on the shadows selects the sky in a night frame, because
+    the sky is the shadow. To reach the ground, use a linear gradient
+    from the bottom.
+  • To make a clipped subject stand out, take the WHOLE FRAME DOWN
+    rather than lifting around it. A clipped core is far above white and
+    stays white however far you drop the exposure, while everything
+    around it darkens. Lifting instead raises the veil with the subject
+    and the separation is lost -- measured on one frame: subject
+    contrast 164.8 before, 52.6 after a lift, and it never recovered
+    across three rounds of trying."""
 
 _VOICE = (
     "You are developing one photograph, the way a professional would: by "
@@ -189,18 +254,74 @@ def _context(evidence: dict[str, Any]) -> str:
     return "\n\n".join(lines)
 
 
-def diagnosis_prompt(evidence_text: str) -> str:
-    evidence = json.loads(evidence_text)
+def keep_mask(directory: str, masks: list[str], mask: Any) -> bool:
+    """Write one mask down as it is settled, and say whether it says anything."""
+    return keep_reasoning(directory, f"mask-{len(masks) + 1}", mask)
+
+
+def plan_prompt(evidence_text: str, critique: Any = "") -> str:
+    """Everything that always applies, asked at once -- including the branch."""
+    evidence = data(evidence_text) or {}
+    revision = ([
+        "THE LAST ATTEMPT WAS RENDERED AND MEASURED. What it showed, and "
+        f"what you said to change:\n{said(data(critique))}",
+        "Revise the plan. Change what the critique named -- including the "
+        "number of masks, if the structure was wrong -- and leave the rest "
+        "alone. A rewrite that moves everything cannot be judged.",
+    ] if critique else [])
     return "\n\n".join([
         _VOICE,
-        "STEP 1 of 4 -- DIAGNOSE. Say what this photograph is of, what is "
-        "wrong with it, and -- this is the part that decides everything "
-        "after it -- what about it is beyond recovery.",
-        "A clipped light source is not a fault to be fixed. No amount of "
-        "highlight recovery invents detail in channels that all saturated; "
-        "attempting it turns a shape into a smudge. Name such things "
-        "plainly so the rest of the development can stop trying.",
+        "PLAN THIS DEVELOPMENT. Answer all of the following together.",
+        "1. DIAGNOSE. What is this photograph of, what is wrong with it, "
+        "and -- the part that decides everything after it -- what about it "
+        "is beyond recovery. A clipped light source is not a fault to be "
+        "fixed: no highlight recovery invents detail in channels that all "
+        "saturated, and attempting it turns a shape into a smudge.",
+        "2. DECIDE. What must be PROTECTED, left alone because touching it "
+        "can only cost, and what must be REVEALED. Two or three of each; a "
+        "photograph with six priorities has none.",
+        "3. SEPARATE. Do two parts of this frame need opposite things? If "
+        "they do, that is a mask, and you will be asked about each one "
+        "separately afterwards. Say how many -- 0, 1, 2 or 3. Zero is a "
+        "real answer and the usual one: most photographs want one set of "
+        "adjustments applied to all of them. Only ask for a mask where you "
+        "can name the region and say what it needs that the rest does not.",
+        "4. THE WHOLE FRAME. The adjustments that apply everywhere, before "
+        "any mask. Give them as numbers.",
+        _GLOBAL_MOVES,
+        _LEARNED,
+        *revision,
         _context(evidence),
+    ])
+
+
+def mask_prompt(evidence_text: str, plan: Any, index: float, total: float,
+                already: list[str]) -> str:
+    """One mask, in numbers: where it is, how big, and what happens inside."""
+    evidence = data(evidence_text) or {}
+    at = (evidence.get("baseline") or {}).get("brightest_at") or [0.5, 0.5]
+    done = "\n".join(
+        f"  already placed: {said(data(item))}" for item in already)
+    return "\n\n".join([
+        _VOICE,
+        f"MASK {int(index) + 1} OF {int(total)}. You said this photograph "
+        "needs its regions treated separately. Describe this one in "
+        "numbers.",
+        "shape: 'radial' for a region around a point; 'linear' for a "
+        "gradient from an edge; 'luma' for a band of brightness.",
+        "For a radial mask give centre_x and centre_y as percentages "
+        "across and down the frame, and radius as a percentage of the "
+        "frame's longer side. For a linear mask, say which edge in "
+        "'anchor' -- bottom, top, left or right. For a luma mask, say "
+        "shadows, midtones or highlights in 'anchor'.",
+        "Set 'inverted' true where the adjustment belongs everywhere "
+        "EXCEPT the region -- protecting something is usually this.",
+        f"The brightest point of this frame is at "
+        f"{at[0] * 100:.0f}% across, {at[1] * 100:.0f}% down.",
+        _MASK_MOVES,
+        _LEARNED,
+        f"YOUR PLAN:\n{said(plan)}",
+        done or "  nothing placed yet.",
     ])
 
 
@@ -212,13 +333,13 @@ def strategy_prompt(evidence_text: str, diagnosis: str) -> str:
         "must be REVEALED (worth spending the development on), in priority "
         "order. Two or three of each at most; a photograph with six "
         "priorities has none.",
-        f"YOUR DIAGNOSIS:\n{diagnosis}",
-        _context(json.loads(evidence_text)),
+        f"YOUR DIAGNOSIS:\n{said(diagnosis)}",
+        _context(data(evidence_text) or {}),
     ])
 
 
 def structure_prompt(evidence_text: str, strategy: str) -> str:
-    evidence = json.loads(evidence_text)
+    evidence = data(evidence_text) or {}
     at = evidence["baseline"]["brightest_at"]
     return "\n\n".join([
         _VOICE,
@@ -237,7 +358,7 @@ def structure_prompt(evidence_text: str, strategy: str) -> str:
         "brightness band\n"
         "  • Colour range masks by colour family",
         f"The brightest point sits at {at[0]:.2f} across and {at[1]:.2f} down.",
-        f"YOUR STRATEGY:\n{strategy}",
+        f"YOUR STRATEGY:\n{said(strategy)}",
     ])
 
 
@@ -284,26 +405,26 @@ def recipe_prompt(evidence_text: str, strategy: str, structure: str,
         "the plan. Protect what you said to protect: do not apply "
         "highlight recovery, exposure reduction or contrast to a region "
         "you have called irrecoverable.",
-        f"YOUR STRATEGY:\n{strategy}",
-        f"YOUR STRUCTURE:\n{structure}",
+        f"YOUR STRATEGY:\n{said(strategy)}",
+        f"YOUR STRUCTURE:\n{said(structure)}",
         _GRAMMAR,
     ]
     if previous:
-        parts.append(f"WHAT YOU WROTE LAST ROUND:\n{previous}")
+        parts.append(f"WHAT YOU WROTE LAST ROUND:\n{said(previous)}")
     if critique:
         parts.append(
             "WHAT THE RENDER SHOWED, AND WHAT YOU SAID TO CHANGE:\n"
-            f"{critique}\n\nRevise. Change what the critique named and "
+            f"{said(critique)}\n\nRevise. Change what the critique named and "
             "leave the rest alone -- a rewrite that moves everything "
             "cannot be judged.")
-    parts.append(_context(json.loads(evidence_text)))
+    parts.append(_context(data(evidence_text) or {}))
     return "\n\n".join(parts)
 
 
 def critique_prompt(evidence_text: str, strategy: str, before: str,
                     after: str, round_number: int, rounds: int) -> str:
     """Ask what the render actually did -- with the numbers beside it."""
-    evidence = json.loads(evidence_text)
+    evidence = data(evidence_text) or {}
     subject = (f" It is an infrared frame at {evidence['cutoff_nm']:.0f}nm."
                if evidence.get("spectrum") == "infrared" else "")
     return "\n\n".join([
@@ -317,13 +438,114 @@ def critique_prompt(evidence_text: str, strategy: str, before: str,
         "early is a good answer; a round spent agreeing with yourself is "
         "not.",
         "Judge against your own strategy, not against a general idea of a "
-        "good photograph:\n" + strategy,
-        "BEFORE:\n" + json.dumps(json.loads(before), indent=2),
-        "AFTER:\n" + json.dumps(json.loads(after), indent=2),
+        "good photograph:\n" + said(strategy),
+        "BEFORE:\n" + json.dumps(data(before) or {}, indent=2),
+        "AFTER:\n" + json.dumps(data(after) or {}, indent=2),
     ])
 
 
 # --- turning an answer into something that renders ----------------------
+
+def _bounded(name: str, value: Any) -> dict[str, Any] | None:
+    """One named move as an operation, or nothing where it is not one."""
+    if name not in MOVES or value in (None, ""):
+        return None
+    op, low, high, unit = MOVES[name]
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if abs(number) < 1e-9:
+        return None
+    return {"op": op, "value": max(low, min(high, number)), "unit": unit,
+            "mode": "absolute" if unit == "percent" and op.startswith(
+                "detail.denoise") else "delta",
+            "source": f"{name} {number:g}"}
+
+
+def _anchor_for(mask: dict[str, Any]) -> str:
+    """The sentence the engine's mask reader understands, built from numbers."""
+    shape = str(mask.get("shape") or "radial").strip().lower()
+    parts = [f"{shape} gradient"]
+    if shape == "radial":
+        if mask.get("centre_x") is not None and mask.get("centre_y") is not None:
+            parts.append(
+                f"at {float(mask['centre_x']):.0f}%, {float(mask['centre_y']):.0f}%")
+        else:
+            parts.append("on the sun")
+        parts.append(f"radius {float(mask.get('radius') or 18):.0f}%")
+    else:
+        parts.append(f"from the {str(mask.get('anchor') or 'bottom').strip()}")
+    if mask.get("inverted"):
+        parts.append("inverted")
+    parts.append(f"feather {float(mask.get('feather') or 80):.0f}%")
+    return ", ".join(parts)
+
+
+def assemble_recipe(photo: str, plan: Any, masks: list[str],
+                    source_kind: str = "raw") -> str:
+    """Build the recipe from what was answered, rather than from prose.
+
+    The first shape of this asked a model to write instructions in the
+    compiler's grammar, and then compiled them: a live round produced
+    two operations out of a page of intent, and three rounds produced
+    none at all. Numbers cannot half-compile. What arrives here is
+    bounded to the ranges the renderer accepts and assembled in a fixed
+    order -- whole frame first, then each mask -- so the same answers
+    always make the same photograph.
+    """
+    settled = data(plan) or {}
+    operations: list[dict[str, Any]] = []
+    whole = data(settled.get("global_adjustments")) or {}
+    if isinstance(whole, dict):
+        for name in MOVES:
+            made = _bounded(name, whole.get(name))
+            if made:
+                operations.append(made)
+    for item in masks:
+        mask = data(item) or {}
+        if not isinstance(mask, dict):
+            continue
+        effects = data(mask.get("adjustments")) or {}
+        inside = [made for made in
+                  (_bounded(name, effects.get(name)) for name in MASK_MOVES)
+                  if made]
+        if not inside:
+            continue
+        shape = str(mask.get("shape") or "radial").strip().lower()
+        if shape not in {"radial", "linear", "luma"}:
+            shape = "radial"
+        operations.append({
+            "op": f"mask.{shape}",
+            "value": {"anchor": _anchor_for(mask), "opacity": 1.0,
+                      "feather": float(mask.get("feather") or 80) / 100.0,
+                      "effects": [{k: v for k, v in made.items()
+                                   if k != "source"} for made in inside]},
+            "unit": "mask", "mode": "absolute",
+            "source": str(mask.get("region") or "a masked region"),
+        })
+    return json.dumps({
+        "format": "opencull-development-recipe-v1",
+        "source_photo": str(photo), "source_kind": source_kind,
+        "style": PRESET_STYLE,
+        "title": str(settled.get("title") or "Protect then reveal")[:120],
+        "intent": said(settled.get("strategy") or settled.get("reveal") or "")[:600],
+        "working_space": "scene-linear-rec2020-d65",
+        "operations": operations, "guardrails": [], "diagnostics": [],
+        "coverage": {"instructions": len(operations),
+                     "executable": len(operations),
+                     "guardrails": 0, "unsupported": 0},
+    }, sort_keys=True)
+
+
+def mask_count(plan: Any) -> int:
+    """How many regions this photograph asked to be treated separately."""
+    settled = data(plan) or {}
+    try:
+        return max(0, min(3, int(float(settled.get("mask_count") or 0))))
+    except (TypeError, ValueError):
+        return 0
+
 
 # The sections the compiler reads. Anything else a model invents is
 # dropped here rather than carried to the compiler to be ignored there.
@@ -342,14 +564,18 @@ def recipe_sections(answer: Any) -> str:
     one string rather than a list of them -- is met halfway rather than
     failed, because the round is already paid for.
     """
-    record: Any = answer
-    if isinstance(record, str):
-        try:
-            record = json.loads(record or "{}")
-        except ValueError:
-            return json.dumps({})
-    if not isinstance(record, dict):
-        return json.dumps({})
+    # The instructions arrive as text holding JSON, in a field of the
+    # answer -- or, when a model has ignored that, as the answer itself.
+    record = as_record(answer)
+    # The field may hold the JSON text the schema asks for, or the object
+    # itself where the runtime has already parsed it. Stringifying a
+    # mapping before trying to read it is how three rounds of a live run
+    # came back empty: repr is not JSON.
+    carried = record.get("recipe")
+    if carried:
+        inner = as_record(carried)
+        if inner:
+            record = inner
     sections: dict[str, list[str]] = {}
     for key, value in record.items():
         name = str(key).strip().lower()
@@ -363,13 +589,14 @@ def recipe_sections(answer: Any) -> str:
     return json.dumps(sections, sort_keys=True)
 
 
-def compiled_treatment(photo: str, title: str, intent: str,
-                       sections: str, source_kind: str = "raw") -> str:
+def compiled_treatment(photo: str, answer: Any, sections: str,
+                       source_kind: str = "raw") -> str:
     """Compile a round's instructions, or say why they will not compile."""
     try:
         recipe = compile_recipe(
-            photo, PRESET_STYLE, str(title)[:120], str(intent)[:600],
-            json.loads(sections), "", source_kind)
+            photo, PRESET_STYLE, field(answer, "title", "Treatment")[:120],
+            field(answer, "intent")[:600],
+            data(sections) or {}, "", source_kind)
     except (RecipeCompileError, ValueError) as exc:
         return json.dumps({"error": str(exc), "operations": []})
     return json.dumps(recipe, sort_keys=True)
@@ -378,7 +605,7 @@ def compiled_treatment(photo: str, title: str, intent: str,
 def treatment_usable(recipe_text: str) -> bool:
     """A round is usable when something in it will actually happen."""
     try:
-        recipe = json.loads(str(recipe_text))
+        recipe = data(recipe_text)
     except ValueError:
         return False
     return bool(recipe.get("operations")) and not recipe.get("error")
@@ -386,7 +613,7 @@ def treatment_usable(recipe_text: str) -> bool:
 
 def unsupported_note(recipe_text: str) -> str:  # noqa: D401
     """What the compiler could not execute, for the next round to hear."""
-    recipe = json.loads(str(recipe_text))
+    recipe = data(recipe_text) or {}
     missed = [item.get("instruction", "") for item in
               recipe.get("diagnostics", []) if isinstance(item, dict)]
     if not missed:
@@ -431,7 +658,7 @@ def render_round(photos: str, photo: str, recipe_text: str, directory: str,
         RawSourceStore(
             layout["Reports"] / f"{report.path.stem}.raw-source.json", report))
     rendered = workspace.render_prepared(
-        str(photo), json.loads(str(recipe_text)), int(maximum))
+        str(photo), data(recipe_text) or {}, int(maximum))
     destination = Path(str(directory)) / f"round-{round_number(records)}.jpg"
     destination.write_bytes(Path(rendered).read_bytes())
     return str(destination)
@@ -445,6 +672,100 @@ def treatment_directory(photos: str, photo: str, stamp: str) -> str:
             / "Treatments" / f"{Path(str(photo)).stem}.{STRATEGY}.{stamp}")
     root.mkdir(parents=True, exist_ok=True)
     return str(root)
+
+
+def as_record(answer: Any) -> dict[str, Any]:
+    """A model's answer as a mapping, however it arrived.
+
+    Three shapes have turned up: a mapping, the JSON text of one, and an
+    object with attributes. Which one depends on the runtime and on
+    whether the value came fresh or from a memo, and a treatment that
+    dies on the difference has thrown away a paid-for answer. So it is
+    read defensively in one place instead of everywhere.
+    """
+    if isinstance(answer, dict):
+        return dict(answer)
+    if isinstance(answer, str):
+        try:
+            parsed = json.loads(answer)
+        except ValueError:
+            return {}
+        return dict(parsed) if isinstance(parsed, dict) else {}
+    fields = getattr(answer, "__dict__", None)
+    if isinstance(fields, dict) and fields:
+        return dict(fields)
+    return {}
+
+
+def said(value: Any) -> str:
+    """One step's answer, written out for the next step to read.
+
+    A previous answer arrives as a mapping, or a list, or text, and a
+    prompt that concatenates it has to survive all three. Rendered as
+    lines rather than as JSON because the reader is a model being shown
+    its own reasoning, not a parser.
+    """
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        lines = []
+        for key, item in value.items():
+            lines.append(f"{str(key).replace('_', ' ')}: {said(item)}")
+        return "\n".join(lines)
+    if isinstance(value, (list, tuple)):
+        return "\n".join(f"  - {said(item)}" for item in value)
+    return str(value)
+
+
+def data(value: Any) -> Any:
+    """A value from the program, as data, whatever it arrived as.
+
+    Values cross this boundary as mappings, as the JSON text of them, or
+    as objects, and which one depends on the runtime and on whether the
+    value came fresh or from a memo. Three live runs died one call site
+    at a time on that difference, each having already paid for the
+    answer it then threw away. So nothing here assumes.
+    """
+    if isinstance(value, str):
+        try:
+            return json.loads(value or "null")
+        except ValueError:
+            return None
+    if isinstance(value, (dict, list, int, float, bool)) or value is None:
+        return value
+    return as_record(value)
+
+
+def field(answer: Any, name: str, default: str = "") -> str:
+    """One field of a model's answer, or the default where it said nothing."""
+    record = as_record(answer)
+    if name in record:
+        return str(record.get(name) or default)
+    return str(getattr(answer, name, default) or default)
+
+
+def keep_reasoning(directory: str, name: str, answer: Any) -> bool:
+    """Write one reasoning step down, and say whether it said anything.
+
+    Written before it is judged, and by the kernel rather than by an
+    act, because the alternative is what happened the first time this
+    ran: a model answered, the answer failed a check, and the run died
+    without keeping the thing that had just been paid for.
+    """
+    record = as_record(answer) or {
+        key: field(answer, key)
+        for key in ("subject", "condition", "irrecoverable", "protect",
+                    "reveal", "order", "regions", "masks", "rationale")}
+    stated = any(str(value).strip() for value in record.values())
+    if not stated:
+        # Nothing readable. Keep what did arrive, so the next run has
+        # something to look at rather than an empty file and a guess.
+        record = {"unreadable": repr(answer)[:2000],
+                  "type": type(answer).__name__}
+    path = Path(str(directory)) / f"{name}.json"
+    path.write_text(json.dumps(record, indent=2, sort_keys=True),
+                    encoding="utf-8")
+    return stated
 
 
 def now_stamp() -> str:
@@ -467,7 +788,7 @@ def keep_going(records: list[str], rounds: float) -> bool:
         return False
     if not records:
         return True
-    last = json.loads(str(records[-1]))
+    last = data(records[-1]) or {}
     critique = last.get("critique") or {}
     return not bool(critique.get("finished"))
 
@@ -476,7 +797,7 @@ def latest_critique(records: list[str]) -> str:
     """What the last round's look at itself concluded, for the next write."""
     if not records:
         return ""
-    last = json.loads(str(records[-1]))
+    last = data(records[-1]) or {}
     critique = last.get("critique") or {}
     if not critique:
         return ""
@@ -492,12 +813,12 @@ def latest_critique(records: list[str]) -> str:
 def latest_sections(records: list[str]) -> str:
     if not records:
         return ""
-    return str(json.loads(str(records[-1])).get("sections") or "")
+    return str((data(records[-1]) or {}).get("sections") or "")
 
 
 def round_record(directory: str, records: list[str], recipe_text: str,
                  sections: str, render: str = "", measurements: str = "",
-                 critique: str = "") -> str:
+                 critique: str = "", answer: Any = None) -> str:
     """One round, written down whole.
 
     Kept because the process should be inspectable, and because round two
@@ -508,11 +829,17 @@ def round_record(directory: str, records: list[str], recipe_text: str,
     record = {
         "round": number,
         "sections": str(sections),
-        "recipe": json.loads(recipe_text),
+        # What the model actually said, kept whenever the sections come
+        # back empty. A round that produced nothing is the round most
+        # worth being able to read afterwards.
+        "answer": (repr(answer)[:4000]
+                   if answer is not None and not json.loads(sections or "{}")
+                   else ""),
+        "recipe": data(recipe_text) or {},
         "unsupported": unsupported_note(recipe_text),
         "render": str(render),
-        "measurements": json.loads(measurements) if measurements else {},
-        "critique": json.loads(critique) if critique else None,
+        "measurements": data(measurements) or {},
+        "critique": as_record(critique) or None,
         "created_at": datetime.now(UTC).isoformat(),
     }
     path = Path(str(directory)) / f"round-{number}.json"
@@ -525,17 +852,17 @@ def treatment_report(directory: str, photo: str, evidence_text: str,
                      diagnosis: str, strategy: str, structure: str,
                      rounds: list[str], chosen: int) -> str:
     """The finished treatment: the reasoning, every round, and the choice."""
-    kept = [json.loads(str(item)) for item in rounds]
+    kept = [data(item) or {} for item in rounds]
     return json.dumps({
         "format": TREATMENT_FORMAT,
         "strategy": STRATEGY,
         "photo": str(photo),
         "created_at": datetime.now(UTC).isoformat(),
-        "evidence": json.loads(evidence_text),
+        "evidence": data(evidence_text) or {},
         "reasoning": {
-            "diagnosis": diagnosis,
-            "strategy": strategy,
-            "structure": structure,
+            "diagnosis": said(diagnosis),
+            "strategy": said(strategy),
+            "structure": said(structure),
         },
         "rounds": kept,
         "chosen_round": int(chosen),
@@ -556,7 +883,7 @@ def best_round(rounds: list[str], target: str = "subject_contrast") -> int:
     """
     best, score = 0, -math.inf
     for item in rounds:
-        record = json.loads(str(item))
+        record = data(item) or {}
         value = float(record.get("measurements", {}).get(target, 0) or 0)
         if value >= score:
             best, score = int(record.get("round", 0)), value
@@ -568,8 +895,10 @@ def best_round(rounds: list[str], target: str = "subject_contrast") -> int:
 def treatment_valid(report_text: str) -> bool:
     """Deterministic checks, before anybody is asked to vouch for it."""
     try:
-        report = json.loads(str(report_text))
+        report = data(report_text)
     except ValueError:
+        return False
+    if not isinstance(report, dict):
         return False
     rounds = report.get("rounds") or []
     if report.get("format") != TREATMENT_FORMAT or not rounds:
@@ -579,9 +908,10 @@ def treatment_valid(report_text: str) -> bool:
     numbers = [int(item.get("round", 0)) for item in rounds]
     if numbers != list(range(1, len(rounds) + 1)):
         return False
-    reasoning = report.get("reasoning") or {}
-    return all(str(reasoning.get(key, "")).strip()
-               for key in ("diagnosis", "strategy", "structure"))
+    # The plan is kept on each round rather than once at the top: a
+    # revision may change the structure, and a treatment that says only
+    # what it first thought is not a record of what it did.
+    return any(str(item.get("sections", "")).strip() for item in rounds)
 
 
 def treatment_evidence(report_text: str) -> str:
@@ -593,7 +923,7 @@ def treatment_evidence(report_text: str) -> str:
     can say whether those agree -- which is the only question a warrant
     can honestly answer.
     """
-    report = json.loads(str(report_text))
+    report = data(report_text) or {}
     rounds = report.get("rounds") or []
     chosen = int(report.get("chosen_round", 0))
     lines = [
@@ -625,7 +955,7 @@ def treatment_evidence(report_text: str) -> str:
 
 def treatment_policy(evidence_text: str) -> str:
     """What the panel is being asked to warrant, in one sentence."""
-    evidence = json.loads(str(evidence_text))
+    evidence = data(evidence_text) or {}
     subject = str(evidence.get("about") or "").strip()
     said = f" The photographer says the shoot is: “{subject}”." if subject else ""
     return (

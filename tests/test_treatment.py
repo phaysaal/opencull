@@ -154,20 +154,266 @@ class RecipeTests(unittest.TestCase):
 
     def test_a_recipe_that_does_nothing_is_not_usable(self):
         compiled = treatment.compiled_treatment(
-            "A.ARW", "t", "i", json.dumps({"global_exposure": ["be lovely"]}))
+            "A.ARW", {"title": "t", "intent": "i"},
+            json.dumps({"global_exposure": ["be lovely"]}))
         self.assertFalse(treatment.treatment_usable(compiled))
 
     def test_a_recipe_that_does_something_is(self):
         compiled = treatment.compiled_treatment(
-            "A.ARW", "t", "i", json.dumps({"global_exposure": ["Contrast +12"]}))
+            "A.ARW", {"title": "t", "intent": "i"},
+            json.dumps({"global_exposure": ["Contrast +12"]}))
         self.assertTrue(treatment.treatment_usable(compiled))
         self.assertTrue(json.loads(compiled)["operations"])
 
     def test_what_did_not_compile_is_named_for_the_next_round(self):
         compiled = treatment.compiled_treatment(
-            "A.ARW", "t", "i", json.dumps({
+            "A.ARW", {"title": "t", "intent": "i"}, json.dumps({
                 "global_exposure": ["Contrast +12", "Use the AgX transform"]}))
         self.assertIn("AgX", treatment.unsupported_note(compiled))
+
+
+class AnswerShapeTests(unittest.TestCase):
+    """A model's answer, read without trusting its shape."""
+
+    def setUp(self):
+        self._temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self._temporary.name)
+        self.addCleanup(self._temporary.cleanup)
+
+    def test_the_recipe_is_read_out_of_the_answers_field(self):
+        answer = {"title": "t", "intent": "i",
+                  "recipe": json.dumps({"global_exposure": ["Contrast +12"]})}
+        sections = json.loads(treatment.recipe_sections(answer))
+        self.assertEqual(sections["global_exposure"], ["Contrast +12"])
+
+    def test_a_recipe_that_arrived_already_parsed_is_read(self):
+        """Three rounds of a live run came back empty on this.
+
+        The field may hold the JSON text the schema asks for, or the
+        object itself where the runtime parsed it first. Stringifying a
+        mapping and hoping it is JSON gets you repr, which is not.
+        """
+        answer = {"title": "t", "intent": "i",
+                  "recipe": {"global_exposure": ["Exposure -1.80"]}}
+        sections = json.loads(treatment.recipe_sections(answer))
+        self.assertEqual(sections["global_exposure"], ["Exposure -1.80"])
+
+    def test_a_round_that_produced_nothing_keeps_what_the_model_said(self):
+        """The round most worth reading afterwards is the empty one."""
+        where = treatment.treatment_directory(
+            str(self.root), "A.ARW", "20260814T000004Z")
+        compiled = treatment.compiled_treatment("A.ARW", {}, "{}")
+        treatment.round_record(where, [], compiled, "{}",
+                               answer={"recipe": "something unreadable"})
+        kept = json.loads((Path(where) / "round-1.json").read_text())
+        self.assertIn("unreadable", kept["answer"])
+
+    def test_a_round_that_worked_does_not_keep_the_raw_answer(self):
+        where = treatment.treatment_directory(
+            str(self.root), "A.ARW", "20260814T000005Z")
+        sections = json.dumps({"global_exposure": ["Contrast +12"]})
+        compiled = treatment.compiled_treatment("A.ARW", {}, sections)
+        treatment.round_record(where, [], compiled, sections,
+                               answer={"recipe": sections})
+        kept = json.loads((Path(where) / "round-1.json").read_text())
+        self.assertEqual(kept["answer"], "")
+
+    def test_an_answer_that_ignored_the_field_is_still_read(self):
+        answer = {"global_exposure": ["Contrast +12"]}
+        self.assertIn("global_exposure",
+                      json.loads(treatment.recipe_sections(answer)))
+
+    def test_a_missing_field_is_a_soft_fact_not_a_crash(self):
+        self.assertEqual(treatment.field({"title": "t"}, "intent"), "")
+        self.assertEqual(treatment.field({}, "title", "Treatment"), "Treatment")
+
+    def test_reasoning_is_written_before_it_is_judged(self):
+        """A model answered, the answer failed a check, and the run died
+        without keeping the thing that had just been paid for."""
+        where = treatment.treatment_directory(
+            str(self.root), "A.ARW", "20260814T000000Z")
+        kept = treatment.keep_reasoning(
+            where, "diagnosis",
+            {"subject": "an eclipse", "irrecoverable": "the clipped core"})
+        self.assertTrue(kept)
+        written = Path(where) / "diagnosis.json"
+        self.assertIn("clipped core", written.read_text())
+
+    def test_an_empty_answer_is_kept_and_reported_as_empty(self):
+        where = treatment.treatment_directory(
+            str(self.root), "A.ARW", "20260814T000001Z")
+        self.assertFalse(treatment.keep_reasoning(where, "diagnosis", {}))
+        self.assertTrue((Path(where) / "diagnosis.json").is_file())
+
+    def test_an_answer_nothing_can_read_keeps_what_arrived(self):
+        """An empty file and a guess is how the first live run was spent."""
+        where = treatment.treatment_directory(
+            str(self.root), "A.ARW", "20260814T000002Z")
+        self.assertFalse(treatment.keep_reasoning(where, "diagnosis", 42))
+        kept = json.loads((Path(where) / "diagnosis.json").read_text())
+        self.assertEqual(kept["type"], "int")
+        self.assertIn("42", kept["unreadable"])
+
+    def test_an_answer_that_arrived_as_json_text_is_read(self):
+        answer = json.dumps({"subject": "an eclipse",
+                             "irrecoverable": "the clipped core"})
+        self.assertEqual(treatment.field(answer, "subject"), "an eclipse")
+        where = treatment.treatment_directory(
+            str(self.root), "A.ARW", "20260814T000003Z")
+        self.assertTrue(treatment.keep_reasoning(where, "diagnosis", answer))
+
+
+class DecisionTests(unittest.TestCase):
+    """A procedure that branches, not four questions in a fixed order.
+
+    The first shape asked about masks however the photograph answered.
+    A frame needing none paid for the reasoning anyway; a frame needing
+    three got one paragraph describing all of them.
+    """
+
+    def plan(self, count, **globals_):
+        return {"title": "t", "strategy": "protect the core",
+                "mask_count": count,
+                "global_adjustments": globals_ or {"exposure": -1.8}}
+
+    def test_a_photograph_needing_no_mask_asks_for_none(self):
+        self.assertEqual(treatment.mask_count(self.plan(0)), 0)
+
+    def test_a_count_nobody_could_mean_is_brought_into_range(self):
+        self.assertEqual(treatment.mask_count(self.plan(9)), 3)
+        self.assertEqual(treatment.mask_count(self.plan(-2)), 0)
+        self.assertEqual(treatment.mask_count({"mask_count": "two"}), 0)
+
+    def test_the_whole_frame_moves_become_operations(self):
+        recipe = json.loads(treatment.assemble_recipe(
+            "A.ARW", self.plan(0, exposure=-1.8, contrast=26, denoise=90), []))
+        self.assertEqual(
+            [item["op"] for item in recipe["operations"]],
+            ["tone.exposure", "tone.contrast", "detail.denoise_luminance"])
+        self.assertEqual(recipe["operations"][0]["value"], -1.8)
+
+    def test_a_move_nobody_offered_is_dropped(self):
+        recipe = json.loads(treatment.assemble_recipe(
+            "A.ARW", self.plan(0, exposure=-1.0, nostalgia=7), []))
+        self.assertEqual(len(recipe["operations"]), 1)
+
+    def test_a_number_out_of_range_is_bounded_not_refused(self):
+        recipe = json.loads(treatment.assemble_recipe(
+            "A.ARW", self.plan(0, exposure=-40), []))
+        self.assertEqual(recipe["operations"][0]["value"], -5.0)
+
+    def test_a_placed_mask_carries_its_centre_and_radius(self):
+        mask = {"region": "everything but the sun", "shape": "radial",
+                "centre_x": 44, "centre_y": 49, "radius": 18,
+                "inverted": True, "feather": 90,
+                "adjustments": {"exposure": 0.6}}
+        recipe = json.loads(treatment.assemble_recipe(
+            "A.ARW", self.plan(1), [mask]))
+        placed = recipe["operations"][-1]
+        self.assertEqual(placed["op"], "mask.radial")
+        self.assertIn("at 44%, 49%", placed["value"]["anchor"])
+        self.assertIn("radius 18%", placed["value"]["anchor"])
+        self.assertIn("inverted", placed["value"]["anchor"])
+
+    def test_a_mask_with_nothing_inside_it_is_not_added(self):
+        recipe = json.loads(treatment.assemble_recipe(
+            "A.ARW", self.plan(1),
+            [{"shape": "radial", "adjustments": {}}]))
+        self.assertNotIn("mask.radial",
+                         [item["op"] for item in recipe["operations"]])
+
+    def test_a_move_a_mask_cannot_carry_is_left_out_of_it(self):
+        """The engine blends a mask's effects; only some are meaningful."""
+        recipe = json.loads(treatment.assemble_recipe(
+            "A.ARW", self.plan(1),
+            [{"shape": "linear", "anchor": "bottom",
+              "adjustments": {"exposure": 0.4, "denoise": 80}}]))
+        effects = recipe["operations"][-1]["value"]["effects"]
+        self.assertEqual([item["op"] for item in effects], ["tone.exposure"])
+
+    def test_a_shape_nobody_recognises_becomes_a_radial(self):
+        recipe = json.loads(treatment.assemble_recipe(
+            "A.ARW", self.plan(1),
+            [{"shape": "hexagon", "adjustments": {"exposure": 0.3}}]))
+        self.assertEqual(recipe["operations"][-1]["op"], "mask.radial")
+
+    def test_the_assembled_recipe_always_renders_what_it_says(self):
+        """Numbers cannot half-compile; that was the point of the change."""
+        recipe = treatment.assemble_recipe(
+            "A.ARW", self.plan(0, exposure=-1.8), [])
+        self.assertTrue(treatment.treatment_usable(recipe))
+        self.assertEqual(json.loads(recipe)["coverage"]["unsupported"], 0)
+
+    def test_the_masks_are_asked_for_one_at_a_time_and_kept(self):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: None)
+        where = treatment.treatment_directory(
+            str(root), "A.ARW", "20260814T000020Z")
+        masks = []
+        for region in ("the sun", "the skyline"):
+            self.assertTrue(treatment.keep_mask(
+                where, masks, {"region": region, "shape": "radial"}))
+            masks.append({"region": region})
+        self.assertTrue((Path(where) / "mask-1.json").is_file())
+        self.assertTrue((Path(where) / "mask-2.json").is_file())
+
+
+class BoundaryTests(unittest.TestCase):
+    """Nothing crossing from the program assumes what shape it is in.
+
+    Three live runs died one call site at a time on this: a value
+    arrives as a mapping, as the JSON text of one, or as an object,
+    depending on the runtime and on whether it came fresh or from a
+    memo. Each death had already paid for the answer it threw away.
+    """
+
+    def setUp(self):
+        self._temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self._temporary.name)
+        self.addCleanup(self._temporary.cleanup)
+
+    def test_data_reads_all_three_shapes(self):
+        self.assertEqual(treatment.data({"a": 1}), {"a": 1})
+        self.assertEqual(treatment.data('{"a": 1}'), {"a": 1})
+        self.assertIsNone(treatment.data("not json at all"))
+
+    def test_a_round_records_a_critique_that_arrived_as_a_mapping(self):
+        """The shape the third live run died on."""
+        where = treatment.treatment_directory(
+            str(self.root), "A.ARW", "20260814T000010Z")
+        compiled = treatment.compiled_treatment(
+            "A.ARW", {}, json.dumps({"global_exposure": ["Contrast +12"]}))
+        record = json.loads(treatment.round_record(
+            where, [], compiled, "{}", "r.jpg",
+            {"subject_contrast": 70},
+            {"improved": "x", "finished": True, "next_change": ""}))
+        self.assertEqual(record["measurements"]["subject_contrast"], 70)
+        self.assertTrue(record["critique"]["finished"])
+
+    def test_the_budget_reads_records_whatever_shape_they_are(self):
+        as_mapping = {"round": 1, "critique": {"finished": True}}
+        self.assertFalse(treatment.keep_going([as_mapping], 3))
+        self.assertFalse(treatment.keep_going([json.dumps(as_mapping)], 3))
+
+    def test_a_recipe_that_arrived_as_a_mapping_still_renders_and_validates(self):
+        compiled = treatment.compiled_treatment(
+            "A.ARW", {}, {"global_exposure": ["Contrast +12"]})
+        self.assertTrue(treatment.treatment_usable(compiled))
+
+    def test_prompts_survive_a_previous_answer_that_is_a_mapping(self):
+        """A prompt that concatenates its inputs has to survive all three."""
+        evidence = json.dumps({"about": "an eclipse", "spectrum": "visible",
+                               "baseline": {"brightest_at": [0.4, 0.5]}})
+        strategy = {"protect": ["the clipped core"], "reveal": ["the skyline"]}
+        for built in (
+            treatment.strategy_prompt(evidence, {"irrecoverable": "the core"}),
+            treatment.structure_prompt(evidence, strategy),
+            treatment.recipe_prompt(evidence, strategy, {"masks": ["radial"]}),
+            treatment.critique_prompt(evidence, strategy, evidence,
+                                      json.dumps({"mean": 30}), 1, 3),
+        ):
+            self.assertIn("the clipped core", built) if "protect" in built \
+                else self.assertTrue(built)
 
 
 class KeepingTheWorkingTests(unittest.TestCase):
@@ -185,7 +431,8 @@ class KeepingTheWorkingTests(unittest.TestCase):
     def test_a_round_is_written_before_the_next_one_starts(self):
         where = self.directory()
         compiled = treatment.compiled_treatment(
-            "A.ARW", "t", "i", json.dumps({"global_exposure": ["Contrast +12"]}))
+            "A.ARW", {"title": "t", "intent": "i"},
+            json.dumps({"global_exposure": ["Contrast +12"]}))
         treatment.round_record(where, [], compiled, "{}", "render.jpg",
                                json.dumps({"subject_contrast": 70}),
                                critique(False))
@@ -196,7 +443,8 @@ class KeepingTheWorkingTests(unittest.TestCase):
     def test_rounds_number_themselves_in_order(self):
         where = self.directory()
         compiled = treatment.compiled_treatment(
-            "A.ARW", "t", "i", json.dumps({"global_exposure": ["Contrast +12"]}))
+            "A.ARW", {"title": "t", "intent": "i"},
+            json.dumps({"global_exposure": ["Contrast +12"]}))
         records = []
         for _ in range(3):
             records.append(treatment.round_record(
