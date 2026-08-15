@@ -24,6 +24,16 @@ Two amendments to the algorithm as first stated, both agreed:
     is a detection failure wearing a sun's costume; such frames are
     set aside by name.
 
+The survey's contract is a BOX per frame -- the principal subject's
+[x0, y0, x1, y1] -- not a circle. The eclipse measurer is simply the
+first thing that fills it (a circle is the box cx±r, cy±r); a tracker
+or a vision model fills the same four numbers and the plan and the
+render never learn what the subject was. The plan pins each frame's
+box top-left at a fixed offset and sizes the crop for the LARGEST box
+in the sequence, margins measured against that span -- which is what
+makes containment true by construction even when the subject's extent
+varies frame to frame, a case the circle version quietly clamped.
+
 The colour shift is the house's own: a recipe's global operations
 applied with the development engine's primitives -- the same math the
 develop page runs -- so the look cannot drift from what the recipes
@@ -48,7 +58,7 @@ from PIL import Image
 
 from development_engine import _apply_global, _decoded, _encoded, active
 
-FORMAT = "darkimiya-timelapse-plan-v1"
+FORMAT = "darkimiya-timelapse-plan-v2"
 
 # A fitted diameter this far from the sequence's median means a
 # different lens or a failed fit; either way the frame cannot share a
@@ -250,33 +260,17 @@ def survey(photos: str, pattern: str = "*.RAF",
         if fitted is None:
             frames.append({**item, "excluded": "no sun found to fit"})
             continue
+        cx, cy = fitted["cx"] / scale, fitted["cy"] / scale
+        r = fitted["r"] / scale
         frames.append({
             **item, "width": width, "height": height,
-            "cx": fitted["cx"] / scale, "cy": fitted["cy"] / scale,
-            "r": fitted["r"] / scale, "inliers": fitted["inliers"]})
-    fitted_frames = [f for f in frames if "excluded" not in f]
-    if fitted_frames:
-        median_d = float(np.median([2 * f["r"] for f in fitted_frames]))
-        for frame in fitted_frames:
-            if abs(2 * frame["r"] - median_d) > SCALE_TOLERANCE * median_d:
-                frame["excluded"] = (
-                    f"sun diameter {2 * frame['r']:.0f}px sits outside "
-                    f"{SCALE_TOLERANCE:.0%} of the sequence's "
-                    f"{median_d:.0f}px -- another lens, or a failed fit")
+            # The contract every measurer fills: the subject's box.
+            # The circle's own numbers stay beside it as this
+            # measurer's working notes.
+            "box": [cx - r, cy - r, cx + r, cy + r],
+            "r": r, "inliers": fitted["inliers"]})
+    frames = _screen(frames)
     kept = [f for f in frames if "excluded" not in f]
-    # A fit that leaps away from its neighbours' track is a detection
-    # failure, not a hand movement: hands drift, they do not teleport.
-    # Only meaningful once the sequence is long enough to have a track.
-    if len(kept) >= 7:
-        track_x = _smoothed([f["cx"] for f in kept])
-        track_y = _smoothed([f["cy"] for f in kept])
-        for frame, at_x, at_y in zip(kept, track_x, track_y):
-            leap = float(np.hypot(frame["cx"] - at_x, frame["cy"] - at_y))
-            if leap > 1.5 * frame["r"]:
-                frame["excluded"] = (
-                    f"the fit sits {leap:.0f}px from its neighbours' "
-                    "track -- a detection failure, not a hand movement")
-        kept = [f for f in frames if "excluded" not in f]
     return json.dumps({
         "format": FORMAT, "photos": str(root), "pattern": str(pattern),
         "frames": frames,
@@ -285,6 +279,45 @@ def survey(photos: str, pattern: str = "*.RAF",
             {"name": f["name"], "why": f["excluded"]}
             for f in frames if "excluded" in f],
     }, sort_keys=True)
+
+
+def _screen(frames: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The survey's two honesty passes, on the box contract.
+
+    Scale: a subject whose extent sits far from the sequence's median
+    cannot share a pixel-space crop (another lens, or a failed find).
+    Track: a find that leaps from its neighbours' path is a detection
+    failure wearing the subject's costume -- hands drift, they do not
+    teleport. Both name the frame; neither drops it silently.
+    """
+    found = [f for f in frames if "excluded" not in f]
+    if found:
+        spans = [max(f["box"][2] - f["box"][0],
+                     f["box"][3] - f["box"][1]) for f in found]
+        median_span = float(np.median(spans))
+        for frame, span in zip(found, spans):
+            if abs(span - median_span) > SCALE_TOLERANCE * median_span:
+                frame["excluded"] = (
+                    f"subject extent {span:.0f}px sits outside "
+                    f"{SCALE_TOLERANCE:.0%} of the sequence's "
+                    f"{median_span:.0f}px -- another lens, or a "
+                    "failed find")
+    kept = [f for f in frames if "excluded" not in f]
+    if len(kept) >= 7:
+        centres_x = [(f["box"][0] + f["box"][2]) / 2 for f in kept]
+        centres_y = [(f["box"][1] + f["box"][3]) / 2 for f in kept]
+        track_x = _smoothed(centres_x)
+        track_y = _smoothed(centres_y)
+        for frame, cx, cy, at_x, at_y in zip(
+                kept, centres_x, centres_y, track_x, track_y):
+            leap = float(np.hypot(cx - at_x, cy - at_y))
+            span = max(frame["box"][2] - frame["box"][0],
+                       frame["box"][3] - frame["box"][1])
+            if leap > 0.75 * span:
+                frame["excluded"] = (
+                    f"the find sits {leap:.0f}px from its neighbours' "
+                    "track -- a detection failure, not a hand movement")
+    return frames
 
 
 def crop_plan(survey_text: str) -> str:
@@ -299,32 +332,40 @@ def crop_plan(survey_text: str) -> str:
     kept = [f for f in told["frames"] if "excluded" not in f]
     if not kept:
         return json.dumps({**told, "error": "no frames survived the survey"})
-    diameter = max(2 * f["r"] for f in kept)
-    min_t = min(f["cy"] - f["r"] for f in kept)
-    min_l = min(f["cx"] - f["r"] for f in kept)
-    min_r = min(f["width"] - (f["cx"] + f["r"]) for f in kept)
-    min_b = min(f["height"] - (f["cy"] + f["r"]) for f in kept)
+    span_w = max(f["box"][2] - f["box"][0] for f in kept)
+    span_h = max(f["box"][3] - f["box"][1] for f in kept)
+    min_t = min(f["box"][1] for f in kept)
+    min_l = min(f["box"][0] for f in kept)
+    # Margins against the pinned edge PLUS the largest span, so the
+    # crop contains every frame's subject by construction even when
+    # the subject's extent varies -- the circle version measured to
+    # each frame's own right edge and quietly clamped the difference.
+    min_r = min(f["width"] - f["box"][0] - span_w for f in kept)
+    min_b = min(f["height"] - f["box"][1] - span_h for f in kept)
     if min(min_t, min_l, min_r, min_b) < 0:
         worst = min(kept, key=lambda f: min(
-            f["cy"] - f["r"], f["cx"] - f["r"],
-            f["width"] - f["cx"] - f["r"], f["height"] - f["cy"] - f["r"]))
+            f["box"][1], f["box"][0],
+            f["width"] - f["box"][0] - span_w,
+            f["height"] - f["box"][1] - span_h))
         return json.dumps({**told, "error": (
-            "the sun touches the frame edge in at least one photograph "
-            f"(worst: {worst['name']}); exclude it and survey again")})
+            "the subject sits too close to the frame edge in at least "
+            f"one photograph (worst: {worst['name']}); exclude it and "
+            "survey again")})
     # Constant size; even, because video codecs insist.
-    crop_w = int(min_l + diameter + min_r) // 2 * 2
-    crop_h = int(min_t + diameter + min_b) // 2 * 2
+    crop_w = int(min_l + span_w + min_r) // 2 * 2
+    crop_h = int(min_t + span_h + min_b) // 2 * 2
     boxes = []
     for frame in kept:
-        left = int(round(frame["cx"] - frame["r"] - min_l))
-        top = int(round(frame["cy"] - frame["r"] - min_t))
+        left = int(round(frame["box"][0] - min_l))
+        top = int(round(frame["box"][1] - min_t))
         left = max(0, min(left, frame["width"] - crop_w))
         top = max(0, min(top, frame["height"] - crop_h))
         boxes.append({"name": frame["name"], "taken": frame["taken"],
                       "left": left, "top": top})
     return json.dumps({
         "format": FORMAT, "photos": told["photos"],
-        "diameter": diameter, "width": crop_w, "height": crop_h,
+        "span": {"width": span_w, "height": span_h},
+        "width": crop_w, "height": crop_h,
         "margins": {"top": min_t, "left": min_l,
                     "right": min_r, "bottom": min_b},
         "boxes": boxes,

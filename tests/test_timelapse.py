@@ -120,23 +120,50 @@ class PlanTests(unittest.TestCase):
             fitted = {f["name"]: f for f in told["frames"]}
             for box in plan["boxes"]:
                 frame = fitted[box["name"]]
-                offsets.add((round(frame["cx"] - box["left"]),
-                             round(frame["cy"] - box["top"])))
+                offsets.add((round(frame["box"][0] - box["left"]),
+                             round(frame["box"][1] - box["top"])))
             # One offset for the whole sequence, within a pixel.
             self.assertLessEqual(len(offsets), 2)
 
     def test_the_right_margin_carries_all_three_terms(self):
-        """The step-11 fix: the crop must never cut into the disc."""
+        """The step-11 fix: the crop must never cut into the subject."""
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             plan = json.loads(timelapse.crop_plan(self.sequence(
                 root, [(200, 300), (700, 300)])))
             self.assertNotIn("error", plan)
-            diameter = plan["diameter"]
             self.assertGreaterEqual(
                 plan["width"],
-                plan["margins"]["left"] + diameter
+                plan["margins"]["left"] + plan["span"]["width"]
                 + plan["margins"]["right"] - 2)
+
+    def test_a_varying_subject_extent_is_contained_by_construction(self):
+        """The refactor's own reason: the circle version measured the
+        right margin to each frame's own edge, so a frame whose subject
+        was smaller than the sequence's largest could see the crop slip
+        past the frame boundary and get clamped -- moving the subject
+        off its pinned offset. Boxes size the margins against the
+        largest span, so every crop contains every subject unclamped."""
+        survey = {"format": timelapse.FORMAT, "photos": "/p",
+                  "pattern": "*", "kept": 2, "excluded": [],
+                  "frames": [
+                      {"name": "big.jpg", "taken": "1", "width": 900,
+                       "height": 600, "box": [300.0, 200.0, 500.0, 400.0]},
+                      {"name": "small.jpg", "taken": "2", "width": 900,
+                       "height": 600, "box": [700.0, 200.0, 790.0, 290.0]},
+                  ]}
+        # Spans differ 200 vs 90 -- more than the scale screen allows,
+        # so feed the plan directly: crop_plan trusts its survey.
+        plan = json.loads(timelapse.crop_plan(json.dumps(survey)))
+        self.assertNotIn("error", plan)
+        for box, frame in zip(plan["boxes"], survey["frames"]):
+            self.assertGreaterEqual(box["left"], 0)
+            self.assertLessEqual(box["left"] + plan["width"],
+                                 frame["width"])
+            # And the subject's pinned offset survived: no clamp moved it.
+            self.assertEqual(
+                box["left"],
+                int(round(frame["box"][0] - plan["margins"]["left"])))
 
     def test_a_different_lens_is_set_aside_by_name(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -172,8 +199,7 @@ class PlanTests(unittest.TestCase):
                   "pattern": "*", "kept": 1, "excluded": [],
                   "frames": [{"name": "a.jpg", "taken": "t",
                               "width": 900, "height": 600,
-                              "cx": 50.0, "cy": 300.0, "r": 90.0,
-                              "inliers": 100}]}
+                              "box": [-40.0, 210.0, 140.0, 390.0]}]}
         plan = json.loads(timelapse.crop_plan(json.dumps(survey)))
         self.assertIn("error", plan)
         self.assertIn("a.jpg", plan["error"])
