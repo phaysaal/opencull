@@ -367,8 +367,6 @@ class FineTunePage(QWidget):
         self.recipe: dict[str, Any] = {}
         self.changes: dict[str, dict] = {}
         self.controls: list[Control] = []
-        # Which sections have their absent controls unfolded.
-        self._open_sections: dict[str, bool] = {}
         self._pristine: dict[str, Any] = {}
         self._mask_cards: list[MaskCard] = []
         # Which mask is being shown as a tint, if any, and the plain
@@ -778,10 +776,14 @@ class FineTunePage(QWidget):
         advice = zones.load(
             Path(str(self.workspace.project.get("source_folder") or ".")),
             self.current) if self.current else {}
-        # A section holds its compiled controls first, then -- folded
-        # behind its own count -- everything the renderer could also do.
-        # The fold keeps the panel the height of the treatment while the
-        # whole instrument stays one click away.
+        # Every control of every section, always. The first shape folded
+        # the unused ones behind a per-section count, and the fold read
+        # as absence: the photographer this page is for looked at it and
+        # asked where the rest of the controls were. A control the
+        # treatment used comes first and carries its asked mark; the
+        # rest sit quiet -- unchecked, slider still -- until touched,
+        # which is what asks them into the recipe. The panel scrolls;
+        # an instrument does not hide its keys to look shorter.
         by_section: dict[str, list[dict]] = {}
         for control in surface:
             by_section.setdefault(control["section"], []).append(control)
@@ -792,29 +794,12 @@ class FineTunePage(QWidget):
             self.body.addWidget(self._heading(
                 section.upper() + (f"  ·  {len(present)}" if present else ""),
                 section if section in touched else ""))
-            for control in present:
+            for control in present + absent:
                 widget = Control(control, advice.get(control["op"]))
                 widget.changed.connect(self._control_changed)
                 widget.wanted.connect(self._control_wanted)
                 self.controls.append(widget)
                 self.body.addWidget(widget)
-            if absent:
-                if self._open_sections.get(section):
-                    for control in absent:
-                        widget = Control(control, advice.get(control["op"]))
-                        widget.changed.connect(self._control_changed)
-                        widget.wanted.connect(self._control_wanted)
-                        self.controls.append(widget)
-                        self.body.addWidget(widget)
-                more = QPushButton(
-                    f"{'Fewer' if self._open_sections.get(section) else 'More'}"
-                    f" {section.lower()} controls · {len(absent)}")
-                more.setObjectName("ghost")
-                more.setFont(theme.body(8))
-                more.setCursor(Qt.CursorShape.PointingHandCursor)
-                more.clicked.connect(
-                    lambda _=False, s=section: self._toggle_section(s))
-                self.body.addWidget(more)
         placed = adjustments.masks(self.recipe)
         self.body.addWidget(self._heading(
             f"MASKS  ·  {len(placed)}" if placed else "MASKS",
@@ -924,10 +909,6 @@ class FineTunePage(QWidget):
         touched.discard("Other")
         return touched
 
-    def _toggle_section(self, section: str) -> None:
-        self._open_sections[section] = not self._open_sections.get(section)
-        self._show_controls()
-
     def _control_wanted(self, op: str, value: float) -> None:
         """An absent operation, asked into the recipe by hand.
 
@@ -946,7 +927,6 @@ class FineTunePage(QWidget):
                     item["value"] = value
         self.recipe = adjustments.apply(
             self.recipe, {"+insert": [{"op": op, "value": value}]})
-        self._open_sections[adjustments._section_of(op)] = True
         self._show_controls()
         self.render()
 

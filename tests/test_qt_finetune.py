@@ -97,8 +97,10 @@ class FineTunePageTests(unittest.TestCase):
 
     def test_every_bounded_operation_becomes_a_control(self):
         page = self.page()
+        compiled = [item.control["op"] for item in page.controls
+                    if not item.absent]
         self.assertEqual(
-            [item.control["op"] for item in page.controls],
+            compiled,
             ["tone.exposure", "tone.contrast", "tone.shadow",
              "color.temperature"])
 
@@ -112,16 +114,15 @@ class FineTunePageTests(unittest.TestCase):
             "guardrail", [item.control["op"] for item in page.controls])
 
     def test_a_treatment_with_no_bounded_operations_still_offers_the_instrument(self):
-        """It used to say "nothing here to move" and stop. Advanced fine
-        tuning means the whole surface is always there, folded; only the
-        keep button waits for something to actually be in the recipe."""
-        from PySide6.QtWidgets import QPushButton
-
+        """It used to say "nothing here to move" and stop, then folded
+        the unused controls behind a count -- and the fold read as
+        absence: the photographer asked where the rest of the controls
+        were. Every control is on the page now, always; only the keep
+        button waits for something to actually be in the recipe."""
         page = self.page(recipe=json.dumps({"tone": ["make it nicer"]}))
-        self.assertEqual(page.controls, [])
-        folds = [button.text() for button in page.findChildren(QPushButton)
-                 if button.text().startswith(("More ", "Fewer "))]
-        self.assertIn("More tone controls · 7", folds)
+        offered = {item.control["op"] for item in page.controls}
+        self.assertEqual(offered, set(adjustments.LABELS))
+        self.assertTrue(all(item.absent for item in page.controls))
         self.assertFalse(page.keep_button.isEnabled())
 
     # --- moving them ------------------------------------------------------
@@ -214,11 +215,17 @@ class FineTunePageTests(unittest.TestCase):
         self.assertIn("make it moody", page.status.text())
         self.assertEqual(page.prompt.text(), "shadows +5, make it moody")
 
-    def test_a_control_this_treatment_does_not_have_is_named(self):
+    def test_words_reach_a_control_the_treatment_never_used(self):
+        """It used to answer "no Vignette to move". Every control is on
+        the page now, so the words move it -- and moving it is the ask
+        that makes the operation real."""
         page = self.page()
         page.prompt.setText("vignette -10")
         page.speak()
-        self.assertIn("no Vignette to move", page.status.text())
+        vignette = self.control(page, "finish.vignette")
+        self.assertFalse(vignette.absent)
+        self.assertAlmostEqual(vignette.value(), -10.0, delta=0.3)
+        self.assertIn("Vignette", page.status.text())
 
     # --- keeping one ------------------------------------------------------
 
@@ -502,6 +509,18 @@ class SectionResetTests(FineTunePageTests):
     def test_an_untouched_page_offers_no_section_resets(self):
         page = self.page()
         self.assertEqual(self.reset_buttons(page), {})
+
+    def test_every_control_is_on_the_page_not_folded_behind_a_count(self):
+        page = self.page()
+        offered = {item.control["op"] for item in page.controls}
+        self.assertEqual(offered, set(adjustments.LABELS))
+        compiled = [item for item in page.controls if not item.absent]
+        quiet = [item for item in page.controls if item.absent]
+        self.assertTrue(compiled and quiet)
+        # The treatment's own controls lead their sections; the quiet
+        # ones follow, unchecked and still until touched.
+        self.assertFalse(quiet[0].enabled.isChecked())
+        self.assertFalse(quiet[0].slider.isEnabled())
 
     def test_a_moved_section_grows_the_reset_word(self):
         page = self.page()
