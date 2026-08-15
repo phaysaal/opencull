@@ -697,6 +697,73 @@ class ProofEdgeTests(FineTunePageTests):
         self.assertEqual(asked, [page.proof_edge()])
 
 
+class AsShotStateTests(FineTunePageTests):
+    """Two defaults, one page: the recipe's own, and nothing at all.
+
+    "As suggested" existed; back-to-shot only existed as the hold-B
+    peek or as unticking every operation by hand. This is the working
+    state: everything off, buildable-up-from, keepable.
+    """
+
+    def test_as_shot_switches_every_operation_off(self):
+        page = self.page()
+        page.reset_to_shot()
+        for operation in page.recipe.get("operations", []):
+            if str(operation.get("op", "")).startswith("guardrail."):
+                continue
+            self.assertIs(operation.get("enabled"), False,
+                          operation.get("op"))
+
+    def test_masks_are_switched_off_too(self):
+        page = self.page()
+        made = {"shape": "radial",
+                "geometry": {"centre_x": 50.0, "centre_y": 50.0,
+                             "radius": 30.0, "feather": 100},
+                "effects": [{"op": "tone.exposure", "value": 0.3}]}
+        page.changes.setdefault("+mask", []).append(made)
+        page.recipe = adjustments.apply(page.recipe, {"+mask": [made]})
+        page._pristine = json.loads(json.dumps(page.recipe))
+        page.reset_to_shot()
+        self.assertFalse(adjustments.masks(page.recipe)[0]["enabled"])
+
+    def test_it_is_a_working_state_not_an_erasure(self):
+        """The switches stay on the page; one can be turned back on."""
+        page = self.page()
+        page.reset_to_shot()
+        exposure = self.control(page, "tone.exposure")
+        self.assertFalse(exposure.enabled.isChecked())
+        exposure.enabled.setChecked(True)
+        applied = adjustments.apply(page._pristine, page.changes)
+        turned = next(item for item in applied["operations"]
+                      if item.get("op") == "tone.exposure")
+        self.assertIsNot(turned.get("enabled"), False)
+
+    def test_as_suggested_restores_the_treatment_whole(self):
+        page = self.page()
+        page.reset_to_shot()
+        page.reset()
+        self.assertEqual(page.changes, {})
+        for operation in page.recipe.get("operations", []):
+            self.assertIsNot(operation.get("enabled"), False)
+
+    def test_the_state_rides_the_changes_dict_to_the_renderer(self):
+        page = self.page()
+        page.frame.resize(900, 600)
+        page.reset_to_shot()
+        asked = []
+        page.renderer.render = (
+            lambda *args, **kwargs: asked.append(kwargs.get("adjustments")))
+        page.render()
+        self.assertTrue(asked and asked[0])
+        self.assertTrue(all(
+            change.get("enabled") is False for change in asked[0].values()))
+
+    def test_both_defaults_sit_side_by_side(self):
+        page = self.page()
+        self.assertEqual(page.shot_button.text(), "As shot")
+        self.assertEqual(page.reset_button.text(), "As suggested")
+
+
 class HoldTests(FineTunePageTests):
     """Press-and-hold: the judgement happens in one place at one size."""
 

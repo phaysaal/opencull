@@ -443,12 +443,26 @@ class FineTunePage(QWidget):
 
         actions = QHBoxLayout()
         actions.setSpacing(8)
+        self.shot_button = QPushButton("As shot")
+        self.shot_button.setObjectName("ghost")
+        self.shot_button.setFont(theme.body(10))
+        self.shot_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.shot_button.setToolTip(tooltip(
+            "Switch every operation off -- the whole treatment, masks "
+            "included -- so the frame stands as the camera developed it. "
+            "A working state, not a peek: build your own recipe up from "
+            "here, control by control, and keep or export the result. "
+            "Nothing is deleted; every switch can be turned back on, "
+            "and As suggested restores the treatment whole."))
+        self.shot_button.clicked.connect(self.reset_to_shot)
+        actions.addWidget(self.shot_button)
         self.reset_button = QPushButton("As suggested")
         self.reset_button.setObjectName("ghost")
         self.reset_button.setFont(theme.body(10))
         self.reset_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.reset_button.setToolTip(tooltip(
-            "Put every control back to what the model asked for."))
+            "Put every control back to what the model asked for -- the "
+            "selected treatment's own recipe, whole."))
         self.reset_button.clicked.connect(self.reset)
         actions.addWidget(self.reset_button)
         actions.addStretch(1)
@@ -1095,6 +1109,27 @@ class FineTunePage(QWidget):
         self.changes = {}
         self._rebuild_mirror()
         self._report("Back to the treatment as it was suggested.")
+
+    def reset_to_shot(self) -> None:
+        """Every operation off: the frame as the camera developed it.
+
+        Not an erasure -- a changes dict that disables the pristine
+        recipe's every operation and mask, so the same payload the
+        renderer always gets carries this state too, the switches stay
+        on the page to be turned back on one by one, and As suggested
+        is still one click away.
+        """
+        turned_off: dict[str, Any] = {
+            item["id"]: {"enabled": False}
+            for item in adjustments.controls(self._pristine)}
+        for index in range(len(adjustments.masks(self._pristine))):
+            turned_off[f"mask:{index + 1}"] = {"enabled": False}
+        self.changes = turned_off
+        self._rebuild_mirror()
+        self._report(
+            "Everything is switched off; the frame stands as shot. "
+            "Build up from here, or take As suggested to restore the "
+            "treatment.")
 
     def reset_section(self, section: str) -> None:
         """Put one section of the ACTIVE layer back, the rest standing."""
