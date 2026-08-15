@@ -47,6 +47,8 @@ BUILT_INS = (
      "The Kimiya Treatment: develop one frame in criticised rounds."),
     ("control_zones.kim",
      "Place the fine-tune sliders' advice bands for one frame."),
+    ("eclipse_timelapse.kim",
+     "Align a handheld eclipse sequence into timelapse frames."),
 )
 
 _PARAM_RE = re.compile(

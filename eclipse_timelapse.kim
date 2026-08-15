@@ -1,0 +1,36 @@
+-- Align a handheld eclipse sequence into timelapse frames.
+--
+-- The photographs were not shot from a tripod, so the sun drifts. The
+-- cure is the largest common crop that pins the sun at a fixed offset:
+-- a robust circle fit to the visible limb in every frame, centres
+-- smoothed over time, minimum margins across the sequence -- so no
+-- frame is padded, every crop is the same even-dimensioned size, and
+-- the numbered output assembles straight into video. The colour shift
+-- is any house recipe's global operations, applied with the develop
+-- engine's own math.
+--
+-- Deterministic end to end: no model is asked for anything, so a
+-- 300-frame run costs rendering time and nothing else.
+
+param photos: text = "."
+param pattern: text = "*.RAF"
+param frames_dir: text = ""
+param recipe: text = ""
+param detect_edge: num = 1200
+param output: text = "timelapse.json"
+
+use python "timelapse_kernel.py"
+
+-- Every frame found, timed, fitted; the excluded named, never dropped
+-- silently. Then the photographer's crop on the fitted centres.
+measured := survey(photos, pattern, detect_edge)
+plan := crop_plan(measured)
+check plan_valid(plan)
+print(plan_note(plan))
+
+report := render_sequence(photos, plan, frames_dir, recipe)
+check sequence_complete(report, plan)
+
+act file.overwrite(output, report)
+settle until check file_exists(output) within 5
+commit(report)

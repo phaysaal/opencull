@@ -55,6 +55,7 @@ py-modules = [
     "semantic_verifier",
     "treatment_kernel",
     "zones_kernel",
+    "timelapse_kernel",
     "recipe_compiler",
     "development_engine",
     "development_pipeline",
