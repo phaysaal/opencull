@@ -167,10 +167,19 @@ class FineTunePageTests(unittest.TestCase):
         self.assertGreaterEqual(exposure.value(), exposure.control["low"])
 
     def test_the_caption_says_whether_anything_has_been_moved(self):
+        """And it follows the pixels, not the request: until a render
+        lands the pane shows the frame as shot and says so; the caption
+        settles when _rendered delivers the picture it describes."""
+        from PySide6.QtGui import QPixmap
+
         page = self.page()
+        self.assertIn("AS SHOT", page.caption.text())
+        rendered = QPixmap(60, 40)
+        page._rendered(page.current, page.treatment, rendered)
         self.assertEqual(page.caption.text(), "AS SUGGESTED")
         exposure = self.control(page, "tone.exposure")
         exposure.slider.setValue(exposure._tick(-1.0))
+        page._rendered(page.current, page.treatment, rendered)
         self.assertEqual(page.caption.text(), "AS ADJUSTED")
 
     def test_going_back_to_the_suggestion_clears_every_change(self):
@@ -738,11 +747,55 @@ class HoldTests(FineTunePageTests):
         self.assertIs(page._plain_pixmap, fresh)
         self.assertTrue(page._holding)
 
-    def test_changing_photo_forgets_both_frames(self):
-        page, _adjusted, _shot = self.page_with_frames()
+    def test_changing_photo_forgets_the_render_and_reloads_the_shot(self):
+        """The old render must never be compared against a new frame --
+        and the pane must not go blank either: the new photograph's own
+        as-shot is on screen before the first render lands."""
+        page, adjusted, shot = self.page_with_frames()
         page.show_photo(page.photos[0])
-        self.assertIsNone(page._as_shot_pixmap)
         self.assertIsNone(page._plain_pixmap)
+        self.assertIsNotNone(page._as_shot_pixmap)
+        self.assertIsNot(page._as_shot_pixmap, shot)
+
+
+class FilmstripTests(FineTunePageTests):
+    """The treatments under the picture, each with its own rendering."""
+
+    def test_the_strip_is_horizontal_under_the_frame(self):
+        page = self.page()
+        self.assertEqual(page.treatment_list.flow(),
+                         page.treatment_list.Flow.LeftToRight)
+        # It lives in the stage column, not the control panel: the
+        # picture's parent chain and the strip's converge before the
+        # panel does.
+        self.assertIs(page.treatment_list.parentWidget(),
+                      page.frame.parentWidget())
+
+    def test_a_thumbnail_lands_on_its_own_row(self):
+        from PySide6.QtGui import QPixmap
+
+        page = self.page()
+        picture = QPixmap(60, 40)
+        picture.fill(Qt.GlobalColor.darkGreen)
+        treatment = str(page.treatments[0]["id"])
+        page._thumb_ready(page.current, treatment, picture)
+        self.assertFalse(page.treatment_list.item(0).icon().isNull())
+        self.assertIn((page.current, treatment), page.previews)
+
+    def test_a_stale_thumbnail_is_kept_but_not_painted(self):
+        from PySide6.QtGui import QPixmap
+
+        page = self.page()
+        picture = QPixmap(60, 40)
+        picture.fill(Qt.GlobalColor.darkGreen)
+        page._thumb_ready("SOMEBODY-ELSE.JPG", "standard", picture)
+        self.assertIn(("SOMEBODY-ELSE.JPG", "standard"), page.previews)
+        self.assertTrue(page.treatment_list.item(0).icon().isNull())
+
+    def test_the_pane_shows_the_frame_before_any_render(self):
+        page = self.page()
+        self.assertIsNotNone(page.frame._source)
+        self.assertIn("AS SHOT", page.caption.text())
 
 
 class RecipeFileTests(FineTunePageTests):

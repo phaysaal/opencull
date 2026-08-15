@@ -45,13 +45,17 @@ from opencull_gui import adjustments, presets, zones
 from opencull_gui.development import DevelopmentWorkspace
 
 from . import theme
-from .develop import PROOF_EDGE, PhotoLabel, Renderer
-from .previews import PreviewLoader
+from .colour import load_for_screen
+from .develop import PROOF_EDGE, THUMB_EDGE, PhotoLabel, PreviewQueue, Renderer
+from .previews import PreviewLoader, plain_icon
 from .widgets import tooltip
 from .zoneslider import ZoneSlider
 
 PHOTO_ROW = 30
 TREATMENT_ROW = 34
+# The filmstrip under the picture: icon, a line of name, breathing room.
+STRIP_HEIGHT = 128
+STRIP_TILE = 150
 # Treatments and presets share this list, so it can be thirteen rows long.
 # Past six it scrolls rather than growing, because the controls below it
 # are what the page is for.
@@ -275,6 +279,12 @@ class FineTunePage(QWidget):
         self.renderer = Renderer(workspace, PROOF_EDGE, pool, self)
         self.renderer.done.connect(self._rendered)
         self.renderer.failed.connect(self._render_failed)
+        # Thumbnails for the filmstrip, at the develop page's own edge so
+        # the two pages share one cache and the icons are usually free.
+        self.thumbs = PreviewQueue(
+            workspace, THUMB_EDGE, self.renderer._pool, parent=self)
+        self.thumbs.ready.connect(self._thumb_ready)
+        self.previews: dict[tuple[str, str], object] = {}
 
         self._build()
         self.refresh()
@@ -318,6 +328,23 @@ class FineTunePage(QWidget):
         self.frame = PhotoLabel()
         self.frame.setObjectName("paneImage")
         column.addWidget(self.frame, 1)
+
+        # The treatments, horizontal under the picture -- a filmstrip of
+        # what this frame could be, each with its own rendering. Moving
+        # them out of the side panel is what gives the layers and the
+        # controls the column they needed.
+        self.treatment_list = QListWidget()
+        self.treatment_list.setObjectName("treatmentList")
+        self.treatment_list.setFlow(QListWidget.Flow.LeftToRight)
+        self.treatment_list.setWrapping(False)
+        self.treatment_list.setIconSize(QSize(132, 88))
+        self.treatment_list.setFixedHeight(STRIP_HEIGHT)
+        self.treatment_list.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.treatment_list.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.treatment_list.currentRowChanged.connect(self._chose_treatment)
+        column.addWidget(self.treatment_list)
         split.addWidget(stage, 1)
 
         split.addWidget(self._panel())
@@ -358,16 +385,6 @@ class FineTunePage(QWidget):
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(16, 14, 16, 14)
         layout.setSpacing(10)
-
-        heading = QLabel("TREATMENT")
-        heading.setObjectName("eyebrow")
-        heading.setFont(theme.display(8))
-        layout.addWidget(heading)
-
-        self.treatment_list = QListWidget()
-        self.treatment_list.setObjectName("treatmentList")
-        self.treatment_list.currentRowChanged.connect(self._chose_treatment)
-        layout.addWidget(self.treatment_list)
 
         self.prompt = QLineEdit()
         self.prompt.setFont(theme.body(10))
@@ -536,14 +553,33 @@ class FineTunePage(QWidget):
             if item.get("id") != "calibrated"]
         self.treatment_list.blockSignals(True)
         self.treatment_list.clear()
+        wanted: list[tuple[str, str]] = []
         for item in self.treatments:
-            entry = QListWidgetItem(str(item.get("name") or item.get("id")))
-            entry.setSizeHint(QSize(0, TREATMENT_ROW))
+            name = str(item.get("name") or item.get("id"))
+            entry = QListWidgetItem(name)
+            entry.setFont(theme.body(8))
+            entry.setToolTip(tooltip(name))
+            entry.setSizeHint(QSize(STRIP_TILE, STRIP_HEIGHT - 14))
+            held = self.previews.get((photo, str(item.get("id"))))
+            if held is not None:
+                entry.setIcon(plain_icon(held))
+            else:
+                wanted.append((photo, str(item.get("id"))))
             self.treatment_list.addItem(entry)
         self.treatment_list.blockSignals(False)
-        self.treatment_list.setFixedHeight(
-            min(max(len(self.treatments), 1), TREATMENT_ROWS_SHOWN)
-            * TREATMENT_ROW + 10)
+        if wanted:
+            self.thumbs.want(
+                wanted, {photo: (self.engine(), self._demosaic())})
+        # The frame is never empty while the first render cooks: the
+        # photograph as shot is on screen the moment it is chosen.
+        try:
+            self._as_shot_pixmap = load_for_screen(
+                self.workspace._as_shot_preview(photo, self.proof_edge()))
+            if self._as_shot_pixmap is not None:
+                self.caption.setText("AS SHOT · rendering the treatment…")
+                self.frame.set_source(self._as_shot_pixmap)
+        except Exception:                            # noqa: BLE001 - blank
+            self._as_shot_pixmap = None
         if self.treatments:
             self.treatment_list.setCurrentRow(0)
             self.show_treatment(str(self.treatments[0].get("id")))
@@ -1131,8 +1167,9 @@ class FineTunePage(QWidget):
     def render(self) -> None:
         if not self.current or not self.treatment:
             return
-        self.caption.setText(
-            "AS ADJUSTED" if self.changes else "AS SUGGESTED")
+        # The caption follows the pixels, not the request: it is set by
+        # _rendered when the picture actually changes. Until then the
+        # pane honestly shows the frame as shot, and says so.
         self.renderer.render(
             self.current, self.treatment, self.engine(), self._demosaic(),
             adjustments=self.changes or None, maximum=self.proof_edge())
@@ -1141,20 +1178,31 @@ class FineTunePage(QWidget):
         return str(self.workspace.payload().get("rendering", {}).get(
             "demosaic") or "markesteijn-3-pass")
 
+    def _thumb_ready(self, photo: str, treatment: str, pixmap) -> None:
+        self.previews[(photo, treatment)] = pixmap
+        if photo != self.current:
+            return
+        for row, item in enumerate(self.treatments):
+            if str(item.get("id")) == treatment:
+                entry = self.treatment_list.item(row)
+                if entry is not None:
+                    entry.setIcon(plain_icon(pixmap))
+                break
+
     def _rendered(self, photo: str, treatment: str, pixmap) -> None:
         if photo != self.current or treatment != self.treatment:
             return
         self._plain_pixmap = pixmap
         if self._as_shot_pixmap is None:
             try:
-                from .colour import load_for_screen
-
                 self._as_shot_pixmap = load_for_screen(
                     self.workspace._as_shot_preview(
                         photo, self.proof_edge()))
             except Exception:                        # noqa: BLE001 - no hold
                 self._as_shot_pixmap = None
         if not self._holding:
+            self.caption.setText(
+                "AS ADJUSTED" if self.changes else "AS SUGGESTED")
             self.frame.set_source(pixmap)
             if self._overlay_for:
                 self._paint_overlay()
