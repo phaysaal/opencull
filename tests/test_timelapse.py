@@ -264,5 +264,91 @@ class SequenceTests(unittest.TestCase):
             self.assertFalse(timelapse.sequence_complete(report, plan))
 
 
+class TrackTests(unittest.TestCase):
+    """Mark it once, track it free -- and never trust a lost match.
+
+    The moving subject is a textured patch on a textured ground, so
+    correlation has something honest to grip; a blank square on black
+    matches itself everywhere.
+    """
+
+    def sequence(self, root: Path, positions, size=(640, 420),
+                 missing=()):
+        rng = np.random.default_rng(7)
+        ground = rng.integers(20, 70, size=(size[1], size[0]),
+                              dtype=np.uint8)
+        stamp = rng.integers(120, 250, size=(48, 48), dtype=np.uint8)
+        for index, position in enumerate(positions):
+            frame = ground.copy()
+            if index not in missing:
+                x, y = position
+                frame[y:y + 48, x:x + 48] = stamp
+            Image.fromarray(frame).convert("RGB").save(
+                root / f"frame-{index:03d}.jpg", quality=95)
+        first_x, first_y = positions[0]
+        return f"{first_x},{first_y},{first_x + 48},{first_y + 48}"
+
+    def test_the_tracker_follows_the_subject_within_pixels(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            positions = [(100, 100), (130, 96), (170, 118), (210, 140)]
+            seed = self.sequence(root, positions)
+            told = json.loads(timelapse.track_survey(
+                str(root), "frame-*.jpg", seed))
+            self.assertEqual(told["kept"], 4)
+            for frame, (x, y) in zip(told["frames"], positions):
+                self.assertAlmostEqual(frame["box"][0], x, delta=3)
+                self.assertAlmostEqual(frame["box"][1], y, delta=3)
+
+    def test_a_vanished_subject_is_set_aside_and_reacquired(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            positions = [(100, 100), (130, 100), (150, 104), (165, 110)]
+            seed = self.sequence(root, positions, missing={2})
+            told = json.loads(timelapse.track_survey(
+                str(root), "frame-*.jpg", seed))
+            lost = {item["name"]: item["why"] for item in told["excluded"]}
+            self.assertIn("frame-002.jpg", lost)
+            self.assertIn("lost the subject", lost["frame-002.jpg"])
+            found = {f["name"]: f for f in told["frames"]
+                     if "excluded" not in f}
+            self.assertIn("frame-003.jpg", found)
+            self.assertAlmostEqual(
+                found["frame-003.jpg"]["box"][0], 165, delta=4)
+
+    def test_the_template_is_cut_once_and_never_updated(self):
+        """A template that follows its matches drifts onto whatever it
+        matched. The seed box must survive to the last frame."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            positions = [(80 + 12 * i, 90 + 6 * i) for i in range(10)]
+            seed = self.sequence(root, positions)
+            told = json.loads(timelapse.track_survey(
+                str(root), "frame-*.jpg", seed))
+            last = [f for f in told["frames"] if "excluded" not in f][-1]
+            self.assertAlmostEqual(last["box"][0], positions[-1][0],
+                                   delta=3)
+
+    def test_a_degenerate_seed_box_is_refused(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.sequence(root, [(100, 100)])
+            with self.assertRaises(ValueError):
+                timelapse.track_survey(str(root), "frame-*.jpg",
+                                       "50,50,50,90")
+
+    def test_the_tracked_survey_feeds_the_same_plan_core(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            positions = [(100, 100), (140, 110), (180, 120)]
+            seed = self.sequence(root, positions)
+            plan = json.loads(timelapse.crop_plan(timelapse.track_survey(
+                str(root), "frame-*.jpg", seed)))
+            self.assertNotIn("error", plan)
+            self.assertEqual(plan["width"] % 2, 0)
+            for box in plan["boxes"]:
+                self.assertGreaterEqual(box["left"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

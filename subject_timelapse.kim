@@ -1,0 +1,34 @@
+-- Pin any moving subject for a timelapse: mark it once, track it free.
+--
+-- The general form of the eclipse alignment. The photographer draws
+-- one box around the principal subject on the first frame; normalized
+-- correlation follows the same patch through every later frame,
+-- searching where it last stood, because subjects move but do not
+-- teleport. Then the same largest-common-crop as the eclipse: the
+-- subject pinned at a fixed offset, no frame padded, every crop one
+-- even size, numbered for one ffmpeg line. Frames the tracker cannot
+-- vouch for are set aside by name, never silently.
+--
+-- No model is asked for anything: a 300-frame run costs decode time.
+
+param photos: text = "."
+param pattern: text = "*.RAF"
+param subject_box: text = ""
+param frames_dir: text = ""
+param recipe: text = ""
+param detect_edge: num = 1200
+param output: text = "timelapse.json"
+
+use python "timelapse_kernel.py"
+
+measured := track_survey(photos, pattern, subject_box, detect_edge)
+plan := crop_plan(measured)
+check plan_valid(plan)
+print(plan_note(plan))
+
+report := render_sequence(photos, plan, frames_dir, recipe)
+check sequence_complete(report, plan)
+
+act file.overwrite(output, report)
+settle until check file_exists(output) within 5
+commit(report)

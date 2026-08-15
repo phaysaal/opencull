@@ -281,6 +281,110 @@ def survey(photos: str, pattern: str = "*.RAF",
     }, sort_keys=True)
 
 
+# --- the second measurer: click once, track everywhere ---------------------
+
+# Below this correlation the match is noise wearing the template's
+# shape; the frame is set aside rather than trusted.
+TRACK_CONFIDENCE = 0.45
+
+
+def track_survey(photos: str, pattern: str, subject_box: str,
+                 detect_edge: float = 1200) -> str:
+    """Follow one subject named by a single box in the first frame.
+
+    The free tier of subject-locked stabilization: the photographer
+    marks the principal subject once -- [x0, y0, x1, y1] on the first
+    frame, full-resolution coordinates -- and normalized correlation
+    finds the same patch in every later frame, searching a window
+    around where it last stood, because subjects move but do not
+    teleport. The template is cut once and never updated: a template
+    that follows its own matches drifts onto whatever it matched, and
+    the drift compounds silently. A frame where the best match falls
+    below confidence is set aside by name, and the search resumes from
+    the last frame that was believed.
+
+    No model is asked for anything; a sequence costs decode time.
+    """
+    import cv2
+
+    root = Path(str(photos)).expanduser().resolve()
+    listed = list_frames(photos, pattern)
+    if not listed:
+        return json.dumps({"format": FORMAT, "photos": str(root),
+                           "pattern": str(pattern), "frames": [],
+                           "kept": 0, "excluded": []})
+    seed = [float(v) for v in str(subject_box).split(",")]
+    if len(seed) != 4 or seed[2] <= seed[0] or seed[3] <= seed[1]:
+        raise ValueError(
+            "subject_box is x0,y0,x1,y1 on the first frame, and the "
+            "box must have area")
+    frames: list[dict[str, Any]] = []
+    template = None
+    template_size = (0, 0)
+    last: tuple[float, float] | None = None
+    scale = 1.0
+    for item in listed:
+        path = root / item["name"]
+        try:
+            image = _preview(path)
+        except Exception as exc:                     # noqa: BLE001 - named
+            frames.append({**item, "excluded": f"unreadable: {exc}"})
+            continue
+        width, height = image.size
+        scale = min(1.0, float(detect_edge) / max(width, height))
+        probe = image if scale >= 1.0 else image.resize(
+            (max(1, round(width * scale)), max(1, round(height * scale))),
+            Image.Resampling.BILINEAR)
+        grey = np.asarray(probe.convert("L"), dtype=np.float32)
+        if template is None:
+            x0, y0, x1, y1 = (v * scale for v in seed)
+            template = grey[int(y0):int(y1), int(x0):int(x1)].copy()
+            if template.size < 64:
+                raise ValueError("the subject box is too small to track")
+            template_size = template.shape
+            last = (float(x0), float(y0))
+            frames.append({**item, "width": width, "height": height,
+                           "box": list(seed), "confidence": 1.0})
+            continue
+        th, tw = template_size
+        # Subjects move but do not teleport: search around the last
+        # believed position, one and a half subject-spans out.
+        reach = int(1.5 * max(th, tw))
+        wx0 = max(0, int(last[0]) - reach)
+        wy0 = max(0, int(last[1]) - reach)
+        wx1 = min(grey.shape[1], int(last[0]) + tw + reach)
+        wy1 = min(grey.shape[0], int(last[1]) + th + reach)
+        window = grey[wy0:wy1, wx0:wx1]
+        if window.shape[0] < th or window.shape[1] < tw:
+            frames.append({**item, "excluded": (
+                "the search window fell off the frame; the subject was "
+                "last seen too close to the edge")})
+            continue
+        scored = cv2.matchTemplate(window, template, cv2.TM_CCOEFF_NORMED)
+        _lo, best, _lo_at, best_at = cv2.minMaxLoc(scored)
+        if best < TRACK_CONFIDENCE:
+            frames.append({**item, "excluded": (
+                f"the tracker lost the subject (confidence {best:.2f}); "
+                "the search resumes from the last believed frame")})
+            continue
+        found_x = wx0 + best_at[0]
+        found_y = wy0 + best_at[1]
+        last = (float(found_x), float(found_y))
+        frames.append({
+            **item, "width": width, "height": height,
+            "box": [found_x / scale, found_y / scale,
+                    (found_x + tw) / scale, (found_y + th) / scale],
+            "confidence": round(float(best), 3)})
+    frames = _screen(frames)
+    kept = [f for f in frames if "excluded" not in f]
+    return json.dumps({
+        "format": FORMAT, "photos": str(root), "pattern": str(pattern),
+        "frames": frames, "kept": len(kept),
+        "excluded": [{"name": f["name"], "why": f["excluded"]}
+                     for f in frames if "excluded" in f],
+    }, sort_keys=True)
+
+
 def _screen(frames: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """The survey's two honesty passes, on the box contract.
 

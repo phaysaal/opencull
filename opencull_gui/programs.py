@@ -49,6 +49,8 @@ BUILT_INS = (
      "Place the fine-tune sliders' advice bands for one frame."),
     ("eclipse_timelapse.kim",
      "Align a handheld eclipse sequence into timelapse frames."),
+    ("subject_timelapse.kim",
+     "Pin any subject for a timelapse: mark it once, track it free."),
 )
 
 _PARAM_RE = re.compile(
