@@ -97,6 +97,10 @@ def kimiya_arguments(job: dict[str, Any]) -> tuple[str, list[str]]:
             f"about={job.get('about', '')}",
             "resume=true",
         ]
+    if kind == "kimiya_program":
+        return job["program"], [
+            f"{key}={value}"
+            for key, value in (job.get("parameters") or {}).items()]
     if kind == "control_zones":
         return "control_zones.kim", [
             f"photos={job['photos']}",
@@ -1062,6 +1066,99 @@ class JobManager:
                 # The worker reads this to put the key into the process
                 # environment. Every job kind records it; the one that
                 # forgot queued fine and then starved its model calls.
+                "credential_env": (
+                    provider_bundle["credential_env"]
+                    if provider_bundle else ""),
+            }
+            self._state["jobs"].append(job)
+            self._save()
+        self._wake.set()
+        return self.public()
+
+    def add_program(
+        self,
+        program: str,
+        parameters: dict[str, Any],
+        provider_profile_id: str = "",
+        photos: str = "",
+        store: Any = None,
+    ) -> dict[str, Any]:
+        """Queue one of the photographer's own Kimiya programs.
+
+        The same rails as every built-in: a per-job bundle carrying
+        agents.kim with key_env and never the key, the program's hash
+        pinned on the job, the compiler's check before anything runs,
+        and the log beside the output. What is different is only whose
+        program it is.
+        """
+        if store is None:
+            raise JobError("the program store is not available")
+        name = Path(str(program)).name
+        try:
+            resolved = store.resolve_uses(
+                store.read(name), agents=Path("agents.kim"))
+        except Exception as exc:
+            raise JobError(str(exc)) from exc
+        settled: dict[str, Any] = {}
+        for key, value in (parameters or {}).items():
+            said = str(value)
+            if len(said) > 2000:
+                raise JobError(f"parameter {key} is unreasonably long")
+            settled[str(key)] = said
+        output = str(settled.get("output") or "").strip()
+        if not output:
+            raise JobError(
+                "the run needs an output parameter, so the queue can say "
+                "where the result landed")
+        output_path = Path(output).expanduser().resolve()
+        if not output_path.parent.is_dir():
+            raise JobError(
+                f"output directory does not exist: {output_path.parent}")
+        settled["output"] = str(output_path)
+        with self._lock:
+            job_id = uuid.uuid4().hex[:12]
+            provider_bundle = None
+            if provider_profile_id:
+                if self.providers is None:
+                    raise JobError("provider profiles are disabled")
+                try:
+                    provider_bundle = self.providers.materialize_custom(
+                        job_id, provider_profile_id,
+                        Path(str(store.directory)) / name, resolved)
+                    self.program_checker(Path(provider_bundle["program_path"]))
+                except (ProviderError, JobError) as exc:
+                    raise JobError(str(exc)) from exc
+            profile_data = provider_bundle["profile"] if provider_bundle else {}
+            job = {
+                "id": job_id,
+                "kind": "kimiya_program",
+                "program": name,
+                "parameters": settled,
+                "photos": str(photos or settled.get("photos") or ""),
+                "output": str(output_path),
+                "checkpoint": f"{output_path}.checkpoint.json",
+                "log": f"{output_path}.log",
+                "status": "queued",
+                "message": f"Waiting to run {name}.",
+                "pid": None, "created_at": _now(), "started_at": None,
+                "finished_at": None, "exit_code": None,
+                "provider_profile_id": provider_profile_id or None,
+                "requested_model": None,
+                "provider_profile_name": profile_data.get(
+                    "name", "Legacy agents.kim"),
+                "provider_kind": profile_data.get("kind", "legacy"),
+                "provider_privacy": (
+                    "local" if profile_data.get("kind") == "ollama"
+                    else "remote-zdr" if profile_data.get("kind") == "openrouter"
+                    and profile_data.get("zdr")
+                    else "declared-in-agents.kim" if not provider_bundle
+                    else "remote-provider-policy"),
+                "provider_config_sha256": (
+                    provider_bundle["agents_sha256"] if provider_bundle else None),
+                "program_sha256": (
+                    provider_bundle["program_sha256"] if provider_bundle else None),
+                "program_path": (
+                    provider_bundle["program_path"] if provider_bundle else None),
                 "credential_env": (
                     provider_bundle["credential_env"]
                     if provider_bundle else ""),
@@ -2080,6 +2177,8 @@ class JobManager:
                 if job.get("kind") == "treatment"
                 else "Slider advice placement"
                 if job.get("kind") == "control_zones"
+                else f"Your program {job.get('program', '')}"
+                if job.get("kind") == "kimiya_program"
                 else "Kimiya culling")
             job.update(
                 status="running", pid=process.pid, started_at=_now(),
@@ -2115,6 +2214,8 @@ class JobManager:
                     if job.get("kind") == "treatment"
                     else "Slider advice placed; it paints when the frame is next opened."
                     if job.get("kind") == "control_zones"
+                    else f"{job.get('program', 'Your program')} finished; its output is beside its log."
+                    if job.get("kind") == "kimiya_program"
                     else "Culling report is ready for review.",
                 )
             elif requested == "cancelled":

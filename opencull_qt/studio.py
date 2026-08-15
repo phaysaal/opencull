@@ -36,10 +36,12 @@ class StudioPage(QWidget):
     closed = Signal()
 
     def __init__(self, style_profiles, jobs, providers,
-                 open_providers, parent: QWidget | None = None):
+                 open_providers, open_programs=None,
+                 parent: QWidget | None = None):
         super().__init__(parent)
         self.setObjectName("page")
         self._open_providers = open_providers
+        self._open_programs = open_programs or (lambda: None)
         self._build(style_profiles, jobs, providers)
 
     def _build(self, style_profiles, jobs, providers) -> None:
@@ -97,6 +99,30 @@ class StudioPage(QWidget):
         planned.setFont(theme.body(9))
         ledger_column.addWidget(planned)
         column.addWidget(ledger)
+
+        # --- programs ---------------------------------------------------
+        programs_title = QLabel("KIMIYA PROGRAMS")
+        programs_title.setObjectName("bandTitle")
+        programs_title.setFont(theme.display(8))
+        column.addWidget(programs_title)
+
+        programs_row = QHBoxLayout()
+        programs_row.setSpacing(12)
+        programs_hint = Paragraph(
+            "The pipelines themselves, as programs you can read. The "
+            "built-ins are worked examples; duplicate one, or write your "
+            "own, check it against the compiler, and run it through the "
+            "same queue and provider handling as everything else.")
+        programs_hint.setObjectName("hint")
+        programs_hint.setFont(theme.body(9))
+        programs_row.addWidget(programs_hint, 1)
+
+        write = QPushButton("Programs…")
+        write.setObjectName("ghost")
+        write.setFont(theme.body(10))
+        write.clicked.connect(lambda: self._open_programs())
+        programs_row.addWidget(write)
+        column.addLayout(programs_row)
 
         # --- providers --------------------------------------------------
         providers_title = QLabel("PROVIDERS")

@@ -2219,11 +2219,42 @@ class Launcher(QMainWindow):
         if getattr(self, "studio_page", None) is None:
             self.studio_page = StudioPage(
                 self.style_profiles, self.services.jobs,
-                self.services.providers, self.edit_providers)
+                self.services.providers, self.edit_providers,
+                self.edit_programs)
             self.studio_page.closed.connect(self.show_projects)
             self.pages.addWidget(self.studio_page)
         self.studio_page.panel.refresh()
         self.pages.setCurrentWidget(self.studio_page)
+
+    def edit_programs(self) -> None:
+        """The Studio's Programs room: read, write, check and run Kimiya."""
+        from opencull_gui.appdirs import support_dir
+        from opencull_gui.programs import ProgramStore
+        from opencull_qt.programs import ProgramsDialog
+
+        store = ProgramStore(
+            support_dir() / "Programs",
+            self.services.providers.project_root,
+            python=self.services.jobs.python)
+        dialog = ProgramsDialog(store, self)
+        dialog.ran.connect(
+            lambda name, parameters: self.run_program(
+                store, name, parameters))
+        dialog.exec()
+
+    def run_program(self, store, name: str, parameters: dict) -> None:
+        """Queue one of the photographer's programs like any built-in."""
+        try:
+            self.services.jobs.add_program(
+                name, parameters,
+                provider_profile_id=self.provider_id(),
+                store=store)
+        except Exception as exc:
+            self._say(str(exc), "alarm")
+            return
+        self._say(
+            f"{name} is queued. Its progress is on the queue page and its "
+            "log lands beside the output.", "ok")
 
     def edit_providers(self) -> None:
         dialog = ProvidersDialog(self.services.providers, self)
