@@ -515,6 +515,97 @@ class FinetuneDoorTests(unittest.TestCase):
         self.assertEqual(len(asked), 1)
 
 
+class TimelapseDoorTests(FinetuneDoorTests):
+    """One button's worth of timelapse: the process fills the geeky parts."""
+
+    def test_the_defaults_come_from_the_folder_itself(self):
+        from timelapse_kernel import default_run
+
+        told = default_run(str(self.photos_path))
+        self.assertEqual(told["pattern"], "*.JPG")
+        self.assertTrue(told["frames_dir"].endswith(
+            ".darkimiya/Timelapse/frames"))
+        self.assertTrue(told["output"].endswith(
+            ".darkimiya/Timelapse/timelapse.json"))
+
+    def test_the_sun_choice_asks_nothing_and_fills_everything(self):
+        from opencull_qt.timelapse import TimelapseDialog
+
+        dialog = TimelapseDialog(str(self.photos_path))
+        request = dialog.run_request()
+        self.assertEqual(request["program"], "eclipse_timelapse.kim")
+        told = request["parameters"]
+        self.assertEqual(told["photos"], str(self.photos_path))
+        self.assertEqual(told["pattern"], "*.JPG")
+        self.assertTrue(told["frames_dir"].endswith("/frames"))
+        self.assertTrue(told["output"].endswith("/timelapse.json"))
+        self.assertEqual(told["recipe"], "")
+
+    def test_a_marked_subject_requires_its_four_numbers(self):
+        from opencull_qt.timelapse import TimelapseDialog
+
+        dialog = TimelapseDialog(str(self.photos_path))
+        dialog.marked.setChecked(True)
+        self.assertIsNone(dialog.run_request())
+        self.assertIn("four numbers", dialog.status.text())
+        dialog.box_field.setText("100, 90, 148, 138")
+        request = dialog.run_request()
+        self.assertEqual(request["program"], "subject_timelapse.kim")
+        self.assertEqual(request["parameters"]["subject_box"],
+                         "100,90,148,138")
+
+    def test_a_named_subject_requires_its_name(self):
+        from opencull_qt.timelapse import TimelapseDialog
+
+        dialog = TimelapseDialog(str(self.photos_path))
+        dialog.named.setChecked(True)
+        self.assertIsNone(dialog.run_request())
+        dialog.name_field.setText("the red kite")
+        request = dialog.run_request()
+        self.assertEqual(request["program"],
+                         "named_subject_timelapse.kim")
+        self.assertEqual(request["parameters"]["subject"], "the red kite")
+        self.assertEqual(request["parameters"]["every"], "30")
+
+    def test_the_look_speaks_preset_names_the_kernel_resolves(self):
+        from opencull_qt.timelapse import TimelapseDialog
+
+        dialog = TimelapseDialog(str(self.photos_path))
+        names = [dialog.look.itemData(i)
+                 for i in range(dialog.look.count())]
+        self.assertIn("infrared-720-false-colour", names)
+        dialog.look.setCurrentIndex(
+            names.index("infrared-720-false-colour"))
+        request = dialog.run_request()
+        self.assertEqual(request["parameters"]["recipe"],
+                         "infrared-720-false-colour")
+
+    def test_the_button_emits_the_program_and_its_parameters(self):
+        page = self.page()
+        heard = []
+        page.program_wanted.connect(
+            lambda name, parameters: heard.append((name, parameters)))
+
+        class Stub:
+            DialogCode = type("D", (), {"Accepted": 1})
+
+            def __init__(self, photos, parent=None):
+                self.photos = photos
+
+            def exec(self):
+                return 1
+
+            def run_request(self):
+                return {"program": "eclipse_timelapse.kim",
+                        "parameters": {"photos": self.photos}}
+
+        import opencull_qt.timelapse as timelapse_module
+        with unittest.mock.patch.object(
+                timelapse_module, "TimelapseDialog", Stub):
+            page.timelapse_current()
+        self.assertEqual(heard[0][0], "eclipse_timelapse.kim")
+
+
 class TreatmentMarkerTests(unittest.TestCase):
     """The page says a frame is being treated, and notices the arrival."""
 

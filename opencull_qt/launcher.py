@@ -1773,6 +1773,7 @@ class Launcher(QMainWindow):
             lambda photo, rounds: self.treat_frame(
                 bench.workspace, photo, rounds))
         page.finetune_wanted.connect(self.open_finetune)
+        page.program_wanted.connect(self.run_named_program)
         return page
 
     def _finetune_page(self, bench: Bench):
@@ -2241,6 +2242,17 @@ class Launcher(QMainWindow):
             lambda name, parameters: self.run_program(
                 store, name, parameters))
         dialog.exec()
+
+    def run_named_program(self, name: str, parameters: dict) -> None:
+        """A built-in program queued from a page, store built here."""
+        from opencull_gui.appdirs import support_dir
+        from opencull_gui.programs import ProgramStore
+
+        store = ProgramStore(
+            support_dir() / "Programs",
+            self.services.providers.project_root,
+            python=self.services.jobs.python)
+        self.run_program(store, name, parameters)
 
     def run_program(self, store, name: str, parameters: dict) -> None:
         """Queue one of the photographer's programs like any built-in."""

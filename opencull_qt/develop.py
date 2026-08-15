@@ -764,6 +764,7 @@ class DevelopPage(QWidget):
     why_wanted = Signal(str)        # the frame whose story is asked for
     treatment_wanted = Signal(str, int)   # photo, rounds of budget
     finetune_wanted = Signal(str, str)    # photo, treatment to open on
+    program_wanted = Signal(str, dict)    # program name, parameters
 
     def __init__(self, report, workspace: DevelopmentWorkspace,
                  loader: PreviewLoader, parent: QWidget | None = None):
@@ -997,6 +998,18 @@ class DevelopPage(QWidget):
             "has vouched for it. Each round costs several model calls."))
         self.treat_button.clicked.connect(self.treat_current)
         layout.addWidget(self.treat_button)
+
+        self.timelapse_button = QPushButton("Timelapse…")
+        self.timelapse_button.setObjectName("ghost")
+        self.timelapse_button.setFont(theme.body(10))
+        self.timelapse_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.timelapse_button.setToolTip(tooltip(
+            "Pin a moving subject across the whole folder and write the "
+            "aligned, numbered frames a video is made from. The obvious "
+            "parameters are filled by the process; you say what the "
+            "subject is and what the frames should wear."))
+        self.timelapse_button.clicked.connect(self.timelapse_current)
+        layout.addWidget(self.timelapse_button)
 
         # What a treatment run for this frame is doing right now: a busy
         # bar because the work is real, and words because a bar that
@@ -1470,6 +1483,25 @@ class DevelopPage(QWidget):
             # and the list rebuild will offer it; if it abstained, the
             # rebuild changes nothing and the rounds are still on disk.
             self._fill_treatments()
+
+    def timelapse_current(self) -> None:
+        """The whole-folder stabilizer, obvious parameters pre-filled."""
+        from .timelapse import TimelapseDialog
+
+        photos = str(self.workspace.project.get("source_folder") or "")
+        if not photos:
+            return
+        dialog = TimelapseDialog(photos, self)
+        if dialog.exec() != dialog.DialogCode.Accepted:
+            return
+        request = dialog.run_request()
+        if request is None:
+            return
+        self.program_wanted.emit(request["program"], request["parameters"])
+        self._report(
+            "Queued. The frames land in the timelapse folder's frames/; "
+            "the report beside them ends with the ffmpeg line that makes "
+            "the video.")
 
     def treat_current(self) -> None:
         """Ask for a Kimiya Treatment of this frame, budget stated first."""

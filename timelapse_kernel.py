@@ -73,6 +73,31 @@ def now_stamp() -> str:
     return datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
 
 
+def default_run(photos: str) -> dict[str, str]:
+    """The obvious parameters, filled by the process rather than typed.
+
+    The pattern is the folder's own dominant photograph type, spelled
+    the way the files spell it; the outputs follow the house
+    convention -- a Timelapse folder inside the project's own area,
+    frames in frames/, the report beside them. A person confirms or
+    changes a folder; nobody should have to invent one.
+    """
+    root = Path(str(photos)).expanduser().resolve()
+    kinds: dict[str, int] = {}
+    for path in root.iterdir() if root.is_dir() else []:
+        if path.is_file() and path.suffix.lower() in {
+                ".raf", ".arw", ".nef", ".cr2", ".cr3", ".dng",
+                ".jpg", ".jpeg", ".tif", ".tiff", ".png"}:
+            kinds[path.suffix] = kinds.get(path.suffix, 0) + 1
+    suffix = max(kinds, key=lambda key: kinds[key]) if kinds else ".jpg"
+    home = root / ".darkimiya" / "Timelapse"
+    return {
+        "pattern": f"*{suffix}",
+        "frames_dir": str(home / "frames"),
+        "output": str(home / "timelapse.json"),
+    }
+
+
 # --- reading the sequence -------------------------------------------------
 
 def _preview(path: Path) -> Image.Image:
