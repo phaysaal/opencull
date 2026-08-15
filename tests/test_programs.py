@@ -180,5 +180,55 @@ class RunRailTests(unittest.TestCase):
                 manager.shutdown()
 
 
+class HighlightTests(unittest.TestCase):
+    """The editor speaks the language's own typography.
+
+    The token sets import from the kimiya checkout when it is there --
+    so a keyword the language grows colours itself the day it lands --
+    and fall back to copies frozen from kimiya.lexer.
+    """
+
+    def spans(self, line: str):
+        from opencull_qt.programs import kim_spans, language_tokens
+
+        keywords, wkeywords, token_re = language_tokens(
+            ROOT.parent / "kimiya-lang")
+        return kim_spans(line, keywords, wkeywords, token_re)
+
+    def test_core_and_world_keywords_wear_different_classes(self):
+        told = {line[2]: line for line in self.spans(
+            'if check exists then act file.overwrite')}
+        self.assertIn("kw", told)
+        self.assertIn("wkw", told)
+
+    def test_strings_numbers_and_comments_are_their_own(self):
+        spans = self.spans('param rounds: num = 3 -- "not a string"')
+        kinds = [kind for _s, _l, kind in spans]
+        self.assertIn("num", kinds)
+        self.assertIn("cmt", kinds)
+        # The comment swallows the quoted text inside it.
+        self.assertNotIn("str", kinds)
+        strung = self.spans('output := "treatment.json"')
+        self.assertIn("str", [kind for _s, _l, kind in strung])
+
+    def test_a_plain_word_is_left_alone(self):
+        self.assertEqual(
+            [kind for _s, _l, kind in self.spans("photograph := banana")],
+            [])
+
+    def test_the_live_lexer_is_preferred_and_the_frozen_copy_agrees(self):
+        from opencull_qt.programs import (
+            _KEYWORDS,
+            _WKEYWORDS,
+            language_tokens,
+        )
+
+        keywords, wkeywords, _re = language_tokens(ROOT.parent / "kimiya-lang")
+        # The frozen copies may lag the language, but they must never
+        # invent a keyword the language does not have.
+        self.assertLessEqual(_KEYWORDS - keywords, set())
+        self.assertLessEqual(_WKEYWORDS - wkeywords, set())
+
+
 if __name__ == "__main__":
     unittest.main()

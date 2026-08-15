@@ -10,10 +10,19 @@ built-in: provider bundle, key_env, hash pinned, log beside the output.
 
 from __future__ import annotations
 
+import re
+import sys
+from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QFontDatabase
+from PySide6.QtGui import (
+    QColor,
+    QFont,
+    QFontDatabase,
+    QSyntaxHighlighter,
+    QTextCharFormat,
+)
 from PySide6.QtWidgets import (
     QDialog,
     QFormLayout,
@@ -35,6 +44,93 @@ from opencull_gui.programs import ProgramError, ProgramStore
 
 from . import theme
 from .widgets import tooltip
+
+# --- the language's own colours ------------------------------------------
+#
+# kimiya-lang ships its grammar and palette in kimiya.highlight -- "the
+# paper's typography": core keywords blue, the world-effecting extension
+# magenta, strings brown, numbers cyan, comments gray. The editor speaks
+# that, imported from the checkout when it is there so new keywords
+# colour themselves the day the language grows them; the frozen copies
+# below are the fallback for a machine without the checkout, taken from
+# kimiya.lexer as of 2026-08-15.
+
+_KEYWORDS = {
+    "pool", "context", "schema", "effect", "domain", "preserve",
+    "allow_loss", "param", "memo", "explore", "gen", "select", "judge",
+    "check", "retry", "until", "budget", "panel", "paraphrase_prompts",
+    "under", "by", "if", "then", "else", "forall", "in", "commit",
+    "abstain", "print", "true", "false", "null", "and", "or", "not",
+    "contradicts", "irreversible", "recoverable", "fn", "return", "use",
+    "pyfn", "python", "agent",
+}
+_WKEYWORDS = {"act", "observe", "settle", "within", "inv", "compensate",
+              "display"}
+_TOKEN_RE = re.compile(
+    r'(?P<cmt>--[^\n]*)|(?P<str>"(?:\\.|[^"\\])*")|'
+    r'(?P<num>\b\d+(?:\.\d+)?\b)|(?P<word>\b[A-Za-z_][A-Za-z0-9_]*\b)')
+
+
+def language_tokens(checkout: Path | None) -> tuple[set, set, re.Pattern]:
+    """The lexer's own sets where the checkout is importable."""
+    if checkout is not None and (Path(checkout) / "kimiya").is_dir():
+        try:
+            if str(checkout) not in sys.path:
+                sys.path.insert(0, str(checkout))
+            from kimiya.highlight import TOKEN_RE
+            from kimiya.lexer import KEYWORDS, WKEYWORDS
+
+            return set(KEYWORDS), set(WKEYWORDS), TOKEN_RE
+        except Exception:                            # noqa: BLE001 - frozen
+            pass
+    return set(_KEYWORDS), set(_WKEYWORDS), _TOKEN_RE
+
+
+def kim_spans(line: str, keywords: set, wkeywords: set,
+              token_re: re.Pattern) -> list[tuple[int, int, str]]:
+    """One line's coloured spans: (start, length, class)."""
+    spans = []
+    for match in token_re.finditer(line):
+        kind = match.lastgroup
+        text = match.group(0)
+        if kind == "word":
+            if text in wkeywords:
+                kind = "wkw"
+            elif text in keywords:
+                kind = "kw"
+            else:
+                continue
+        spans.append((match.start(), len(text), str(kind)))
+    return spans
+
+
+class KimiyaHighlighter(QSyntaxHighlighter):
+    """The paper's typography, live in the editor."""
+
+    def __init__(self, document, checkout: Path | None = None):
+        super().__init__(document)
+        self.keywords, self.wkeywords, self.token_re = language_tokens(
+            checkout)
+        self.formats: dict[str, QTextCharFormat] = {}
+        for kind, colour, bold, italic in (
+                ("kw", "#1e3c82", True, False),
+                ("wkw", "#8c1e5a", True, False),
+                ("str", "#783c14", False, False),
+                ("num", "#0e7490", False, False),
+                ("cmt", "#6e6e6e", False, True)):
+            made = QTextCharFormat()
+            made.setForeground(QColor(colour))
+            if bold:
+                made.setFontWeight(QFont.Weight.DemiBold)
+            made.setFontItalic(italic)
+            self.formats[kind] = made
+
+    def highlightBlock(self, text: str) -> None:  # noqa: N802 - Qt naming
+        for start, length, kind in kim_spans(
+                text, self.keywords, self.wkeywords, self.token_re):
+            style = self.formats.get(kind)
+            if style is not None:
+                self.setFormat(start, length, style)
 
 
 class RunDialog(QDialog):
@@ -127,6 +223,8 @@ class ProgramsDialog(QDialog):
         self.editor.setFont(
             QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
         self.editor.setTabStopDistance(32)
+        self.highlighter = KimiyaHighlighter(
+            self.editor.document(), store.kimiya_checkout)
         self.editor.textChanged.connect(self._edited)
         body.addWidget(self.editor, 1)
         self.compiler = QPlainTextEdit()
