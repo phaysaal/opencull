@@ -180,6 +180,38 @@ class RunRailTests(unittest.TestCase):
                 manager.shutdown()
 
 
+class CaptionTests(unittest.TestCase):
+    """The run form speaks to a person; the run speaks kimiya."""
+
+    def test_underscores_become_spaces_and_words_their_casing(self):
+        from opencull_qt.programs import caption_for
+
+        self.assertEqual(caption_for("detect_edge"), "Detect Edge")
+        self.assertEqual(caption_for("subject_box"), "Subject Box")
+        self.assertEqual(caption_for("photos"), "Photos")
+
+    def test_units_and_initialisms_keep_their_own_casing(self):
+        from opencull_qt.programs import caption_for
+
+        self.assertEqual(caption_for("cutoff_nm"), "Cutoff nm")
+        self.assertEqual(caption_for("frames_dir"), "Frames directory")
+
+    def test_the_raw_name_still_rides_the_field(self):
+        import os
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.instance() or QApplication([])
+        from opencull_qt.programs import RunDialog
+
+        dialog = RunDialog("x.kim", [
+            {"name": "detect_edge", "type": "num", "default": "1200"}])
+        self.assertIn("detect_edge",
+                      dialog.fields["detect_edge"].toolTip())
+        self.assertEqual(dialog.values(), {"detect_edge": "1200"})
+
+
 class HighlightTests(unittest.TestCase):
     """The editor speaks the language's own typography.
 

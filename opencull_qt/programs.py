@@ -133,6 +133,18 @@ class KimiyaHighlighter(QSyntaxHighlighter):
                 self.setFormat(start, length, style)
 
 
+def caption_for(name: str) -> str:
+    """A parameter's name as a person reads it: Detect Edge, not
+    detect_edge. Initialisms and units the programs actually use keep
+    their own casing; the raw name still travels underneath, because
+    the run speaks kimiya, not English."""
+    special = {"nm": "nm", "ir": "IR", "id": "ID", "fps": "fps",
+               "dir": "directory", "raf": "RAF"}
+    words = [special.get(word, word.capitalize())
+             for word in str(name).split("_")]
+    return " ".join(words)
+
+
 class RunDialog(QDialog):
     """The program's own parameters, asked before anything is spent."""
 
@@ -154,7 +166,10 @@ class RunDialog(QDialog):
         for parameter in parameters:
             field = QLineEdit(str(parameter.get("default") or ""))
             field.setFont(theme.mono(9))
-            form.addRow(f"{parameter['name']} ({parameter['type']})", field)
+            field.setToolTip(tooltip(
+                f"The program's own name for this: {parameter['name']} "
+                f"({parameter['type']})"))
+            form.addRow(caption_for(parameter["name"]), field)
             self.fields[parameter["name"]] = field
         column.addLayout(form)
         row = QHBoxLayout()
