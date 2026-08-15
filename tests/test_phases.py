@@ -109,6 +109,16 @@ class AssessmentTests(unittest.TestCase):
 
 
 class ProfileTests(unittest.TestCase):
+    def test_a_blocked_suggestions_phase_names_the_free_door(self):
+        """"Assess first" read as "pay first". A shortlist can be had
+        for nothing, and the reason must say where."""
+        plan = phases.plan(project(report_available=True), manifest={})
+        self.assertEqual(state(plan, phases.SUGGESTIONS), "blocked")
+        said = reason(plan, phases.SUGGESTIONS)
+        self.assertIn("Rate them myself", said)
+        self.assertIn("free", said)
+        self.assertNotIn("Assess first", said)
+
     def test_the_profile_is_never_blocked_because_it_is_not_the_shoots(self):
         plan = phases.plan(project(available=False), manifest={})
         self.assertNotEqual(state(plan, phases.PROFILE), "blocked")
@@ -127,7 +137,7 @@ class SuggestionTests(unittest.TestCase):
     def test_suggestions_need_an_assessment(self):
         plan = phases.plan(project(report_available=True), manifest={})
         self.assertEqual(state(plan, phases.SUGGESTIONS), "blocked")
-        self.assertIn("Assess first", reason(plan, phases.SUGGESTIONS))
+        self.assertIn("shortlist", reason(plan, phases.SUGGESTIONS))
 
     def test_an_unread_assessment_does_not_block_suggestions(self):
         # marked=None means nobody has looked, which is not the same as

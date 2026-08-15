@@ -380,9 +380,24 @@ class ProjectShell(QWidget):
             {})
 
     def open_phase(self, key: str) -> bool:
-        """Show one phase, building its page the first time it is asked for."""
+        """Show one phase, building its page the first time it is asked for.
+
+        A blocked phase says why -- and where the reason is a missing
+        shortlist, it also opens the assessment page, because that is
+        where the free way to get one lives. Sending someone back to a
+        bar they cannot see past is not an answer.
+        """
         if self.phase(key).get("state") == "blocked":
-            self.report(self.phase(key)["reason"], "alarm")
+            reason = self.phase(key)["reason"]
+            wants_shortlist = (
+                key == "suggestions"
+                and self.phase("assessment").get("state") != "blocked")
+            if wants_shortlist and self.open_phase("assessment"):
+                # open_phase clears the report on success; the reason
+                # for the detour must outlive the detour.
+                self.report(reason, "alarm")
+                return False
+            self.report(reason, "alarm")
             return False
         page = self._pages.get(key)
         if page is None:

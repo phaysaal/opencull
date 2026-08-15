@@ -211,10 +211,18 @@ def plan(
             detail=f"{rounds} round{'s' if rounds > 1 else ''} asked for."
             if rounds else "Asked for."))
     elif not assessed:
+        # Blocked on input, not on money. A shortlist can be had for
+        # nothing -- "Rate them myself" lays one out unrated -- and a
+        # reason that only says "assess first" reads as "pay first",
+        # which is the interface telling somebody they are wrong without
+        # saying how. The free door is named, and the phase page opens
+        # onto it rather than onto a closed sign.
         phases.append(entry(
             SUGGESTIONS, "blocked",
-            "Editing suggestions are written against an assessment. "
-            "Assess first."))
+            "Editing suggestions are written against a shortlist, and "
+            "this folder has none yet. Assess it, or take \"Rate them "
+            "myself\" on the assessment page -- free, no model -- and "
+            "the frames become askable."))
     else:
         # Nothing marked is not a locked door. The assessment ranked these
         # frames, so the phase has its input; which of them to pay for is a
