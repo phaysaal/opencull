@@ -1042,6 +1042,25 @@ class FineTunePage(QWidget):
         return len(adjustments.moved(
             adjustments.apply(self.recipe, self.changes)))
 
+    def proof_edge(self) -> int:
+        """The pixels the preview can actually show, and no more.
+
+        Fine tuning re-renders on every slider move, and it was paying
+        for a 1600px proof to fill a pane that is usually far smaller.
+        The edge is the frame's own longest side in physical pixels --
+        device ratio included -- snapped UP to the next 256 so a window
+        nudged a few pixels does not orphan the render cache, floored
+        where a collapsed layout would otherwise ask for a thumbnail,
+        and capped at the full proof: bigger than the screen buys
+        nothing the screen can show.
+        """
+        shown = max(self.frame.width(), self.frame.height())
+        if shown < 64:
+            return PROOF_EDGE
+        physical = shown * float(self.frame.devicePixelRatioF())
+        snapped = int(-(-physical // 256) * 256)
+        return max(512, min(snapped, PROOF_EDGE))
+
     def render(self) -> None:
         if not self.current or not self.treatment:
             return
@@ -1049,7 +1068,7 @@ class FineTunePage(QWidget):
             "AS ADJUSTED" if self.changes else "AS SUGGESTED")
         self.renderer.render(
             self.current, self.treatment, self.engine(), self._demosaic(),
-            adjustments=self.changes or None)
+            adjustments=self.changes or None, maximum=self.proof_edge())
 
     def _demosaic(self) -> str:
         return str(self.workspace.payload().get("rendering", {}).get(
@@ -1064,7 +1083,8 @@ class FineTunePage(QWidget):
                 from .colour import load_for_screen
 
                 self._as_shot_pixmap = load_for_screen(
-                    self.workspace._as_shot_preview(photo, PROOF_EDGE))
+                    self.workspace._as_shot_preview(
+                        photo, self.proof_edge()))
             except Exception:                        # noqa: BLE001 - no hold
                 self._as_shot_pixmap = None
         if not self._holding:

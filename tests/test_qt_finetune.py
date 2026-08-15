@@ -573,6 +573,53 @@ class SectionResetTests(FineTunePageTests):
             [item["op"] for item in rendered["operations"]])
 
 
+class ProofEdgeTests(FineTunePageTests):
+    """Render what the pane can show, and not a pixel more.
+
+    Fine tuning re-renders on every slider move, and it was paying for
+    a 1600px proof to fill a pane that is usually far smaller.
+    """
+
+    def test_the_edge_is_the_frames_size_snapped_up(self):
+        page = self.page()
+        page.frame.resize(900, 600)
+        # 900 physical pixels at ratio 1 snaps up to 1024.
+        if float(page.frame.devicePixelRatioF()) == 1.0:
+            self.assertEqual(page.proof_edge(), 1024)
+
+    def test_nudging_the_window_does_not_orphan_the_cache(self):
+        """870 and 900 wide must ask for the same render."""
+        page = self.page()
+        page.frame.resize(870, 580)
+        first = page.proof_edge()
+        page.frame.resize(900, 600)
+        self.assertEqual(page.proof_edge(), first)
+
+    def test_a_wall_sized_window_is_capped_at_the_full_proof(self):
+        from opencull_qt.develop import PROOF_EDGE
+
+        page = self.page()
+        page.frame.resize(4000, 2600)
+        self.assertEqual(page.proof_edge(), PROOF_EDGE)
+
+    def test_a_pane_at_its_minimum_gets_the_floor_not_the_full_proof(self):
+        """The label clamps itself to 160x120, so the smallest honest
+        answer is the 512 floor -- which is exactly the waste being
+        fixed: a 1600px render for a pane this size."""
+        page = self.page()
+        page.frame.resize(10, 10)   # clamped to the label's own minimum
+        self.assertEqual(page.proof_edge(), 512)
+
+    def test_the_render_is_asked_for_at_that_edge(self):
+        page = self.page()
+        page.frame.resize(900, 600)
+        asked = []
+        page.renderer.render = (
+            lambda *args, **kwargs: asked.append(kwargs.get("maximum")))
+        page.render()
+        self.assertEqual(asked, [page.proof_edge()])
+
+
 class HoldTests(FineTunePageTests):
     """Press-and-hold: the judgement happens in one place at one size."""
 

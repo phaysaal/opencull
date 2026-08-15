@@ -380,11 +380,19 @@ class Renderer(QObject):
         self._pool.setMaxThreadCount(1)
 
     def render(self, photo: str, treatment: str, engine: str,
-               demosaic: str, adjustments: dict | None = None) -> None:
+               demosaic: str, adjustments: dict | None = None,
+               maximum: int = 0) -> None:
+        """``maximum`` overrides the proof edge for this one render.
+
+        A caller that knows how many pixels will actually be shown --
+        the fine-tune page, re-rendering on every slider move -- passes
+        the screen's own size and pays for nothing it cannot display.
+        """
         self._generation += 1
         self._pool.start(_RenderJob(
             self.workspace, photo, treatment, engine, demosaic,
-            self._signals, self._generation, self.maximum, adjustments))
+            self._signals, self._generation, maximum or self.maximum,
+            adjustments))
 
     def render_many(self, photo: str, treatments: list[str], engine: str,
                     demosaic: str) -> None:
