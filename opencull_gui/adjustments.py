@@ -335,6 +335,47 @@ def masks(recipe: dict[str, Any]) -> list[dict[str, Any]]:
     return found
 
 
+def mask_surface(recipe: dict[str, Any], ordinal: int) -> list[dict[str, Any]]:
+    """Every control the renderer has, pointed at one mask's inside.
+
+    The engine renders a masked effect by running the same global
+    operation and blending it through the mask, so a mask layer's
+    control surface is the whole instrument, exactly like the base
+    layer's: the effects the mask carries come first with their asked
+    marks, and the rest sit quiet until touched. Ids are the changes
+    keys apply() reads -- "mask:N/op" -- so the same Control widget
+    serves both layers without knowing which one it is on.
+    """
+    placed = masks(recipe)
+    if not 1 <= int(ordinal) <= len(placed):
+        return []
+    mask = placed[int(ordinal) - 1]
+    have = {item["op"]: item for item in mask["effects"]}
+    surface = []
+    for name, (low, high, unit) in RANGES.items():
+        if name not in LABELS:
+            continue
+        present = have.get(name)
+        if present is not None:
+            entry = dict(present)
+            # The layer's surface reads like the base layer's: the same
+            # sections, not a "Mask" bucket -- the layer IS the mask.
+            entry["section"] = _section_of(name)
+            surface.append(entry)
+            continue
+        neutral = _NEUTRAL.get(name, 0.0)
+        surface.append({
+            "id": f"mask:{int(ordinal)}/{name}", "op": name,
+            "label": LABELS.get(name, name.split(".")[-1].title()),
+            "section": _section_of(name),
+            "value": neutral, "asked": neutral,
+            "unit": unit, "low": low, "high": high,
+            "enabled": True, "source": "", "absent": True,
+        })
+    surface.sort(key=lambda item: _ORDER.get(item["op"], len(_ORDER)))
+    return surface
+
+
 def _mask_operations(recipe: dict[str, Any]) -> list[dict[str, Any]]:
     return [operation for operation in recipe.get("operations", []) or []
             if isinstance(operation, dict)
@@ -433,7 +474,12 @@ def apply(recipe: dict[str, Any], changes: dict[str, Any]) -> dict[str, Any]:
     # inside the compiler's bounds, a disabled effect removed from the
     # list because the engine applies whatever the list holds.
     placed = _mask_operations(result)
-    for key, change in changes.items():
+    # Structure before values: an effect asked into a mask must exist
+    # before a change to it is looked up, and a dict's insertion order
+    # is nobody's contract.
+    ordered = sorted(changes.items(),
+                     key=lambda pair: "/" in str(pair[0]))
+    for key, change in ordered:
         if not str(key).startswith("mask:") or not isinstance(change, dict):
             continue
         head, _, effect_op = str(key).partition("/")
@@ -446,6 +492,28 @@ def apply(recipe: dict[str, Any], changes: dict[str, Any]) -> dict[str, Any]:
         operation = placed[ordinal - 1]
         value = operation["value"]
         shape = str(operation["op"])[5:]
+        if not effect_op:
+            for item in change.get("add_effects", []) or []:
+                if not isinstance(item, dict):
+                    continue
+                op = str(item.get("op", ""))
+                if op not in RANGES or any(
+                        isinstance(effect, dict)
+                        and str(effect.get("op")) == op
+                        for effect in value.get("effects", []) or []):
+                    continue
+                low, high, unit = RANGES[op]
+                value.setdefault("effects", []).append({
+                    "op": op, "unit": unit, "mode": "delta",
+                    "value": max(low, min(high,
+                                          float(item.get("value", 0.0)))),
+                    "asked_value": _NEUTRAL.get(op, 0.0),
+                })
+                recorded.append({"id": f"{head}/{op}", "op": op,
+                                 "asked": _NEUTRAL.get(op, 0.0),
+                                 "set": float(item.get("value", 0.0)),
+                                 "enabled": True, "unit": unit,
+                                 "inserted": True})
         if effect_op:
             for effect in list(value.get("effects", []) or []):
                 if not isinstance(effect, dict) or str(

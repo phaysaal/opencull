@@ -16,7 +16,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 try:
     from PySide6.QtCore import Qt
-    from PySide6.QtWidgets import QApplication, QLabel, QWidget
+    from PySide6.QtWidgets import QApplication, QLabel
 except ImportError:  # pragma: no cover - exercised only without PySide6
     QApplication = None
 
@@ -388,70 +388,117 @@ class AbsentControlTests(unittest.TestCase):
         self.assertEqual(heard, [])
 
 
-class MaskCardTests(unittest.TestCase):
-    """One mask as a card: geometry, effects and the tint request."""
+class LayerTests(FineTunePageTests):
+    """Capture One's shape: the base layer always there, one layer per
+    mask, and the whole control surface pointing at whichever layer is
+    selected. Visibility rides the layer row.
 
-    @classmethod
-    def setUpClass(cls):
-        cls.application = QApplication.instance() or QApplication([])
+    The first shape put mask cards at the bottom of the control scroll,
+    and the photographer looked at the page and said there was no mask
+    panel. Buried is invisible.
+    """
 
-    def card(self, shape="radial"):
-        from opencull_qt.finetune import MaskCard
+    def masked_page(self):
+        page = self.page()
+        made = {"shape": "radial",
+                "geometry": {"centre_x": 40.0, "centre_y": 45.0,
+                             "radius": 25.0, "feather": 100},
+                "effects": [{"op": "tone.exposure", "value": 0.5}]}
+        page.changes.setdefault("+mask", []).append(made)
+        page.recipe = adjustments.apply(page.recipe, {"+mask": [made]})
+        page._show_controls()
+        return page
 
-        mask = {
-            "id": "mask:1", "shape": shape, "label": "the surroundings",
-            "enabled": True,
-            "geometry": {"centre_x": 49.0, "centre_y": 52.0,
-                         "radius": 36.0, "feather": 80, "opacity": 100,
-                         "inverted": True, "edge": "bottom",
-                         "reach": 35.0, "band": "shadows"},
-            "effects": [{
-                "id": "mask:1/tone.exposure", "op": "tone.exposure",
-                "label": "Exposure", "section": "Mask", "value": 0.8,
-                "asked": 0.8, "unit": "EV", "low": -5.0, "high": 5.0,
-                "enabled": True, "source": ""}],
-        }
-        return MaskCard(mask)
+    def test_the_base_layer_is_always_there(self):
+        page = self.page()
+        self.assertEqual(page.layers.count(), 1)
+        self.assertIn("Base", page.layers.item(0).text())
+        self.assertEqual(page.layer, 0)
 
-    def test_moving_the_radius_emits_the_changes_key_apply_reads(self):
-        card = self.card()
-        heard = []
-        card.changed.connect(lambda key, change: heard.append((key, change)))
-        slider = next(child for child in card.findChildren(QWidget)
-                      if getattr(child, "key", "") == "radius")
-        slider.slider.setValue(200)
-        self.assertEqual(heard[-1][0], "mask:1")
-        self.assertIn("geometry", heard[-1][1])
-        self.assertAlmostEqual(
-            heard[-1][1]["geometry"]["radius"], 1 + 99 * 0.2, places=1)
+    def test_a_mask_is_a_layer_with_a_visibility_tick(self):
+        page = self.masked_page()
+        self.assertEqual(page.layers.count(), 2)
+        row = page.layers.item(1)
+        self.assertIn("Mask · radial", row.text())
+        self.assertEqual(row.checkState(), Qt.CheckState.Checked)
 
-    def test_an_effect_rides_the_same_control_as_the_whole_frame(self):
-        card = self.card()
-        heard = []
-        card.effect_changed.connect(
-            lambda key, change: heard.append((key, change)))
-        control = next(item for item in card.findChildren(QWidget)
-                       if getattr(item, "control", {}).get("id")
-                       == "mask:1/tone.exposure")
-        control.slider.setValue(900)
-        self.assertEqual(heard[-1][0], "mask:1/tone.exposure")
-        self.assertIn("value", heard[-1][1])
+    def test_adding_a_mask_selects_its_layer(self):
+        page = self.page()
+        with unittest.mock.patch(
+                "opencull_qt.finetune.QInputDialog.getItem",
+                return_value=("radial — around a point", True)):
+            page._add_mask()
+        self.assertEqual(page.layer, len(adjustments.masks(page.recipe)))
+        self.assertGreaterEqual(page.layers.count(), 2)
 
-    def test_the_show_button_asks_for_this_masks_tint(self):
-        card = self.card()
-        heard = []
-        card.show_me.connect(lambda key, on: heard.append((key, on)))
-        card.show_button.setChecked(True)
-        card.show_button.setChecked(False)
-        self.assertEqual(heard, [("mask:1", True), ("mask:1", False)])
+    def test_selecting_the_layer_points_the_surface_at_the_mask(self):
+        page = self.masked_page()
+        page._chose_layer(1)
+        present = [item.control for item in page.controls
+                   if not item.absent]
+        self.assertEqual([item["op"] for item in present],
+                         ["tone.exposure"])
+        self.assertTrue(all(
+            str(item.control["id"]).startswith("mask:1/")
+            for item in page.controls))
 
-    def test_a_linear_card_offers_edge_and_reach_not_centres(self):
-        card = self.card("linear")
-        keys = [getattr(child, "key", "")
-                for child in card.findChildren(QWidget)]
-        self.assertIn("reach", keys)
-        self.assertNotIn("centre_x", keys)
-        self.assertEqual(card.edge.currentText(), "bottom")
+    def test_the_mask_layer_offers_the_whole_instrument(self):
+        page = self.masked_page()
+        page._chose_layer(1)
+        offered = {item.control["op"] for item in page.controls}
+        self.assertEqual(offered, set(adjustments.LABELS))
+
+    def test_touching_a_quiet_control_on_a_mask_layer_adds_its_effect(self):
+        page = self.masked_page()
+        page._chose_layer(1)
+        page._control_wanted("tone.shadow", 20.0)
+        placed = adjustments.masks(page.recipe)[0]
+        self.assertIn("tone.shadow",
+                      [item["op"] for item in placed["effects"]])
+        self.assertEqual(
+            page.changes["mask:1"]["add_effects"],
+            [{"op": "tone.shadow", "value": 20.0}])
+
+    def test_unticking_the_row_switches_the_mask_off(self):
+        page = self.masked_page()
+        row = page.layers.item(1)
+        row.setCheckState(Qt.CheckState.Unchecked)
+        self.assertIs(page.changes["mask:1"]["enabled"], False)
+        self.assertFalse(adjustments.masks(page.recipe)[0]["enabled"])
+
+    def test_the_geometry_rides_the_selected_layer(self):
+        from opencull_qt.finetune import GeometrySlider
+
+        page = self.masked_page()
+        page._chose_layer(1)
+        keys = [slider.key for slider in
+                page.findChildren(GeometrySlider)]
+        self.assertIn("radius", keys)
+        page._chose_layer(0)
+        self.assertEqual(page.findChildren(GeometrySlider), [])
+
+    def test_base_layer_resets_do_not_touch_the_masks_moves(self):
+        page = self.masked_page()
+        page._chose_layer(1)
+        page._control_wanted("tone.shadow", 20.0)
+        page._chose_layer(0)
+        self.control(page, "tone.exposure").slider.setValue(900)
+        page.reset_section("Tone")
+        placed = adjustments.masks(page.recipe)[0]
+        self.assertIn("tone.shadow",
+                      [item["op"] for item in placed["effects"]])
+
+    def test_a_mask_layers_section_reset_drops_only_its_own(self):
+        page = self.masked_page()
+        page._chose_layer(1)
+        page._control_wanted("tone.shadow", 20.0)
+        page._control_wanted("detail.dehaze", 8.0)
+        page.reset_section("Tone")
+        placed = adjustments.masks(page.recipe)[0]
+        ops = [item["op"] for item in placed["effects"]]
+        self.assertNotIn("tone.shadow", ops)
+        self.assertIn("detail.dehaze", ops)
+
 
 
 class InsertRenderTests(unittest.TestCase):
@@ -555,9 +602,11 @@ class SectionResetTests(FineTunePageTests):
                          [item["op"] for item in
                           page.recipe.get("operations", [])])
 
-    def test_the_masks_section_resets_geometry_and_added_masks(self):
+    def test_the_page_wide_reset_removes_an_added_mask(self):
+        """Masks are layers now, not a section: the layer's own resets
+        cover its moves, and the added layer itself falls to the
+        page-wide reset like any other structure."""
         page = self.page()
-        page._add_mask_direct = getattr(page, "_add_mask_direct", None)
         made = {"shape": "radial",
                 "geometry": {"centre_x": 50.0, "centre_y": 50.0,
                              "radius": 30.0, "feather": 100},
@@ -566,7 +615,7 @@ class SectionResetTests(FineTunePageTests):
         page.recipe = adjustments.apply(page.recipe, {"+mask": [made]})
         before = len(adjustments.masks(page._pristine))
         self.assertEqual(len(adjustments.masks(page.recipe)), before + 1)
-        page.reset_section("Masks")
+        page.reset()
         self.assertEqual(len(adjustments.masks(page.recipe)), before)
         self.assertNotIn("+mask", page.changes)
 

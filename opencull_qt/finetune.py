@@ -237,114 +237,6 @@ class GeometrySlider(QWidget):
         self.changed.emit(self.key, value)
 
 
-class MaskCard(QFrame):
-    """One mask: where it lands, and what happens inside it.
-
-    Geometry rides sliders, the shape's discrete facts ride combos, and
-    the effects reuse the same Control the whole-frame operations use,
-    advice bands included. Every change is emitted as the changes-dict
-    keys apply() reads, so the card cannot say anything the renderer
-    will not do.
-    """
-
-    changed = Signal(str, dict)        # "mask:N" -> {"geometry"/"enabled"}
-    effect_changed = Signal(str, dict)  # "mask:N/op" -> {"value"/"enabled"}
-    show_me = Signal(str, bool)        # mask id, overlay on or off
-
-    def __init__(self, mask: dict[str, Any],
-                 advice: dict[str, dict] | None = None):
-        super().__init__()
-        self.setObjectName("panelCard")
-        self.mask = mask
-        geometry = dict(mask["geometry"])
-        column = QVBoxLayout(self)
-        column.setContentsMargins(10, 8, 10, 8)
-        column.setSpacing(4)
-
-        head = QHBoxLayout()
-        head.setSpacing(8)
-        self.enabled = QCheckBox(
-            f"Mask · {mask['shape']}")
-        self.enabled.setChecked(mask["enabled"])
-        self.enabled.setFont(theme.body(10))
-        self.enabled.setToolTip(tooltip(
-            "Switch this mask off entirely; everything inside it stops."))
-        self.enabled.toggled.connect(
-            lambda on: self.changed.emit(self.mask["id"], {"enabled": on}))
-        head.addWidget(self.enabled)
-        head.addStretch(1)
-        self.show_button = QPushButton("Show")
-        self.show_button.setObjectName("ghost")
-        self.show_button.setFont(theme.body(8))
-        self.show_button.setCheckable(True)
-        self.show_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.show_button.setToolTip(tooltip(
-            "Tint the picture where this mask lands, from the renderer's "
-            "own weights. What you see is what will be blended."))
-        self.show_button.toggled.connect(
-            lambda on: self.show_me.emit(self.mask["id"], on))
-        head.addWidget(self.show_button)
-        column.addLayout(head)
-
-        where = QLabel(mask["label"])
-        where.setObjectName("rowPath")
-        where.setWordWrap(True)
-        where.setFont(theme.body(8))
-        column.addWidget(where)
-
-        shape = mask["shape"]
-        if shape == "radial":
-            for key, label, low, high in (
-                    ("centre_x", "Centre X", 0.0, 100.0),
-                    ("centre_y", "Centre Y", 0.0, 100.0),
-                    ("radius", "Radius", 1.0, 100.0),
-                    ("feather", "Feather", 5.0, 100.0)):
-                slider = GeometrySlider(
-                    key, label, low, high, float(geometry.get(key, 50)))
-                slider.changed.connect(self._geometry_moved)
-                column.addWidget(slider)
-            self.inverted = QCheckBox("Inverted — everything except it")
-            self.inverted.setChecked(bool(geometry.get("inverted")))
-            self.inverted.setFont(theme.body(9))
-            self.inverted.toggled.connect(
-                lambda on: self._geometry_moved("inverted", bool(on)))
-            column.addWidget(self.inverted)
-        elif shape == "linear":
-            self.edge = QComboBox()
-            self.edge.addItems(list(adjustments.EDGES))
-            self.edge.setCurrentText(str(geometry.get("edge", "bottom")))
-            self.edge.setFont(theme.body(9))
-            self.edge.currentTextChanged.connect(
-                lambda text: self._geometry_moved("edge", text))
-            column.addWidget(self.edge)
-            reach = GeometrySlider(
-                "reach", "Reach", 5.0, 100.0,
-                float(geometry.get("reach", 100)))
-            reach.changed.connect(self._geometry_moved)
-            column.addWidget(reach)
-        elif shape == "luma":
-            self.band = QComboBox()
-            self.band.addItems(list(adjustments.BANDS))
-            self.band.setCurrentText(str(geometry.get("band", "shadows")))
-            self.band.setFont(theme.body(9))
-            self.band.currentTextChanged.connect(
-                lambda text: self._geometry_moved("band", text))
-            column.addWidget(self.band)
-
-        for effect in mask["effects"]:
-            widget = Control(effect,
-                             (advice or {}).get(effect["op"]))
-            widget.changed.connect(self.effect_changed.emit)
-            column.addWidget(widget)
-        if not mask["effects"]:
-            idle = QLabel("This mask carries no effects; it does nothing.")
-            idle.setObjectName("hint")
-            idle.setFont(theme.body(8))
-            column.addWidget(idle)
-
-    def _geometry_moved(self, key: str, value) -> None:
-        self.changed.emit(self.mask["id"], {"geometry": {key: value}})
-
 
 class FineTunePage(QWidget):
     """The operations behind one treatment, and the proof of moving them."""
@@ -368,7 +260,9 @@ class FineTunePage(QWidget):
         self.changes: dict[str, dict] = {}
         self.controls: list[Control] = []
         self._pristine: dict[str, Any] = {}
-        self._mask_cards: list[MaskCard] = []
+        # 0 is the base layer; N is the Nth mask. Selecting a layer
+        # points the whole control surface at it, Capture One fashion.
+        self.layer = 0
         # Which mask is being shown as a tint, if any, and the plain
         # pixmap underneath it.
         self._overlay_for = ""
@@ -485,6 +379,37 @@ class FineTunePage(QWidget):
             "asked and nothing is spent."))
         self.prompt.returnPressed.connect(self.speak)
         layout.addWidget(self.prompt)
+
+        layers_head = QHBoxLayout()
+        layers_head.setSpacing(8)
+        layers_title = QLabel("LAYERS")
+        layers_title.setObjectName("eyebrow")
+        layers_title.setFont(theme.display(8))
+        layers_head.addWidget(layers_title)
+        layers_head.addStretch(1)
+        self.add_layer_button = QPushButton("+ mask")
+        self.add_layer_button.setObjectName("ghost")
+        self.add_layer_button.setFont(theme.body(8))
+        self.add_layer_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.add_layer_button.setToolTip(tooltip(
+            "A mask is the answer to two parts of the frame needing "
+            "opposite things: radial around a point, linear from an "
+            "edge, luma across a band of brightness. It becomes a "
+            "layer here, with the whole control surface of its own."))
+        self.add_layer_button.clicked.connect(self._add_mask)
+        layers_head.addWidget(self.add_layer_button)
+        layout.addLayout(layers_head)
+
+        self.layers = QListWidget()
+        self.layers.setObjectName("treatmentList")
+        self.layers.setToolTip(tooltip(
+            "The base layer is the whole frame and is always there. "
+            "Each mask is a layer above it: select one and every "
+            "control below edits that mask's inside. The tick is the "
+            "layer's visibility."))
+        self.layers.currentRowChanged.connect(self._chose_layer)
+        self.layers.itemChanged.connect(self._layer_visibility)
+        layout.addWidget(self.layers)
 
         scroll = QScrollArea()
         scroll.setObjectName("controlScroll")
@@ -641,6 +566,7 @@ class FineTunePage(QWidget):
     def show_treatment(self, treatment: str) -> None:
         self.treatment = treatment
         self.changes = {}
+        self.layer = 0
         try:
             self.recipe = self.workspace.compiled_recipe(
                 self.current, treatment, self.engine())
@@ -702,16 +628,13 @@ class FineTunePage(QWidget):
                 "effects": [{"op": "tone.exposure", "value": 0.0}]}
         self.changes.setdefault("+mask", []).append(made)
         self.recipe = adjustments.apply(self.recipe, {"+mask": [made]})
+        # The new mask is the layer being worked on; select it.
+        self.layer = len(adjustments.masks(self.recipe))
         self._show_controls()
         self.render()
 
     def _show_mask(self, key: str, on: bool) -> None:
         """Tint the proof where one mask lands, from the engine's weights."""
-        for card in self._mask_cards:
-            if card.mask["id"] != key and card.show_button.isChecked():
-                card.show_button.blockSignals(True)
-                card.show_button.setChecked(False)
-                card.show_button.blockSignals(False)
         self._overlay_for = key if on else ""
         if on:
             self._paint_overlay()
@@ -757,7 +680,6 @@ class FineTunePage(QWidget):
 
     def _clear(self) -> None:
         self.controls = []
-        self._mask_cards = []
         self._overlay_for = ""
         self._holding = False
         while self.body.count():
@@ -767,15 +689,64 @@ class FineTunePage(QWidget):
                 widget.setParent(None)
                 widget.deleteLater()
 
+    def _fill_layers(self) -> None:
+        """The base layer and one row per mask, visibility on the row."""
+        placed = adjustments.masks(self.recipe)
+        if self.layer > len(placed):
+            self.layer = 0
+        self.layers.blockSignals(True)
+        self.layers.clear()
+        base = QListWidgetItem("  Base — the whole frame")
+        base.setFont(theme.body(9))
+        base.setFlags(Qt.ItemFlag.ItemIsEnabled
+                      | Qt.ItemFlag.ItemIsSelectable)
+        self.layers.addItem(base)
+        for mask in placed:
+            row = QListWidgetItem(
+                f"  Mask · {mask['shape']} — {mask['label'][:44]}")
+            row.setFont(theme.body(9))
+            row.setFlags(Qt.ItemFlag.ItemIsEnabled
+                         | Qt.ItemFlag.ItemIsSelectable
+                         | Qt.ItemFlag.ItemIsUserCheckable)
+            row.setCheckState(Qt.CheckState.Checked if mask["enabled"]
+                              else Qt.CheckState.Unchecked)
+            row.setToolTip(tooltip(
+                f"{mask['label']}\nUntick to switch this mask off "
+                "entirely; everything inside it stops."))
+            self.layers.addItem(row)
+        self.layers.setCurrentRow(self.layer)
+        self.layers.blockSignals(False)
+        rows = self.layers.count()
+        self.layers.setFixedHeight(rows * 26 + 10)
+
+    def _chose_layer(self, row: int) -> None:
+        if row < 0 or row == self.layer:
+            return
+        self.layer = row
+        self._show_controls()
+
+    def _layer_visibility(self, item: QListWidgetItem) -> None:
+        ordinal = self.layers.row(item)
+        if ordinal < 1:
+            return
+        on = item.checkState() == Qt.CheckState.Checked
+        self._mask_changed(f"mask:{ordinal}", {"enabled": on})
+
     def _show_controls(self) -> None:
         self._clear()
-        surface = adjustments.full_surface(self.recipe)
-        compiled = [item for item in surface if not item.get("absent")]
+        self._fill_layers()
+        on_mask = self.layer > 0
+        surface = (adjustments.mask_surface(self.recipe, self.layer)
+                   if on_mask else adjustments.full_surface(self.recipe))
+        compiled = [item for item in adjustments.full_surface(self.recipe)
+                    if not item.get("absent")]
         self.keep_button.setEnabled(bool(compiled))
         self.reset_button.setEnabled(bool(compiled))
         advice = zones.load(
             Path(str(self.workspace.project.get("source_folder") or ".")),
             self.current) if self.current else {}
+        if on_mask:
+            self._show_geometry(self.layer)
         # Every control of every section, always. The first shape folded
         # the unused ones behind a per-section count, and the fold read
         # as absence: the photographer this page is for looked at it and
@@ -800,27 +771,6 @@ class FineTunePage(QWidget):
                 widget.wanted.connect(self._control_wanted)
                 self.controls.append(widget)
                 self.body.addWidget(widget)
-        placed = adjustments.masks(self.recipe)
-        self.body.addWidget(self._heading(
-            f"MASKS  ·  {len(placed)}" if placed else "MASKS",
-            "Masks" if "Masks" in touched else ""))
-        for mask in placed:
-            card = MaskCard(mask, advice)
-            card.changed.connect(self._mask_changed)
-            card.effect_changed.connect(self._control_changed)
-            card.show_me.connect(self._show_mask)
-            self._mask_cards.append(card)
-            self.body.addWidget(card)
-        add_mask = QPushButton("Add a mask…")
-        add_mask.setObjectName("ghost")
-        add_mask.setFont(theme.body(8))
-        add_mask.setCursor(Qt.CursorShape.PointingHandCursor)
-        add_mask.setToolTip(tooltip(
-            "A mask is the answer to two parts of the frame needing "
-            "opposite things: radial around a point, linear from an "
-            "edge, luma across a band of brightness."))
-        add_mask.clicked.connect(self._add_mask)
-        self.body.addWidget(add_mask)
         for text in adjustments.guardrails(self.recipe):
             rail = QLabel(f"◆ {text}")
             rail.setObjectName("guardrail")
@@ -837,6 +787,20 @@ class FineTunePage(QWidget):
     # --- moving them ------------------------------------------------------
 
     def _control_changed(self, key: str, change: dict) -> None:
+        if str(key).startswith("mask:") and "/" in str(key):
+            head, _, op = str(key).partition("/")
+            added = next(
+                (item for item in (self.changes.get(head) or {}).get(
+                    "add_effects", []) if item.get("op") == op), None)
+            if added is not None and "value" in change:
+                added["value"] = change["value"]
+                if change.get("enabled") is False:
+                    self.changes[head]["add_effects"].remove(added)
+                self.render()
+                return
+            self.changes.setdefault(key, {}).update(change)
+            self.render()
+            return
         inserted = next(
             (item for item in self.changes.get("+insert", [])
              if item.get("op") == key), None)
@@ -859,6 +823,85 @@ class FineTunePage(QWidget):
         self._report(
             f"Asked. The bands for {self.current} land beside the recipes "
             "and paint the next time this frame's controls are opened.")
+
+    def _show_geometry(self, ordinal: int) -> None:
+        """Where this layer's mask lands: its shape, movable, and shown."""
+        placed = adjustments.masks(self.recipe)
+        mask = placed[ordinal - 1]
+        geometry = dict(mask["geometry"])
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        title = QLabel(f"THIS MASK  ·  {mask['shape']}")
+        title.setObjectName("axisName")
+        title.setFont(theme.display(7))
+        row.addWidget(title)
+        row.addStretch(1)
+        show = QPushButton("Show")
+        show.setObjectName("ghost")
+        show.setFont(theme.body(8))
+        show.setCheckable(True)
+        show.setChecked(self._overlay_for == mask["id"])
+        show.setCursor(Qt.CursorShape.PointingHandCursor)
+        show.setToolTip(tooltip(
+            "Tint the picture where this mask lands, from the "
+            "renderer's own weights. What you see is what is blended."))
+        show.toggled.connect(
+            lambda on, key=mask["id"]: self._show_mask(key, on))
+        row.addWidget(show)
+        holder = QWidget()
+        holder.setLayout(row)
+        holder.layout().setContentsMargins(0, 0, 0, 0)
+        self.body.addWidget(holder)
+        where = QLabel(mask["label"])
+        where.setObjectName("rowPath")
+        where.setWordWrap(True)
+        where.setFont(theme.body(8))
+        self.body.addWidget(where)
+        key_prefix = mask["id"]
+        if mask["shape"] == "radial":
+            for key, label, low, high in (
+                    ("centre_x", "Centre X", 0.0, 100.0),
+                    ("centre_y", "Centre Y", 0.0, 100.0),
+                    ("radius", "Radius", 1.0, 100.0),
+                    ("feather", "Feather", 5.0, 100.0)):
+                slider = GeometrySlider(
+                    key, label, low, high, float(geometry.get(key, 50)))
+                slider.changed.connect(
+                    lambda k, v, m=key_prefix: self._mask_changed(
+                        m, {"geometry": {k: v}}))
+                self.body.addWidget(slider)
+            inverted = QCheckBox("Inverted — everything except it")
+            inverted.setChecked(bool(geometry.get("inverted")))
+            inverted.setFont(theme.body(9))
+            inverted.toggled.connect(
+                lambda on, m=key_prefix: self._mask_changed(
+                    m, {"geometry": {"inverted": bool(on)}}))
+            self.body.addWidget(inverted)
+        elif mask["shape"] == "linear":
+            edge = QComboBox()
+            edge.addItems(list(adjustments.EDGES))
+            edge.setCurrentText(str(geometry.get("edge", "bottom")))
+            edge.setFont(theme.body(9))
+            edge.currentTextChanged.connect(
+                lambda text, m=key_prefix: self._mask_changed(
+                    m, {"geometry": {"edge": text}}))
+            self.body.addWidget(edge)
+            reach = GeometrySlider(
+                "reach", "Reach", 5.0, 100.0,
+                float(geometry.get("reach", 100)))
+            reach.changed.connect(
+                lambda k, v, m=key_prefix: self._mask_changed(
+                    m, {"geometry": {k: v}}))
+            self.body.addWidget(reach)
+        elif mask["shape"] == "luma":
+            band = QComboBox()
+            band.addItems(list(adjustments.BANDS))
+            band.setCurrentText(str(geometry.get("band", "shadows")))
+            band.setFont(theme.body(9))
+            band.currentTextChanged.connect(
+                lambda text, m=key_prefix: self._mask_changed(
+                    m, {"geometry": {"band": text}}))
+            self.body.addWidget(band)
 
     def _heading(self, title: str, resettable: str) -> QWidget:
         """A section's name -- and, where the section has been moved,
@@ -892,14 +935,26 @@ class FineTunePage(QWidget):
         return holder
 
     def _touched_sections(self) -> set[str]:
-        """Which sections the photographer has moved, for the reset word."""
+        """Which of the ACTIVE layer's sections have been moved."""
+        touched: set[str] = set()
+        if self.layer > 0:
+            head = f"mask:{self.layer}"
+            for key, change in self.changes.items():
+                if key == head:
+                    for item in change.get("add_effects", []) or []:
+                        touched.add(adjustments._section_of(
+                            str(item.get("op", ""))))
+                elif str(key).startswith(head + "/"):
+                    touched.add(adjustments._section_of(
+                        str(key).partition("/")[2]))
+            touched.discard("Other")
+            return touched
         surface = {item["id"]: item["section"]
                    for item in adjustments.full_surface(self.recipe)}
-        touched: set[str] = set()
         for key, change in self.changes.items():
             if str(key).startswith("mask:") or key == "+mask":
-                touched.add("Masks")
-            elif key == "+insert":
+                continue
+            if key == "+insert":
                 for item in change:
                     touched.add(
                         adjustments._section_of(str(item.get("op", ""))))
@@ -910,14 +965,30 @@ class FineTunePage(QWidget):
         return touched
 
     def _control_wanted(self, op: str, value: float) -> None:
-        """An absent operation, asked into the recipe by hand.
+        """An absent operation, asked into the active layer by hand.
 
         The ask rides the changes dict -- the only payload the render
         path carries -- so the renderer, the cache identity and the
-        full-size keep all see the same insertion. An earlier shape
-        rewrote only this page's copy of the recipe, and the render
-        quietly ignored every added control.
+        full-size keep all see the same insertion. On the base layer it
+        is a whole-frame insert; on a mask layer it becomes one of that
+        mask's effects.
         """
+        if self.layer > 0:
+            key = f"mask:{self.layer}"
+            added = self.changes.setdefault(key, {}).setdefault(
+                "add_effects", [])
+            if not any(item.get("op") == op for item in added):
+                added.append({"op": op, "value": value})
+            else:
+                for item in added:
+                    if item.get("op") == op:
+                        item["value"] = value
+            self.recipe = adjustments.apply(
+                self.recipe, {key: {"add_effects": [
+                    {"op": op, "value": value}]}})
+            self._show_controls()
+            self.render()
+            return
         inserts = self.changes.setdefault("+insert", [])
         if not any(item.get("op") == op for item in inserts):
             inserts.append({"op": op, "value": value})
@@ -990,30 +1061,46 @@ class FineTunePage(QWidget):
         self._report("Back to the treatment as it was suggested.")
 
     def reset_section(self, section: str) -> None:
-        """Put one section back, leaving every other section's moves alone."""
-        surface = {item["id"]: item["section"]
-                   for item in adjustments.full_surface(self.recipe)}
+        """Put one section of the ACTIVE layer back, the rest standing."""
         kept: dict[str, Any] = {}
-        for key, change in self.changes.items():
-            if section == "Masks":
-                if str(key).startswith("mask:") or key == "+mask":
+        if self.layer > 0:
+            head = f"mask:{self.layer}"
+            for key, change in self.changes.items():
+                if key == head and isinstance(change, dict):
+                    remaining = dict(change)
+                    remaining["add_effects"] = [
+                        item for item in change.get("add_effects", []) or []
+                        if adjustments._section_of(
+                            str(item.get("op", ""))) != section]
+                    if not remaining["add_effects"]:
+                        remaining.pop("add_effects")
+                    if remaining:
+                        kept[key] = remaining
+                    continue
+                if (str(key).startswith(head + "/")
+                        and adjustments._section_of(
+                            str(key).partition("/")[2]) == section):
                     continue
                 kept[key] = change
-                continue
-            if key == "+insert":
-                remaining = [
-                    item for item in change
-                    if adjustments._section_of(str(item.get("op", "")))
-                    != section]
-                if remaining:
-                    kept[key] = remaining
-                continue
-            if str(key).startswith("mask:") or key == "+mask":
+        else:
+            surface = {item["id"]: item["section"]
+                       for item in adjustments.full_surface(self.recipe)}
+            for key, change in self.changes.items():
+                if key == "+insert":
+                    remaining = [
+                        item for item in change
+                        if adjustments._section_of(str(item.get("op", "")))
+                        != section]
+                    if remaining:
+                        kept[key] = remaining
+                    continue
+                if str(key).startswith("mask:") or key == "+mask":
+                    kept[key] = change
+                    continue
+                if surface.get(
+                        key, adjustments._section_of(str(key))) == section:
+                    continue
                 kept[key] = change
-                continue
-            if surface.get(key, adjustments._section_of(str(key))) == section:
-                continue
-            kept[key] = change
         self.changes = kept
         self._rebuild_mirror()
         self._report(f"{section} is back to what was asked.")
