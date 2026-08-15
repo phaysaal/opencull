@@ -371,6 +371,18 @@ class ShortlistPage(QWidget):
         layout.addWidget(self.title)
         layout.addStretch(1)
 
+        self.keyframes_button = QPushButton("Detect keyframes")
+        self.keyframes_button.setObjectName("ghost")
+        self.keyframes_button.setFont(theme.body(9))
+        self.keyframes_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.keyframes_button.setToolTip(tooltip(
+            "Group the frames into scenes locally -- no model, no cost "
+            "-- and mark each scene's best frame to develop. Your own "
+            "marks are kept; this only adds. The scene plan is also "
+            "what lets AI editing share one answer per scene."))
+        self.keyframes_button.clicked.connect(self.detect_keyframes)
+        layout.addWidget(self.keyframes_button)
+
         # By hand there is no model rating to reassess and no scores to
         # sort by, so these belong only to a model-assessed shortlist.
         if not self.by_hand:
@@ -937,6 +949,33 @@ class ShortlistPage(QWidget):
                     break
 
     # --- decisions ------------------------------------------------------
+
+    def detect_keyframes(self) -> None:
+        """Scenes found locally; each scene's keyframe marked to develop."""
+        from opencull_gui import scenes
+
+        recipes = getattr(self.directions, "recipes", None)
+        if recipes is None:
+            self._report(
+                "This folder has no recipes area yet, so there is "
+                "nowhere to keep the scene plan.", "alarm")
+            return
+        try:
+            told = scenes.detect_keyframes(
+                self.shortlist, self.reviews, recipes)
+        except Exception as exc:                     # noqa: BLE001 - shown
+            self._report(f"Keyframes could not be detected: {exc}", "alarm")
+            return
+        self._fill_entries()
+        if self.current:
+            self.show_entry(self.current)
+        said = (f"{told['scenes']} scene"
+                f"{'' if told['scenes'] == 1 else 's'}; "
+                f"{told['marked']} keyframe"
+                f"{'' if told['marked'] == 1 else 's'} marked to develop")
+        if told["already_marked"]:
+            said += (f", {told['already_marked']} already were")
+        self._report(said + ". Your own marks are untouched.", "ok")
 
     def _report(self, message: str, tone: str = "") -> None:
         self.status.setText(message)

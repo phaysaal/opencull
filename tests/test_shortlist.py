@@ -632,7 +632,106 @@ class OneCommandBuilderTests(unittest.TestCase):
         self.assertIn("keep_per_group=1", arguments)
 
 
+class KeyframeTests(unittest.TestCase):
+    """Scenes found locally, keyframes marked, nothing of the person's
+    taken away. Free, so it can run before anyone pays for anything."""
+
+    def stores(self, root: Path):
+        import json as json_module
+
+        from opencull_gui.report import load_report
+        from opencull_gui.shortlist import load_shortlist
+        from opencull_gui.shortlist_reviews import ShortlistReviewStore
+
+        photos = root / "photos"
+        shoot = photos / "shoot"
+        shoot.mkdir(parents=True)
+        names, entries = [], []
+        # Two scenes by frame counter: three consecutive frames, a
+        # numbering leap far past the sequence gap, then two more. The
+        # grouper reads EXIF where there is any and the counter where
+        # there is none; fixture JPEGs have no EXIF. Distinct clusters,
+        # because one shared cluster welds a single scene by design.
+        for index, number in enumerate((1, 2, 3, 900, 901)):
+            name = f"shoot/DSCF{number:04d}.JPG"
+            Image.new("RGB", (40, 30), (30 + 20 * index, 40, 60)).save(
+                photos / name)
+            names.append(name)
+            entries.append({
+                "rank": index + 1, "photo": name, "raw_files": [],
+                "cluster_id": f"group-{index + 1:04d}",
+                "tier": "ordinary",
+                "score": 70 - index, "confidence": 0.8,
+                "rationale": "fixture",
+                "assessment": {
+                    field: f"Evidence for {field}."
+                    for field in ASSESSMENT_FIELDS},
+                "warnings": [],
+            })
+        payload = report_payload()
+        payload["clusters"] = [
+            {"cluster_id": f"group-{index + 1:04d}", "photos": [name]}
+            for index, name in enumerate(names)]
+        payload["keep"] = [
+            {"cluster_id": f"group-{index + 1:04d}", "photos": [name],
+             "rationale": "fixture"}
+            for index, name in enumerate(names)]
+        report_path = root / "report.json"
+        report_path.write_text(json_module.dumps(payload),
+                               encoding="utf-8")
+        report = load_report(report_path)
+        shortlist_path = root / "report.professional-shortlist.json"
+        shortlist_path.write_text(json_module.dumps({
+            "format": "opencull-professional-shortlist-v1",
+            "source_report_sha256": report.sha256,
+            "source_review_revision": 0,
+            "candidate_policy": "effective",
+            "candidate_signature": "candidate-signature",
+            "entries": entries,
+        }), encoding="utf-8")
+        shortlist = load_shortlist(shortlist_path, report, photos)
+        reviews = ShortlistReviewStore(
+            root / "shortlist.review.json", shortlist)
+        return shortlist, reviews
+
+    def test_keyframes_are_marked_and_the_plan_is_written(self):
+        from opencull_gui import scenes
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            shortlist, reviews = self.stores(root)
+            told = scenes.detect_keyframes(shortlist, reviews, root)
+            self.assertGreaterEqual(told["scenes"], 2)
+            self.assertEqual(told["marked"], told["scenes"])
+            state = reviews.public_state()
+            for photo in told["keyframes"]:
+                self.assertTrue(
+                    state["entries"][photo]["interesting"], photo)
+            self.assertTrue(Path(told["plan_path"]).is_file())
+
+    def test_the_photographers_own_marks_are_kept_not_counted_twice(self):
+        from opencull_gui import scenes
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            shortlist, reviews = self.stores(root)
+            first = scenes.detect_keyframes(shortlist, reviews, root)
+            hand = next(photo for photo in (
+                entry["photo"] for entry in shortlist.entries)
+                if photo not in first["keyframes"])
+            state = reviews.public_state()
+            reviews.update(hand, "ordinary", False, "", True,
+                           state["revision"], True)
+            again = scenes.detect_keyframes(shortlist, reviews, root)
+            self.assertEqual(again["marked"], 0)
+            self.assertEqual(again["already_marked"], again["scenes"])
+            self.assertTrue(reviews.public_state()[
+                "entries"][hand]["interesting"])
+
+
 class UnwatchedCompletionTests(unittest.TestCase):
+
+
     """A run that finished while nobody was looking is not still running.
 
     A job whose output is on disk is reconciled to completed when the

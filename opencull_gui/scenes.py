@@ -238,6 +238,51 @@ def plan_path(recipes: Path, shortlist_stem: str) -> Path:
     return Path(recipes) / f"{shortlist_stem}.scene-plan.json"
 
 
+def detect_keyframes(shortlist: Any, reviews: Any,
+                     recipes: Path) -> dict[str, Any]:
+    """Find the scenes locally and mark each scene's keyframe to develop.
+
+    Free: the grouping is the same local similarity the suggestion
+    scoping uses, and the keyframe is each scene's best-ranked frame.
+    Marks are added, never taken -- a frame the photographer already
+    marked stays marked, whatever scene it fell into -- and the scene
+    plan is written beside the recipes so the AI editing phase shares
+    one answer per scene without being asked twice.
+    """
+    photos = [str(entry["photo"]) for entry in shortlist.entries]
+    plan = plan_for(shortlist, photos)
+    keyframes = [scene["representative"] for scene in plan]
+    already, marked = 0, 0
+    for photo in keyframes:
+        state = reviews.public_state()
+        entry = state.get("entries", {}).get(photo, {})
+        if entry.get("interesting") is True:
+            already += 1
+            continue
+        reviews.update(
+            photo,
+            entry.get("tier",
+                      shortlist.entry_by_photo[photo].get(
+                          "tier", "ordinary")),
+            entry.get("edit_raw", False),
+            entry.get("note", ""),
+            True,
+            state.get("revision"),
+            True,
+        )
+        marked += 1
+    written = write_plan(
+        Path(recipes), shortlist.path,
+        int(reviews.public_state().get("revision") or 0), plan)
+    return {
+        "scenes": len(plan),
+        "keyframes": keyframes,
+        "marked": marked,
+        "already_marked": already,
+        "plan_path": str(written),
+    }
+
+
 def write_plan(
     recipes: Path, shortlist_path: Path, revision: int,
     plan: list[dict[str, Any]],
