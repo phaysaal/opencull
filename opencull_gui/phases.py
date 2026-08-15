@@ -19,7 +19,9 @@ gates exist where a phase genuinely has no input -- there is no assessment
 to review before one has been run -- and nowhere else. Development in
 particular is never gated on the AI: a calibrated baseline can be rendered
 from any frame, and a photographer who wants no suggestions should not have
-to buy them.
+to buy them. Nor is AI editing gated on an assessment: it needs frames to
+name, not a model's opinion of them, and it lays out an unrated shortlist
+for itself where none exists.
 
 The personal style is never blocked at all. It belongs to the photographer
 rather than to the shoot, it can be built before any folder is opened, and
@@ -211,18 +213,16 @@ def plan(
             detail=f"{rounds} round{'s' if rounds > 1 else ''} asked for."
             if rounds else "Asked for."))
     elif not assessed:
-        # Blocked on input, not on money. A shortlist can be had for
-        # nothing -- "Rate them myself" lays one out unrated -- and a
-        # reason that only says "assess first" reads as "pay first",
-        # which is the interface telling somebody they are wrong without
-        # saying how. The free door is named, and the phase page opens
-        # onto it rather than onto a closed sign.
+        # Not blocked. AI editing needs frames to name and a rank to
+        # choose scene representatives by -- not anyone's judgement of
+        # them -- and the phase lays out the unrated shortlist itself
+        # on the way in, the way opening a folder without culling lays
+        # out its selection. Nothing here is gated to make somebody pay
+        # for an assessment first; what the assessment adds is said.
         phases.append(entry(
-            SUGGESTIONS, "blocked",
-            "Editing suggestions are written against a shortlist, and "
-            "this folder has none yet. Assess it, or take \"Rate them "
-            "myself\" on the assessment page -- free, no model -- and "
-            "the frames become askable."))
+            SUGGESTIONS, "ready",
+            detail="Not assessed. Every frame is askable; choose which "
+                   "on the page. An assessment would rank them first."))
     else:
         # Nothing marked is not a locked door. The assessment ranked these
         # frames, so the phase has its input; which of them to pay for is a

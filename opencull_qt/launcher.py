@@ -45,6 +45,7 @@ from opencull_gui.reviews import (
 )
 from opencull_gui.shortlist import (
     bar_checkpoint_path,
+    ensure_shortlist,
     forget_assessment,
     readable_checkpoint,
     run_phases,
@@ -1754,6 +1755,14 @@ class Launcher(QMainWindow):
                 "Resume writing directions",
                 lambda job=str(paused.get("id", "")): self.resume_job(job),
                 "")
+        # A folder nobody has assessed still has frames to ask about.
+        # Lay the unrated shortlist out silently, the way opening a
+        # folder without culling lays out its selection: AI editing
+        # needs frames to name, not anyone's judgement of them.
+        if not bench.shortlist_path.is_file():
+            ensure_shortlist(
+                bench.report, bench.selection(), bench.shortlist_path,
+                project_path=bench.project_path)
         page = SuggestionsPage(
             bench.shortlist, bench.shortlist_reviews, bench.directions,
             loader=self._loader, styles=self.style_names())
@@ -1991,7 +2000,8 @@ class Launcher(QMainWindow):
             if chosen is not None and set(chosen) != set(bench.selection()):
                 narrow_selection(bench.reviews, chosen)
             write_manual_shortlist(
-                bench.report, bench.selection(), bench.shortlist_path)
+                bench.report, bench.selection(), bench.shortlist_path,
+                project_path=bench.project_path)
         except Exception as exc:                     # noqa: BLE001 - reported
             self._say(f"That could not be laid out: {exc}", "alarm")
             return

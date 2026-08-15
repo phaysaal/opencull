@@ -470,7 +470,7 @@ def load_shortlist(
 
 def write_manual_shortlist(
     report: ReportIndex, photos: list[str], destination: Path,
-    stance: str = "",
+    stance: str = "", project_path: Path | None = None,
 ) -> Path:
     """Write a shortlist nobody was paid to produce.
 
@@ -523,7 +523,35 @@ def write_manual_shortlist(
     temporary.write_text(
         json.dumps(value, indent=2, ensure_ascii=False), encoding="utf-8")
     temporary.replace(destination)
+    if project_path is not None:
+        # Registered like the paid run's output, or the catalog never
+        # learns a shortlist exists: the phase bar kept AI editing
+        # blocked after "Rate them myself" for exactly this reason,
+        # while the file sat there and the assessment page opened on it.
+        from .project import register_file_artifact
+
+        register_file_artifact(
+            Path(project_path), "shortlist", destination,
+            stage="shortlist", job_id="by-hand")
     return destination
+
+
+def ensure_shortlist(report: ReportIndex, photos: list[str],
+                     destination: Path,
+                     project_path: Path | None = None) -> Path:
+    """A shortlist for a folder that has none: laid out, unrated, free.
+
+    AI editing needs frames to name and a rank to choose scene
+    representatives by; it does not need anyone's judgement of them.
+    So a folder nobody has assessed gets the same everything-included
+    shortlist "Rate them myself" writes -- silently, the way opening a
+    folder without culling silently writes its selection. Same doctrine
+    one level up: nothing is blocked to make somebody pay first.
+    """
+    if destination.is_file():
+        return destination
+    return write_manual_shortlist(report, photos, destination,
+                                  project_path=project_path)
 
 
 def rated_by_hand(shortlist: ShortlistIndex) -> bool:

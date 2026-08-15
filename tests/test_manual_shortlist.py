@@ -17,6 +17,7 @@ from opencull_gui.shortlist import (  # noqa: E402
     UNRATED_RATIONALE,
     UNRATED_TIER,
     ShortlistError,
+    ensure_shortlist,
     load_shortlist,
     rated_by_hand,
     write_manual_shortlist,
@@ -40,6 +41,42 @@ class ManualShortlistTests(unittest.TestCase):
 
     def load(self, path=None):
         return load_shortlist(path or self.destination, self.report, self.photos)
+
+    def test_a_by_hand_shortlist_registers_on_the_project(self):
+        """The bug as met: "Rate them myself" wrote the file, the
+        assessment page opened on it, and the phase bar kept AI editing
+        blocked -- because the catalog derives "shortlist available"
+        from the manifest, and only the paid job ever registered."""
+        from opencull_gui.project import (
+            load_or_create_folder_project,
+            load_project,
+        )
+
+        project_path, _manifest = load_or_create_folder_project(
+            self.photos, self.report.path.stem)
+        self.write(project_path=project_path)
+        registered = load_project(project_path).get(
+            "artifacts", {}).get("shortlist") or []
+        self.assertEqual(
+            [Path(item["path"]).name for item in registered],
+            [self.destination.name])
+
+    def test_ensure_shortlist_lays_one_out_only_where_none_exists(self):
+        """AI editing's silent door: written once, never overwritten --
+        a paid assessment that later lands must not be replaced by an
+        unrated one on the next visit."""
+        from opencull_gui.project import load_or_create_folder_project
+
+        project_path, _manifest = load_or_create_folder_project(
+            self.photos, self.report.path.stem)
+        first = ensure_shortlist(self.report, list(NAMES),
+                                 self.destination, project_path=project_path)
+        self.assertTrue(first.is_file())
+        self.assertTrue(rated_by_hand(self.load()))
+        stamp = self.destination.stat().st_mtime_ns
+        ensure_shortlist(self.report, list(NAMES[:1]),
+                         self.destination, project_path=project_path)
+        self.assertEqual(self.destination.stat().st_mtime_ns, stamp)
 
     def test_what_is_written_is_a_shortlist_the_app_will_open(self):
         self.write()

@@ -109,15 +109,14 @@ class AssessmentTests(unittest.TestCase):
 
 
 class ProfileTests(unittest.TestCase):
-    def test_a_blocked_suggestions_phase_names_the_free_door(self):
-        """"Assess first" read as "pay first". A shortlist can be had
-        for nothing, and the reason must say where."""
+    def test_ai_editing_is_never_gated_on_an_assessment(self):
+        """It needs frames to name, not a model's opinion of them; the
+        phase lays out an unrated shortlist for itself on the way in.
+        "Assess first" had read as "pay first"."""
         plan = phases.plan(project(report_available=True), manifest={})
-        self.assertEqual(state(plan, phases.SUGGESTIONS), "blocked")
-        said = reason(plan, phases.SUGGESTIONS)
-        self.assertIn("Rate them myself", said)
-        self.assertIn("free", said)
-        self.assertNotIn("Assess first", said)
+        self.assertEqual(state(plan, phases.SUGGESTIONS), "ready")
+        self.assertIn("Not assessed", plan[
+            [item["id"] for item in plan].index(phases.SUGGESTIONS)]["detail"])
 
     def test_the_profile_is_never_blocked_because_it_is_not_the_shoots(self):
         plan = phases.plan(project(available=False), manifest={})
@@ -134,10 +133,11 @@ class ProfileTests(unittest.TestCase):
 
 
 class SuggestionTests(unittest.TestCase):
-    def test_suggestions_need_an_assessment(self):
+    def test_suggestions_never_need_an_assessment(self):
+        """The old contract, inverted on purpose: the phase lays out an
+        unrated shortlist for itself, so nobody pays to be allowed in."""
         plan = phases.plan(project(report_available=True), manifest={})
-        self.assertEqual(state(plan, phases.SUGGESTIONS), "blocked")
-        self.assertIn("shortlist", reason(plan, phases.SUGGESTIONS))
+        self.assertEqual(state(plan, phases.SUGGESTIONS), "ready")
 
     def test_an_unread_assessment_does_not_block_suggestions(self):
         # marked=None means nobody has looked, which is not the same as
