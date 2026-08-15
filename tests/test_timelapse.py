@@ -350,6 +350,49 @@ class TrackTests(unittest.TestCase):
                 self.assertGreaterEqual(box["left"], 0)
 
 
+class ShiftNameTests(unittest.TestCase):
+    """The colour shift, named the way a person names it.
+
+    A JSON path is for a custom look; a preset answers to its id, its
+    id without the "preset-" prefix, or its human name, case blind.
+    An unknown name refuses with the working names listed, because a
+    shift silently skipped is a timelapse quietly wrong.
+    """
+
+    def test_a_presets_short_id_is_enough(self):
+        told = timelapse._shift_operations("infrared-720-false-colour")
+        self.assertTrue(told)
+        self.assertIn("color.neutralize", [item["op"] for item in told])
+
+    def test_the_human_name_works_case_blind(self):
+        told = timelapse._shift_operations("infrared · 720nm false colour")
+        self.assertTrue(told)
+
+    def test_a_relative_path_resolves_beside_the_photos(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "my-look.recipe.json").write_text(json.dumps({
+                "recipe": {"operations": [
+                    {"op": "tone.exposure", "value": -0.5, "unit": "EV",
+                     "mode": "delta"}]}}))
+            told = timelapse._shift_operations(
+                "my-look.recipe.json", photos=str(root))
+            self.assertEqual(told[0]["op"], "tone.exposure")
+
+    def test_an_unknown_name_refuses_and_lists_what_would_work(self):
+        with self.assertRaises(ValueError) as caught:
+            timelapse._shift_operations("ir-false-colour")
+        said = str(caught.exception)
+        self.assertIn("infrared-720-false-colour", said)
+
+    def test_masks_are_still_skipped_whichever_spelling(self):
+        told = timelapse._shift_operations("infrared-760-blue-violet")
+        self.assertTrue(told)
+        self.assertFalse(
+            [item for item in told
+             if str(item["op"]).startswith("mask.")])
+
+
 class AnchoredTests(unittest.TestCase):
     """A model anchors sparsely; the tracker carries between.
 

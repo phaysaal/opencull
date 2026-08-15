@@ -678,17 +678,55 @@ def plan_note(plan_text: str) -> str:
 
 # --- rendering the sequence ---------------------------------------------------
 
-def _shift_operations(recipe_path: str) -> list[dict[str, Any]]:
-    """The colour shift's global operations, read from any house recipe."""
-    if not str(recipe_path).strip():
+def _shift_operations(recipe: str, photos: str = ".") -> list[dict[str, Any]]:
+    """The colour shift, named the way a person names it.
+
+    Three spellings, tried in order. A path -- absolute, or relative
+    to the photos folder -- to any house recipe file, for a custom
+    look. Failing that, a preset's name: its id, its id without the
+    "preset-" prefix, or its human name, case blind -- so
+    "infrared-720-false-colour" and "Infrared · 720nm false colour"
+    both mean the built-in, and a preset saved from the fine-tune page
+    is addressable by whatever it was called. An unknown name refuses
+    with the list of what would have worked, because a colour shift
+    silently skipped is a timelapse quietly wrong.
+    """
+    asked = str(recipe).strip()
+    if not asked:
         return []
-    value = json.loads(Path(recipe_path).expanduser().read_text(
-        encoding="utf-8"))
-    recipe = value.get("recipe", value)
-    operations = [item for item in recipe.get("operations", [])
-                  if isinstance(item, dict)
-                  and not str(item.get("op", "")).startswith("mask.")]
-    return active(operations)
+    stated = Path(asked).expanduser()
+    if not stated.is_absolute():
+        beside = Path(str(photos)).expanduser().resolve() / asked
+        if beside.is_file():
+            stated = beside
+    if stated.is_file():
+        value = json.loads(stated.read_text(encoding="utf-8"))
+        found = value.get("recipe", value)
+        operations = found.get("operations", [])
+    else:
+        from opencull_gui import presets as preset_library
+
+        offered = preset_library.presets()
+        wanted = asked.casefold()
+        chosen = next(
+            (item for item in offered
+             if wanted in {str(item.get("id", "")).casefold(),
+                           str(item.get("id", "")).casefold().removeprefix(
+                               "preset-"),
+                           str(item.get("name", "")).casefold()}),
+            None)
+        if chosen is None:
+            names = ", ".join(
+                str(item.get("id", "")).removeprefix("preset-")
+                for item in offered)
+            raise ValueError(
+                f"no recipe file at {asked!r} and no preset by that "
+                f"name; the presets are: {names}")
+        operations = chosen.get("operations", [])
+    kept = [item for item in operations
+            if isinstance(item, dict)
+            and not str(item.get("op", "")).startswith("mask.")]
+    return active(kept)
 
 
 def render_sequence(photos: str, plan_text: str, directory: str,
@@ -703,7 +741,7 @@ def render_sequence(photos: str, plan_text: str, directory: str,
     root = Path(str(photos)).expanduser().resolve()
     where = Path(str(directory)).expanduser().resolve()
     where.mkdir(parents=True, exist_ok=True)
-    operations = _shift_operations(recipe)
+    operations = _shift_operations(recipe, photos)
     written = []
     for index, box in enumerate(plan["boxes"], start=1):
         image = _preview(root / box["name"])
