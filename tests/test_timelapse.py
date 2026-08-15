@@ -350,5 +350,119 @@ class TrackTests(unittest.TestCase):
                 self.assertGreaterEqual(box["left"], 0)
 
 
+class AnchoredTests(unittest.TestCase):
+    """A model anchors sparsely; the tracker carries between.
+
+    The cost shape is the point: a handful of vision calls stabilizes
+    hundreds of frames, and every model answer is validated, scaled and
+    -- where unusable -- recorded with its reason instead of trusted.
+    """
+
+    def sequence(self, root: Path, positions, size=(640, 420)):
+        rng = np.random.default_rng(11)
+        ground = rng.integers(20, 70, size=(size[1], size[0]),
+                              dtype=np.uint8)
+        stamp = rng.integers(120, 250, size=(48, 48), dtype=np.uint8)
+        for index, (x, y) in enumerate(positions):
+            frame = ground.copy()
+            frame[y:y + 48, x:x + 48] = stamp
+            Image.fromarray(frame).convert("RGB").save(
+                root / f"frame-{index:03d}.jpg", quality=95)
+
+    def test_keyframes_are_first_last_and_every_nth(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.sequence(root, [(100 + 6 * i, 100) for i in range(9)])
+            chosen = json.loads(timelapse.keyframes(
+                str(root), "frame-*.jpg", every=4))
+            self.assertEqual(chosen, ["frame-000.jpg", "frame-004.jpg",
+                                      "frame-008.jpg"])
+
+    def test_an_anchor_is_scaled_from_the_proofs_pixels(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.sequence(root, [(100, 100)])
+            proof = timelapse.keyframe_proof(
+                str(root), "frame-000.jpg", str(root / "anchors"),
+                edge=320)   # proof at half size: scale = 2
+            held = json.loads(timelapse.collect_anchor(
+                "[]", str(root), "frame-000.jpg", proof,
+                {"x0": 50, "y0": 50, "x1": 74, "y1": 74,
+                 "visible": True, "what": "the stamp"}))
+            self.assertEqual(held[0]["box"], [100.0, 100.0, 148.0, 148.0])
+
+    def test_a_useless_answer_records_why_instead_of_pretending(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.sequence(root, [(100, 100)])
+            proof = timelapse.keyframe_proof(
+                str(root), "frame-000.jpg", str(root / "anchors"))
+            held = json.loads(timelapse.collect_anchor(
+                "[]", str(root), "frame-000.jpg", proof,
+                {"x0": 90, "y0": 90, "x1": 20, "y1": 120,
+                 "visible": True, "what": "?"}))
+            self.assertIn("unusable box", held[0]["skipped"])
+            hidden = json.loads(timelapse.collect_anchor(
+                "[]", str(root), "frame-000.jpg", proof,
+                {"x0": 0, "y0": 0, "x1": 0, "y1": 0,
+                 "visible": False, "what": "clouds"}))
+            self.assertIn("not visible", hidden[0]["skipped"])
+            self.assertFalse(timelapse.anchors_usable(
+                json.dumps(hidden)))
+
+    def test_the_tracker_carries_between_anchors_and_resets_on_them(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            positions = [(80 + 10 * i, 90 + 4 * i) for i in range(9)]
+            self.sequence(root, positions)
+            anchors = "[]"
+            for index in (0, 8):
+                x, y = positions[index]
+                proof = timelapse.keyframe_proof(
+                    str(root), f"frame-{index:03d}.jpg",
+                    str(root / "anchors"))
+                anchors = timelapse.collect_anchor(
+                    anchors, str(root), f"frame-{index:03d}.jpg", proof,
+                    {"x0": x, "y0": y, "x1": x + 48, "y1": y + 48,
+                     "visible": True, "what": "the stamp"})
+            told = json.loads(timelapse.anchored_survey(
+                str(root), "frame-*.jpg", anchors))
+            self.assertEqual(told["kept"], 9)
+            for frame, (x, y) in zip(told["frames"], positions):
+                self.assertAlmostEqual(frame["box"][0], x, delta=3)
+            self.assertTrue(told["frames"][0].get("anchored"))
+            self.assertTrue(told["frames"][8].get("anchored"))
+
+    def test_frames_before_the_first_anchor_are_named_not_guessed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            positions = [(100, 100), (110, 104), (120, 108)]
+            self.sequence(root, positions)
+            x, y = positions[1]
+            proof = timelapse.keyframe_proof(
+                str(root), "frame-001.jpg", str(root / "anchors"))
+            anchors = timelapse.collect_anchor(
+                "[]", str(root), "frame-001.jpg", proof,
+                {"x0": x, "y0": y, "x1": x + 48, "y1": y + 48,
+                 "visible": True, "what": "the stamp"})
+            told = json.loads(timelapse.anchored_survey(
+                str(root), "frame-*.jpg", anchors))
+            lost = {item["name"]: item["why"] for item in told["excluded"]}
+            self.assertIn("frame-000.jpg", lost)
+            self.assertIn("before the first usable anchor",
+                          lost["frame-000.jpg"])
+
+    def test_the_prompt_names_the_subject_and_the_proofs_size(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.sequence(root, [(100, 100)])
+            proof = timelapse.keyframe_proof(
+                str(root), "frame-000.jpg", str(root / "anchors"),
+                edge=320)
+            built = timelapse.anchor_prompt("the red kite", proof)
+            self.assertIn("the red kite", built)
+            self.assertIn("320x", built)
+
+
 if __name__ == "__main__":
     unittest.main()

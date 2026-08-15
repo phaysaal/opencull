@@ -1,0 +1,58 @@
+-- Pin a subject you can only NAME, for a timelapse: a model anchors,
+-- the tracker carries.
+--
+-- The parametric form of the stabilizer: say what the principal
+-- subject is -- "the eclipsed sun", "the red kite", anything -- and a
+-- vision model locates it on sparse keyframes only: first, last, and
+-- every Nth. Between anchors the free tracker carries the box, and at
+-- each anchor its belief is reset and its template re-cut where the
+-- model just vouched -- so a 300-frame sequence costs a handful of
+-- calls, not three hundred. Then the same largest-common-crop as
+-- always: subject pinned, no padding, one even size, ffmpeg-ready.
+
+param photos: text = "."
+param pattern: text = "*.RAF"
+param subject: text = ""
+param every: num = 30
+param frames_dir: text = ""
+param recipe: text = ""
+param detect_edge: num = 1200
+param output: text = "timelapse.json"
+
+use "agents.kim"
+use python "timelapse_kernel.py"
+
+schema Anchor:
+    x0: num
+    y0: num
+    x1: num
+    y1: num
+    visible: bool
+    what: text
+
+check len(subject) > 0
+chosen := keyframes(photos, pattern, every)
+
+anchors := "[]"
+forall name in chosen:
+    proof := keyframe_proof(photos, name, frames_dir, detect_edge)
+    shown := observe image(proof)
+    check shown.exists
+    found := memo gen<Anchor>(anchor_prompt(subject, proof), images=[shown]) by A
+    anchors := collect_anchor(anchors, photos, name, proof, found)
+
+-- The tracker's seed is the first anchor; without one there is
+-- nothing to carry between keyframes.
+check anchors_usable(anchors)
+
+measured := anchored_survey(photos, pattern, anchors, detect_edge)
+plan := crop_plan(measured)
+check plan_valid(plan)
+print(plan_note(plan))
+
+report := render_sequence(photos, plan, frames_dir, recipe)
+check sequence_complete(report, plan)
+
+act file.overwrite(output, report)
+settle until check file_exists(output) within 5
+commit(report)

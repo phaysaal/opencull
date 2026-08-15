@@ -385,6 +385,185 @@ def track_survey(photos: str, pattern: str, subject_box: str,
     }, sort_keys=True)
 
 
+# --- the third measurer: a model anchors, the tracker carries --------------
+#
+# Vision on every frame of a long sequence is money spent on work
+# correlation does for free. So the model is asked only at KEYFRAMES --
+# where the subject is named in words and located in numbers -- and the
+# tracker carries the box between anchors, re-cutting its template at
+# each one so drift is bounded by the anchor spacing and appearance
+# changes are absorbed where a model has just vouched for the box.
+
+def keyframes(photos: str, pattern: str, every: float = 30) -> str:
+    """The names a model will be shown: first, last, and every Nth."""
+    listed = list_frames(photos, pattern)
+    stride = max(1, int(every))
+    chosen = listed[::stride]
+    if listed and (not chosen or chosen[-1]["name"] != listed[-1]["name"]):
+        chosen.append(listed[-1])
+    return json.dumps([item["name"] for item in chosen])
+
+
+def keyframe_proof(photos: str, name: str, directory: str,
+                   edge: float = 1400) -> str:
+    """One keyframe as a JPEG a vision model can be shown, size stated."""
+    root = Path(str(photos)).expanduser().resolve()
+    image = _preview(root / Path(str(name)).name)
+    image.thumbnail((int(edge), int(edge)), Image.Resampling.LANCZOS)
+    where = Path(str(directory)).expanduser().resolve()
+    where.mkdir(parents=True, exist_ok=True)
+    out = where / f"anchor-{Path(str(name)).stem}.jpg"
+    image.save(out, quality=90)
+    return str(out)
+
+
+def collect_anchor(anchors_json: str, photos: str, name: str,
+                   proof: str, answer: Any) -> str:
+    """One model answer, validated and scaled to full resolution.
+
+    The model answered in the proof's own pixels; the survey speaks
+    full-resolution boxes, so the scale is settled here, once, and an
+    unusable answer records why instead of pretending.
+    """
+    from treatment_kernel import as_record
+
+    held = json.loads(anchors_json or "[]")
+    record = as_record(answer)
+    root = Path(str(photos)).expanduser().resolve()
+    with Image.open(str(proof)) as opened:
+        shown_w, shown_h = opened.size
+    full = _preview(root / Path(str(name)).name)
+    scale = full.size[0] / max(shown_w, 1)
+    entry: dict[str, Any] = {"name": Path(str(name)).name}
+    visible = record.get("visible", True)
+    if isinstance(visible, str):
+        visible = visible.strip().lower() not in {"false", "no", "0"}
+    values = []
+    for key in ("x0", "y0", "x1", "y1"):
+        value = record.get(key)
+        values.append(float(value)
+                      if isinstance(value, (int, float)) else None)
+    if not visible:
+        entry["skipped"] = "the model says the subject is not visible here"
+    elif any(v is None for v in values) or values[2] <= values[0]             or values[3] <= values[1]:
+        entry["skipped"] = f"unusable box from the model: {values}"
+    else:
+        entry["box"] = [
+            max(0.0, min(values[0], shown_w)) * scale,
+            max(0.0, min(values[1], shown_h)) * scale,
+            max(0.0, min(values[2], shown_w)) * scale,
+            max(0.0, min(values[3], shown_h)) * scale,
+        ]
+    held.append(entry)
+    return json.dumps(held)
+
+
+def anchors_usable(anchors_json: str) -> bool:
+    """At least the first anchor must be a real box: the tracker's seed."""
+    held = json.loads(anchors_json or "[]")
+    placed = [item for item in held if "box" in item]
+    return bool(placed)
+
+
+def anchor_prompt(subject: str, proof: str) -> str:
+    with Image.open(str(proof)) as opened:
+        width, height = opened.size
+    return (
+        f"Find {str(subject).strip()} in this {width}x{height} image. "
+        "Answer x0, y0, x1, y1: the tightest box around it, in pixels "
+        "of THIS image, origin top-left. If it is not visible, answer "
+        "visible=false and zeros. In 'what', say in a few words what "
+        "you boxed, so a wrong lock is readable afterwards.")
+
+
+def anchored_survey(photos: str, pattern: str, anchors_json: str,
+                    detect_edge: float = 1200) -> str:
+    """The tracker's survey, seeded and re-anchored by the model's boxes.
+
+    Between anchors the tracker does what it always does. At each
+    anchored keyframe the belief is reset to the model's box and the
+    template re-cut there -- drift is bounded by anchor spacing, and a
+    subject that changes appearance is re-learned exactly where a model
+    vouched for it.
+    """
+    import cv2
+
+    root = Path(str(photos)).expanduser().resolve()
+    anchors = {item["name"]: item["box"]
+               for item in json.loads(anchors_json or "[]")
+               if "box" in item}
+    listed = list_frames(photos, pattern)
+    frames: list[dict[str, Any]] = []
+    template = None
+    template_size = (0, 0)
+    last: tuple[float, float] | None = None
+    for item in listed:
+        path = root / item["name"]
+        try:
+            image = _preview(path)
+        except Exception as exc:                     # noqa: BLE001 - named
+            frames.append({**item, "excluded": f"unreadable: {exc}"})
+            continue
+        width, height = image.size
+        scale = min(1.0, float(detect_edge) / max(width, height))
+        probe = image if scale >= 1.0 else image.resize(
+            (max(1, round(width * scale)), max(1, round(height * scale))),
+            Image.Resampling.BILINEAR)
+        grey = np.asarray(probe.convert("L"), dtype=np.float32)
+        anchored = anchors.get(item["name"])
+        if anchored is not None:
+            x0, y0, x1, y1 = (v * scale for v in anchored)
+            cut = grey[int(y0):int(y1), int(x0):int(x1)]
+            if cut.size >= 64:
+                template = cut.copy()
+                template_size = template.shape
+                last = (float(x0), float(y0))
+                frames.append({
+                    **item, "width": width, "height": height,
+                    "box": list(anchored), "confidence": 1.0,
+                    "anchored": True})
+                continue
+        if template is None or last is None:
+            frames.append({**item, "excluded":
+                           "before the first usable anchor"})
+            continue
+        th, tw = template_size
+        reach = int(1.5 * max(th, tw))
+        wx0 = max(0, int(last[0]) - reach)
+        wy0 = max(0, int(last[1]) - reach)
+        wx1 = min(grey.shape[1], int(last[0]) + tw + reach)
+        wy1 = min(grey.shape[0], int(last[1]) + th + reach)
+        window = grey[wy0:wy1, wx0:wx1]
+        if window.shape[0] < th or window.shape[1] < tw:
+            frames.append({**item, "excluded": (
+                "the search window fell off the frame; the subject was "
+                "last seen too close to the edge")})
+            continue
+        scored = cv2.matchTemplate(window, template, cv2.TM_CCOEFF_NORMED)
+        _lo, best, _lo_at, best_at = cv2.minMaxLoc(scored)
+        if best < TRACK_CONFIDENCE:
+            frames.append({**item, "excluded": (
+                f"the tracker lost the subject (confidence {best:.2f}) "
+                "between anchors")})
+            continue
+        found_x = wx0 + best_at[0]
+        found_y = wy0 + best_at[1]
+        last = (float(found_x), float(found_y))
+        frames.append({
+            **item, "width": width, "height": height,
+            "box": [found_x / scale, found_y / scale,
+                    (found_x + tw) / scale, (found_y + th) / scale],
+            "confidence": round(float(best), 3)})
+    frames = _screen(frames)
+    kept = [f for f in frames if "excluded" not in f]
+    return json.dumps({
+        "format": FORMAT, "photos": str(root), "pattern": str(pattern),
+        "frames": frames, "kept": len(kept),
+        "excluded": [{"name": f["name"], "why": f["excluded"]}
+                     for f in frames if "excluded" in f],
+    }, sort_keys=True)
+
+
 def _screen(frames: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """The survey's two honesty passes, on the box contract.
 

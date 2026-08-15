@@ -51,6 +51,9 @@ BUILT_INS = (
      "Align a handheld eclipse sequence into timelapse frames."),
     ("subject_timelapse.kim",
      "Pin any subject for a timelapse: mark it once, track it free."),
+    ("named_subject_timelapse.kim",
+     "Pin a subject you can only name: a model anchors, the tracker "
+     "carries."),
 )
 
 _PARAM_RE = re.compile(
