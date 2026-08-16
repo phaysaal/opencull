@@ -457,14 +457,29 @@ class DevelopmentWorkspace:
             })
         return rounds
 
-    def treatments(self, photo: str) -> list[dict]:
+    def treatments(self, photo: str, payload: dict | None = None,
+                   include_presets: bool = True) -> list[dict]:
         """The treatments that can actually be rendered for one photograph.
 
         A treatment nobody can render is worse than no treatment at all: the
         interface offers it, the photographer chooses it, and the render
         fails. So this reports only what has a recipe behind it.
+
+        ``include_presets`` builds the preset list, which is the same for
+        every frame and costs a recipe compile each. A caller sweeping the
+        whole selection to pre-render treatments does not want them -- a
+        preset is never rendered ahead of being asked for -- and passes
+        False, so that list is compiled once for the frame on show rather
+        than once per frame in the folder.
+
+        ``payload`` is the workspace read this answer draws from. It is the
+        same for every photograph on the page, and computing it means
+        reading every recipe the shortlist has; a caller working through
+        the whole selection reads it once and passes it here, rather than
+        paying for it per frame. Left out, it is read here for the one
+        photograph asked about.
         """
-        workspace = self.payload()
+        workspace = payload if payload is not None else self.payload()
         entry = next((item for item in workspace.get("candidates", [])
                       if item.get("photo") == photo), None)
         # The baseline is the raw developed and then matched to the
@@ -518,7 +533,7 @@ class DevelopmentWorkspace:
         # Presets sit below what was written for this photograph and above
         # the camera's own frame: a stated look is a weaker claim than an
         # answer about this scene and a stronger one than no edit at all.
-        for preset in self.presets():
+        for preset in (self.presets() if include_presets else []):
             available.append({
                 "id": str(preset["id"]),
                 "name": str(preset["name"]),

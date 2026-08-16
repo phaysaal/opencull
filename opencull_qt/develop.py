@@ -779,6 +779,10 @@ class DevelopPage(QWidget):
         self.current = self.photo_names[0] if self.photo_names else ""
         self.treatment = ""
         self.available: list[dict] = []
+        # Which selection the pre-render sweep last worked through. The
+        # sweep only warms thumbnails ahead of being asked for; it need not
+        # rerun on a mere row change, only when the shown frames change.
+        self._swept: tuple[str, ...] | None = None
         # Presets start folded away. Somebody who mostly develops what
         # was written for the frame should not scroll past nine looks to
         # reach the camera's own rendering.
@@ -1233,6 +1237,8 @@ class DevelopPage(QWidget):
             self._sync_row()
 
     def _fill_photos(self) -> None:
+        # The shown set is about to be rebuilt, so the sweep must run again.
+        self._swept = None
         treated = self.treated_photos()
         total = len(self.photo_names)
         if not treated:
@@ -1703,12 +1709,30 @@ class DevelopPage(QWidget):
         this size is read from the workspace's cache rather than decoded
         again.
         """
+        shown = tuple(self.shown_photos())
+        if self._swept == shown:
+            # The set has not changed since the sweep last decided it, so a
+            # row change need not re-decide it for every frame -- that is
+            # what made navigating the develop list slow. Just move the
+            # frame in front to the front of the render queue.
+            if self.current:
+                self.thumbs.prefer(self.current)
+            return
         demosaic = self._demosaic()
         pairs: list[tuple[str, str]] = []
         settings: dict[str, tuple[str, str]] = {}
+        # The workspace read is the same for every frame in the sweep, and
+        # it reads every recipe the shortlist has. Read it once here rather
+        # than once per frame -- doing it per frame is what made opening the
+        # develop page on a large folder take tens of seconds.
+        try:
+            shared = self.workspace.payload()
+        except Exception:                            # noqa: BLE001 - skipped
+            shared = None
         for photo in self.shown_photos():
             try:
-                treatments = self.workspace.treatments(photo)
+                treatments = self.workspace.treatments(
+                    photo, payload=shared, include_presets=False)
             except Exception:                        # noqa: BLE001 - skipped
                 continue
             if len(treatments) < 2:
@@ -1727,6 +1751,7 @@ class DevelopPage(QWidget):
                 if item.get("kind") != "preset"
                 and (photo, str(item["id"])) not in self.previews)
         self.thumbs.want(pairs, settings)
+        self._swept = shown
         if self.current:
             self.thumbs.prefer(self.current)
 

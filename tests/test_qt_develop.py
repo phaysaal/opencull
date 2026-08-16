@@ -193,6 +193,32 @@ class SuggestedTreatmentTests(unittest.TestCase):
             "A.JPG", "standard", "default", "markesteijn-3-pass", 80)
         self.assertTrue(rendered.is_file())
 
+    def test_a_given_payload_is_not_recomputed_per_treatment(self):
+        # The payload reads every recipe the shortlist has; a caller
+        # sweeping the whole selection reads it once and passes it in. When
+        # it does, treatments must not read it again -- that per-frame
+        # re-read is what made opening the develop page slow.
+        assess_and_suggest(self.root, self.report_path, self.photos_path)
+        ws = self.workspace()
+        shared = ws.payload()
+        with unittest.mock.patch.object(
+                ws, "payload", side_effect=AssertionError("recomputed")):
+            offered = ws.treatments("A.JPG", payload=shared)
+        self.assertIn("standard", [item["id"] for item in offered])
+
+    def test_the_sweep_leaves_out_the_presets_it_would_never_render(self):
+        # A preset is never rendered ahead of being asked for, and building
+        # its list costs a recipe compile each. Excluding them drops every
+        # preset and nothing else.
+        assess_and_suggest(self.root, self.report_path, self.photos_path)
+        ws = self.workspace()
+        full = ws.treatments("A.JPG")
+        lean = ws.treatments("A.JPG", include_presets=False)
+        self.assertFalse(any(item.get("kind") == "preset" for item in lean))
+        self.assertEqual(
+            [item["id"] for item in lean],
+            [item["id"] for item in full if item.get("kind") != "preset"])
+
 
 @unittest.skipUnless(QApplication is not None, "PySide6 is not installed")
 class TreatmentEntryTests(unittest.TestCase):
@@ -263,6 +289,21 @@ class TreatmentEntryTests(unittest.TestCase):
 
         register_job_output(self.workspace.project_path, {
             "kind": "treatment", "id": "job1", "output": str(path)})
+
+    def test_the_preview_sweep_runs_once_per_selection_not_per_row(self):
+        # The sweep pre-renders every frame's treatments; it need only run
+        # when the shown set changes. A row change with the same set must
+        # not sweep the whole selection again -- doing so per row is what
+        # made navigating the develop list slow.
+        page = self.page()
+        shown = page.shown_photos()
+        if len(shown) < 2:
+            self.skipTest("needs at least two shown frames")
+        self.assertEqual(page._swept, tuple(shown))
+        target = next(name for name in shown if name != page.current)
+        with unittest.mock.patch.object(page.thumbs, "want") as want:
+            page.show_photo(target)
+        want.assert_not_called()
 
     def test_the_button_asks_and_then_emits_the_frame_and_the_budget(self):
         page = self.page()
