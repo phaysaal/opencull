@@ -49,6 +49,9 @@ from __future__ import annotations
 import io
 import json
 import random
+import shlex
+import shutil
+import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -873,12 +876,102 @@ def render_sequence(photos: str, plan_text: str, directory: str,
         "width": plan["width"], "height": plan["height"],
         "excluded": plan.get("excluded", []),
         "colour_shift": str(recipe) or "none",
-        "assemble": (
-            f"ffmpeg -framerate 12 -i {where}/%04d.jpg -c:v libx264 "
-            f"-pix_fmt yuv420p {where}/timelapse.mp4"),
+        "assemble": _assemble_command(where, _video_target(where)),
+        "video": None,
         "created_at": datetime.now(UTC).isoformat(),
     }
     return json.dumps(report, indent=2, sort_keys=True)
+
+
+FRAMERATE = 12
+
+
+def _video_target(frames_dir: Path) -> Path:
+    """Where the finished video lands: beside the frames, not among them.
+
+    The frames sit in a `frames/` folder; the video belongs one level up,
+    in the timelapse folder itself, so it is not lost in a scroll of a few
+    hundred stills and the next run's frames do not sit beside last run's
+    film.
+    """
+    frames_dir = Path(frames_dir)
+    parent = (frames_dir.parent if frames_dir.name == "frames"
+              else frames_dir)
+    return parent / "timelapse.mp4"
+
+
+def _assemble_command(frames_dir: Path, target: Path) -> str:
+    return " ".join(shlex.quote(part) for part in _ffmpeg_argv(
+        Path(frames_dir), Path(target)))
+
+
+def _ffmpeg_argv(frames_dir: Path, target: Path) -> list[str]:
+    return [
+        "ffmpeg", "-y", "-framerate", str(FRAMERATE),
+        "-i", str(frames_dir / "%04d.jpg"),
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "18",
+        str(target)]
+
+
+def assemble_video(report_text: str) -> str:
+    """Encode the numbered frames into the video, and record where it went.
+
+    The alignment produced the frames and the exact ffmpeg line; running
+    it is the last thing the photographer asked for when they pressed
+    "Make the timelapse", so the program does it rather than leaving a
+    command for a terminal. It is best-effort by design: if ffmpeg is not
+    installed, or the encode fails, the frames and the assemble line are
+    still on record and the report says plainly what happened -- the run
+    is not failed over a missing encoder, it just has no film yet.
+    """
+    report = json.loads(report_text)
+    frames_dir = Path(str(report.get("directory") or "."))
+    target = _video_target(frames_dir)
+    report["assemble"] = _assemble_command(frames_dir, target)
+    frames = report.get("frames") or []
+    if not frames:
+        report["video"] = None
+        report["video_note"] = "no frames to assemble into a video"
+        return json.dumps(report, indent=2, sort_keys=True)
+    if shutil.which("ffmpeg") is None:
+        report["video"] = None
+        report["video_note"] = (
+            "ffmpeg is not installed, so the frames are ready but the video "
+            "was not made; install ffmpeg and run the assemble line above")
+        return json.dumps(report, indent=2, sort_keys=True)
+    try:
+        finished = subprocess.run(
+            _ffmpeg_argv(frames_dir, target),
+            capture_output=True, text=True, timeout=1800)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        report["video"] = None
+        report["video_note"] = f"ffmpeg could not run: {exc}"
+        return json.dumps(report, indent=2, sort_keys=True)
+    if finished.returncode != 0 or not target.is_file():
+        tail = (finished.stderr or "").strip().splitlines()
+        report["video"] = None
+        report["video_note"] = (
+            "ffmpeg did not produce a video: "
+            + (tail[-1] if tail else f"exit {finished.returncode}"))
+        return json.dumps(report, indent=2, sort_keys=True)
+    report["video"] = str(target)
+    report["video_note"] = (
+        f"{len(frames)} frames at {FRAMERATE} fps -- "
+        f"{len(frames) / FRAMERATE:.0f} seconds")
+    return json.dumps(report, indent=2, sort_keys=True)
+
+
+def video_note(report_text: str) -> str:
+    """One line for the log: what became of the video."""
+    try:
+        report = json.loads(report_text)
+    except (ValueError, TypeError):
+        return ""
+    made = report.get("video")
+    note = str(report.get("video_note") or "")
+    if made:
+        return f"video: {made}  ({note})" if note else f"video: {made}"
+    return f"no video: {note}" if note else "no video was made"
 
 
 def sequence_complete(report_text: str, plan_text: str) -> bool:

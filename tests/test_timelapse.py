@@ -10,10 +10,12 @@ sun sits at the same offset in all of them.
 from __future__ import annotations
 
 import json
+import shutil
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 from PIL import Image
@@ -324,6 +326,58 @@ class SequenceTests(unittest.TestCase):
                 str(root), plan, str(root / "out"))
             (root / "out" / "0002.jpg").unlink()
             self.assertFalse(timelapse.sequence_complete(report, plan))
+
+
+class AssembleVideoTests(unittest.TestCase):
+    """The last step the button promises: the frames become a film."""
+
+    def _rendered(self, root: Path) -> str:
+        for index, centre in enumerate([(430, 300), (470, 300), (450, 320)]):
+            crescent(root / f"frame-{index:03d}.jpg", centre=centre)
+        plan = timelapse.crop_plan(
+            timelapse.survey(str(root), "frame-*.jpg"))
+        # The house layout: frames in a `frames/` folder, film beside it.
+        return timelapse.render_sequence(
+            str(root), plan, str(root / "Timelapse" / "frames"))
+
+    def test_the_film_lands_beside_the_frames_not_among_them(self):
+        self.assertTrue(timelapse._video_target(
+            Path("/a/Timelapse/frames")).as_posix().endswith(
+            "/a/Timelapse/timelapse.mp4"))
+
+    @unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg is not installed")
+    def test_the_video_is_encoded_and_its_path_recorded(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            film = json.loads(timelapse.assemble_video(self._rendered(root)))
+            made = film.get("video")
+            self.assertTrue(made, film.get("video_note"))
+            self.assertTrue(Path(made).is_file())
+            self.assertGreater(Path(made).stat().st_size, 0)
+            # Beside the frames, in the timelapse folder itself.
+            self.assertEqual(Path(made).parent.name, "Timelapse")
+
+    def test_a_missing_ffmpeg_keeps_the_frames_and_the_command(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            report = self._rendered(root)
+            with mock.patch("timelapse_kernel.shutil.which",
+                            return_value=None):
+                film = json.loads(timelapse.assemble_video(report))
+            # No film, but the run is not failed: the frames are on disk and
+            # the assemble line is there for when ffmpeg is installed.
+            self.assertIsNone(film["video"])
+            self.assertIn("ffmpeg", film["video_note"])
+            self.assertIn("ffmpeg", film["assemble"])
+            self.assertTrue(timelapse.sequence_complete(
+                report, timelapse.crop_plan(
+                    timelapse.survey(str(root), "frame-*.jpg"))))
+
+    def test_no_frames_makes_no_film_and_does_not_raise(self):
+        film = json.loads(timelapse.assemble_video(json.dumps(
+            {"directory": "/nowhere/frames", "frames": []})))
+        self.assertIsNone(film["video"])
+        self.assertIn("no frames", film["video_note"])
 
 
 class TrackTests(unittest.TestCase):

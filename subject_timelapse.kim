@@ -29,6 +29,15 @@ print(plan_note(plan))
 report := render_sequence(photos, plan, frames_dir, recipe)
 check sequence_complete(report, plan)
 
-act file.overwrite(output, report)
+-- The last thing the photographer asked for: turn the frames into the
+-- video. Best-effort -- a missing encoder leaves the frames and the
+-- assemble line, never a failed run.
+film := assemble_video(report)
+print(video_note(film))
+
+-- The film is the report with its frames still on disk, plus where the
+-- video went; verify it before it is written, so the act stays gated.
+check sequence_complete(film, plan)
+act file.overwrite(output, film)
 settle until check file_exists(output) within 5
-commit(report)
+commit(film)
