@@ -152,29 +152,54 @@ class PlanTests(unittest.TestCase):
                       {"name": "small.jpg", "taken": "2", "width": 900,
                        "height": 600, "box": [700.0, 200.0, 790.0, 290.0]},
                   ]}
-        # Spans differ 200 vs 90 -- more than the scale screen allows,
-        # so feed the plan directly: crop_plan trusts its survey.
+        # Spans differ 200 vs 90; scale-normalisation folds them into
+        # one scale rather than clamping. The crop still contains every
+        # subject, and the offset is pinned in NORMALISED pixels.
         plan = json.loads(timelapse.crop_plan(json.dumps(survey)))
         self.assertNotIn("error", plan)
-        for box, frame in zip(plan["boxes"], survey["frames"]):
+        for box in plan["boxes"]:
             self.assertGreaterEqual(box["left"], 0)
             self.assertLessEqual(box["left"] + plan["width"],
-                                 frame["width"])
-            # And the subject's pinned offset survived: no clamp moved it.
+                                 survey["frames"][0]["width"] * box["scale"] + 1)
             self.assertEqual(
                 box["left"],
-                int(round(frame["box"][0] - plan["margins"]["left"])))
+                int(round(survey["frames"][
+                    [b["name"] for b in plan["boxes"]].index(box["name"])
+                    ]["box"][0] * box["scale"] - plan["margins"]["left"])))
 
-    def test_a_different_lens_is_set_aside_by_name(self):
+    def test_a_zoomed_run_is_normalised_not_excluded(self):
+        """A zoom is not a failed frame. Several frames agreeing on a
+        new scale are folded in, each carrying the factor that maps its
+        own sun to the sequence's; a lone wild fit is still excluded."""
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            for index, centre in enumerate([(430, 300), (460, 310)]):
-                crescent(root / f"frame-{index:03d}.jpg", centre=centre)
-            crescent(root / "frame-999.jpg", radius=30)   # telephoto odd one
+            # Eight normal frames, then a run of five zoomed to half the
+            # sun's size -- a real lens change, not a spike.
+            for index in range(8):
+                crescent(root / f"frame-{index:03d}.jpg",
+                         centre=(430 + index, 300), radius=90)
+            for index in range(8, 13):
+                crescent(root / f"frame-{index:03d}.jpg",
+                         centre=(300, 250), radius=45)
             plan = json.loads(timelapse.crop_plan(
                 timelapse.survey(str(root), "frame-*.jpg")))
-            names = [item["name"] for item in plan["excluded"]]
-            self.assertEqual(names, ["frame-999.jpg"])
+            self.assertEqual(plan["excluded"], [])
+            scales = {b["name"]: b["scale"] for b in plan["boxes"]}
+            # The zoomed frames carry ~2x scale; the normal ones ~1.
+            self.assertAlmostEqual(scales["frame-010.jpg"], 2.0, delta=0.15)
+            self.assertAlmostEqual(scales["frame-003.jpg"], 1.0, delta=0.1)
+
+    def test_a_lone_wild_fit_is_still_excluded_as_a_failed_find(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for index in range(8):
+                crescent(root / f"frame-{index:03d}.jpg",
+                         centre=(430, 300), radius=90)
+            # One frame, alone, at a wildly different size: a botched fit.
+            crescent(root / "frame-050.jpg", centre=(430, 300), radius=20)
+            told = json.loads(timelapse.survey(str(root), "frame-*.jpg"))
+            names = [item["name"] for item in told["excluded"]]
+            self.assertIn("frame-050.jpg", names)
 
     def test_a_sun_touching_the_edge_is_excluded_before_it_can_lie(self):
         """A clipped disc does not fail loudly -- it fits a wrong circle

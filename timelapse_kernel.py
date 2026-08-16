@@ -145,12 +145,37 @@ def list_frames(photos: str, pattern: str = "*.RAF") -> list[dict[str, str]]:
 
 # --- finding the sun -------------------------------------------------------
 
-def _limb_points(grey: np.ndarray) -> np.ndarray:
-    """Edge pixels of the bright region: the limb, plus the moon's bite."""
+def _brightest_body(grey: np.ndarray) -> np.ndarray:
+    """The largest connected patch of the brightest light: the sun.
+
+    A ghost reflection can be as saturated as the disc itself, and a
+    threshold on the whole frame hands its edge pixels to the fit as if
+    they were limb. Connected components separate the two for nothing:
+    the sun is one body, the ghost is another, and the sun is the
+    bigger. On the frames this was built against the reflection came
+    within a hair of the disc's brightness and containment alone was
+    the only thing that saved the fit; this makes the save unnecessary.
+    """
     top = float(grey.max())
     if top <= 0:
-        return np.zeros((0, 2))
+        return np.zeros(grey.shape, dtype=bool)
     bright = grey >= BRIGHT_FRACTION * top
+    if bright.sum() < 20:
+        return np.zeros(grey.shape, dtype=bool)
+    import cv2
+
+    count, labels, stats, _centroids = cv2.connectedComponentsWithStats(
+        bright.astype(np.uint8), connectivity=8)
+    if count <= 1:
+        return bright
+    areas = stats[1:, cv2.CC_STAT_AREA]
+    biggest = 1 + int(np.argmax(areas))
+    return labels == biggest
+
+
+def _limb_points(grey: np.ndarray) -> np.ndarray:
+    """Edge pixels of the sun's body: the limb, plus the moon's bite."""
+    bright = _brightest_body(grey)
     if bright.sum() < 20:
         return np.zeros((0, 2))
     inner = bright.copy()
@@ -193,8 +218,7 @@ def fit_limb(grey: np.ndarray) -> dict[str, float] | None:
     points = _limb_points(grey)
     if len(points) < 12:
         return None
-    top = float(grey.max())
-    bys, bxs = np.nonzero(grey >= BRIGHT_FRACTION * top)
+    bys, bxs = np.nonzero(_brightest_body(grey))
     stride = max(1, len(bxs) // 800)
     mass_x = bxs[::stride].astype(np.float64)
     mass_y = bys[::stride].astype(np.float64)
@@ -596,26 +620,32 @@ def anchored_survey(photos: str, pattern: str, anchors_json: str,
 
 
 def _screen(frames: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """The survey's two honesty passes, on the box contract.
+    """The survey's honesty passes, on the box contract.
 
-    Scale: a subject whose extent sits far from the sequence's median
-    cannot share a pixel-space crop (another lens, or a failed find).
-    Track: a find that leaps from its neighbours' path is a detection
-    failure wearing the subject's costume -- hands drift, they do not
-    teleport. Both name the frame; neither drops it silently.
+    Scale is no longer grounds for exclusion: a frame shot at a
+    different zoom is not a failed frame, and scale-normalisation folds
+    it into the sequence with the subject a constant size. What still
+    excludes is a scale NOBODY NEARBY SHARES -- a diameter that leaps
+    from its neighbours' the way a failed fit does, where a real zoom
+    is a run of frames agreeing on the new scale. And the track pass:
+    a centre that leaps from its neighbours' path is a detection
+    failure wearing the subject's costume. Both name the frame; neither
+    drops it silently.
     """
-    found = [f for f in frames if "excluded" not in f]
-    if found:
+    kept = [f for f in frames if "excluded" not in f]
+    if len(kept) >= 7:
         spans = [max(f["box"][2] - f["box"][0],
-                     f["box"][3] - f["box"][1]) for f in found]
-        median_span = float(np.median(spans))
-        for frame, span in zip(found, spans):
-            if abs(span - median_span) > SCALE_TOLERANCE * median_span:
+                     f["box"][3] - f["box"][1]) for f in kept]
+        track = _smoothed(spans)
+        for frame, span, near in zip(kept, spans, track):
+            # A lone spike: this frame's scale disagrees with the
+            # smoothed run around it. A zoom moves the whole run, so it
+            # survives; a botched fit is alone, so it does not.
+            if abs(span - near) > 0.5 * near:
                 frame["excluded"] = (
-                    f"subject extent {span:.0f}px sits outside "
-                    f"{SCALE_TOLERANCE:.0%} of the sequence's "
-                    f"{median_span:.0f}px -- another lens, or a "
-                    "failed find")
+                    f"subject extent {span:.0f}px leaps from its "
+                    f"neighbours' {near:.0f}px -- a failed find, not a "
+                    "zoom (a zoom moves several frames together)")
     kept = [f for f in frames if "excluded" not in f]
     if len(kept) >= 7:
         centres_x = [(f["box"][0] + f["box"][2]) / 2 for f in kept]
@@ -635,50 +665,64 @@ def _screen(frames: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def crop_plan(survey_text: str) -> str:
-    """The photographer's crop, on the fitted centres, both bugs fixed.
+    """The largest common crop, with every frame normalised to one scale.
 
-    Diameter is the diameter; the right edge carries all three of
-    MinL + D + MinR, so the crop can never cut into the disc; and the
-    margins come off the smoothed track. Minimum margins make it the
-    largest common crop: every frame contains its box entirely.
+    A zoom made the sun a different pixel size; scale-normalisation
+    resamples each frame so the sun is the SAME size throughout, and
+    the wider or narrower field of view simply shows as more or less
+    sky around it -- the subject constant, the world breathing, which
+    is the effect a kept zoom is for. Each frame carries the factor
+    that maps its own subject to the target, and the crop is computed
+    in normalised pixels, where the largest-common-crop math and its
+    two fixed bugs are unchanged.
     """
     told = json.loads(survey_text)
     kept = [f for f in told["frames"] if "excluded" not in f]
     if not kept:
         return json.dumps({**told, "error": "no frames survived the survey"})
-    span_w = max(f["box"][2] - f["box"][0] for f in kept)
-    span_h = max(f["box"][3] - f["box"][1] for f in kept)
-    min_t = min(f["box"][1] for f in kept)
-    min_l = min(f["box"][0] for f in kept)
-    # Margins against the pinned edge PLUS the largest span, so the
-    # crop contains every frame's subject by construction even when
-    # the subject's extent varies -- the circle version measured to
-    # each frame's own right edge and quietly clamped the difference.
-    min_r = min(f["width"] - f["box"][0] - span_w for f in kept)
-    min_b = min(f["height"] - f["box"][1] - span_h for f in kept)
+    # The target scale: the median subject extent, so most frames are
+    # barely resampled and only the zoomed few move.
+    spans = [max(f["box"][2] - f["box"][0], f["box"][3] - f["box"][1])
+             for f in kept]
+    target = float(np.median(spans))
+    for frame in kept:
+        own = max(frame["box"][2] - frame["box"][0],
+                  frame["box"][3] - frame["box"][1], 1.0)
+        s = target / own
+        frame["_scale"] = s
+        frame["_nbox"] = [v * s for v in frame["box"]]
+        frame["_nw"] = frame["width"] * s
+        frame["_nh"] = frame["height"] * s
+    span_w = max(f["_nbox"][2] - f["_nbox"][0] for f in kept)
+    span_h = max(f["_nbox"][3] - f["_nbox"][1] for f in kept)
+    min_t = min(f["_nbox"][1] for f in kept)
+    min_l = min(f["_nbox"][0] for f in kept)
+    min_r = min(f["_nw"] - f["_nbox"][0] - span_w for f in kept)
+    min_b = min(f["_nh"] - f["_nbox"][1] - span_h for f in kept)
     if min(min_t, min_l, min_r, min_b) < 0:
         worst = min(kept, key=lambda f: min(
-            f["box"][1], f["box"][0],
-            f["width"] - f["box"][0] - span_w,
-            f["height"] - f["box"][1] - span_h))
+            f["_nbox"][1], f["_nbox"][0],
+            f["_nw"] - f["_nbox"][0] - span_w,
+            f["_nh"] - f["_nbox"][1] - span_h))
         return json.dumps({**told, "error": (
             "the subject sits too close to the frame edge in at least "
             f"one photograph (worst: {worst['name']}); exclude it and "
             "survey again")})
-    # Constant size; even, because video codecs insist.
     crop_w = int(min_l + span_w + min_r) // 2 * 2
     crop_h = int(min_t + span_h + min_b) // 2 * 2
     boxes = []
     for frame in kept:
-        left = int(round(frame["box"][0] - min_l))
-        top = int(round(frame["box"][1] - min_t))
-        left = max(0, min(left, frame["width"] - crop_w))
-        top = max(0, min(top, frame["height"] - crop_h))
+        left = int(round(frame["_nbox"][0] - min_l))
+        top = int(round(frame["_nbox"][1] - min_t))
+        left = max(0, min(left, int(frame["_nw"]) - crop_w))
+        top = max(0, min(top, int(frame["_nh"]) - crop_h))
         boxes.append({"name": frame["name"], "taken": frame["taken"],
-                      "left": left, "top": top})
+                      "left": left, "top": top,
+                      "scale": round(frame["_scale"], 5)})
     return json.dumps({
         "format": FORMAT, "photos": told["photos"],
         "span": {"width": span_w, "height": span_h},
+        "target_diameter": target,
         "width": crop_w, "height": crop_h,
         "margins": {"top": min_t, "left": min_l,
                     "right": min_r, "bottom": min_b},
@@ -776,6 +820,16 @@ def render_sequence(photos: str, plan_text: str, directory: str,
     written = []
     for index, box in enumerate(plan["boxes"], start=1):
         image = _preview(root / box["name"])
+        scale = float(box.get("scale", 1.0))
+        if abs(scale - 1.0) > 1e-4:
+            # Resample to the sequence's scale so the sun is one size
+            # throughout. The crop box is already in these normalised
+            # pixels, so the crop that follows is in the same frame as
+            # every other frame's.
+            image = image.resize(
+                (max(1, round(image.width * scale)),
+                 max(1, round(image.height * scale))),
+                Image.Resampling.LANCZOS)
         crop = image.crop((
             box["left"], box["top"],
             box["left"] + plan["width"], box["top"] + plan["height"]))
