@@ -1762,7 +1762,8 @@ class Launcher(QMainWindow):
         if not bench.shortlist_path.is_file():
             ensure_shortlist(
                 bench.report, bench.selection(), bench.shortlist_path,
-                project_path=bench.project_path)
+                project_path=bench.project_path,
+                photos_root=bench.photos.root)
         page = SuggestionsPage(
             bench.shortlist, bench.shortlist_reviews, bench.directions,
             loader=self._loader, styles=self.style_names())
@@ -2001,7 +2002,8 @@ class Launcher(QMainWindow):
                 narrow_selection(bench.reviews, chosen)
             write_manual_shortlist(
                 bench.report, bench.selection(), bench.shortlist_path,
-                project_path=bench.project_path)
+                project_path=bench.project_path,
+                photos_root=bench.photos.root)
         except Exception as exc:                     # noqa: BLE001 - reported
             self._say(f"That could not be laid out: {exc}", "alarm")
             return

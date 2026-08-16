@@ -471,6 +471,7 @@ def load_shortlist(
 def write_manual_shortlist(
     report: ReportIndex, photos: list[str], destination: Path,
     stance: str = "", project_path: Path | None = None,
+    photos_root: Path | None = None,
 ) -> Path:
     """Write a shortlist nobody was paid to produce.
 
@@ -481,17 +482,39 @@ def write_manual_shortlist(
     every tier at the middle of the scale.
 
     Nothing here asserts anything about a photograph. The frames arrive
-    unrated, in the order the cull left them, and every rating on top of this
-    is the photographer's own.
+    unrated, and every rating on top of this is the photographer's own.
+
+    The number each frame wears is its SHOOTING position -- the clock,
+    then the camera's counter within a tied second, unwrapped -- because
+    on a by-hand shortlist there is no standing to rank by, and a "rank"
+    that was really the cull's file-name order read 299, 1, 300, 2 down
+    a time-ordered list once the counter had wrapped. On an assessed
+    shortlist the same number is the model's standing; here it is the
+    order the shutter went, which is the only order that means anything
+    before anyone has judged.
     """
+    from .scenes import capture_time, shooting_order
+
     destination = Path(destination).expanduser()
     cluster_of = {
         name: cluster_id
         for cluster_id, cluster in report.cluster_by_id.items()
         for name in cluster.get("photos", [])
     }
+    if photos_root is None:
+        # The house layout puts the shortlist under <photos>/.darkimiya/
+        # Reports; walk up to the folder above .darkimiya. A caller that
+        # knows better says so.
+        found = destination.parent
+        while found.name != ".darkimiya" and found.parent != found:
+            found = found.parent
+        photos_root = (found.parent if found.name == ".darkimiya"
+                       else destination.parent)
+    taken = {photo: capture_time(Path(photos_root) / photo)
+             for photo in photos}
+    ordered = shooting_order(list(photos), taken)
     entries = []
-    for rank, photo in enumerate(photos, start=1):
+    for rank, photo in enumerate(ordered, start=1):
         cluster_id = cluster_of.get(photo)
         if cluster_id is None:
             continue
@@ -538,7 +561,8 @@ def write_manual_shortlist(
 
 def ensure_shortlist(report: ReportIndex, photos: list[str],
                      destination: Path,
-                     project_path: Path | None = None) -> Path:
+                     project_path: Path | None = None,
+                     photos_root: Path | None = None) -> Path:
     """A shortlist for a folder that has none: laid out, unrated, free.
 
     AI editing needs frames to name and a rank to choose scene
@@ -551,7 +575,8 @@ def ensure_shortlist(report: ReportIndex, photos: list[str],
     if destination.is_file():
         return destination
     return write_manual_shortlist(report, photos, destination,
-                                  project_path=project_path)
+                                  project_path=project_path,
+                                  photos_root=photos_root)
 
 
 def rated_by_hand(shortlist: ShortlistIndex) -> bool:

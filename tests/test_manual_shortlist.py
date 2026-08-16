@@ -78,6 +78,28 @@ class ManualShortlistTests(unittest.TestCase):
                          self.destination, project_path=project_path)
         self.assertEqual(self.destination.stat().st_mtime_ns, stamp)
 
+    def test_the_number_is_the_shooting_position_not_the_file_name(self):
+        """A "rank" that was really cull order read 299, 1, 300, 2 down
+        a time-ordered list once the counter had wrapped. On a by-hand
+        shortlist the number is the order the shutter went."""
+        from PIL import Image
+
+        def stamp(name: str, when: str) -> None:
+            path = self.photos / name
+            image = Image.open(path)
+            exif = image.getexif()
+            exif[0x9003] = when
+            image.save(path, exif=exif.tobytes())
+
+        # Names say A < B < C; the clock says C first, then A, then B.
+        stamp("C.JPG", "2026:08:12 10:00:00")
+        stamp("A.JPG", "2026:08:12 10:05:00")
+        stamp("B.JPG", "2026:08:12 10:10:00")
+        self.write(photos_root=self.photos)
+        ranked = {entry["photo"]: entry["rank"]
+                  for entry in self.load().entries}
+        self.assertEqual(ranked, {"C.JPG": 1, "A.JPG": 2, "B.JPG": 3})
+
     def test_what_is_written_is_a_shortlist_the_app_will_open(self):
         self.write()
         self.assertEqual(len(self.load().entries), len(NAMES))
