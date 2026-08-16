@@ -93,6 +93,19 @@ class SuggestionsPageTests(unittest.TestCase):
         page = self.page(marked=(NAMES[0], NAMES[1]))
         self.assertEqual(page.photos, sorted([NAMES[0], NAMES[1]]))
 
+    def test_the_directions_are_read_once_per_refresh_not_once_per_frame(self):
+        # Regression: opening a folder re-read every recipe file once per
+        # marked frame -- the whole-shortlist payload, recomputed inside
+        # each frame's lookup -- which made a 300-frame eclipse folder take
+        # eighteen seconds to open. The read is held and shared now, so a
+        # refresh computes it exactly once however many frames are listed.
+        page = self.page(marked=(NAMES[0], NAMES[1], NAMES[2]))
+        self.assertGreaterEqual(len(page.photos), 3)
+        with mock.patch.object(page.directions, "payload",
+                               wraps=page.directions.payload) as spy:
+            page.refresh()
+        self.assertEqual(spy.call_count, 1)
+
     def test_the_reasoning_is_shown_not_just_the_treatment_name(self):
         shown = self.text(self.page())
         self.assertIn("Standard treatment", shown)

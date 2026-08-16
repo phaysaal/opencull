@@ -169,6 +169,12 @@ class SuggestionsPage(QWidget):
         self.current = ""
         self.photos: list[str] = []
         self.sheet: ContactSheet | None = None
+        # The directions payload is one read of every recipe this shortlist
+        # has, and it is the same for every frame on the page. Reading it
+        # once per frame turned opening a 300-frame folder into eighteen
+        # seconds of re-parsing the same files; it is held here instead and
+        # cleared whenever a refresh could have changed it.
+        self._payload_cache: dict[str, Any] | None = None
 
         self._build()
         self.refresh()
@@ -496,12 +502,22 @@ class SuggestionsPage(QWidget):
     # --- state ------------------------------------------------------------
 
     def payload(self) -> dict[str, Any]:
+        # Held across a refresh cycle: the same whole-shortlist result
+        # answers every frame's lookup, so it is computed once and reused
+        # until refresh() clears it. Every path that changes what it would
+        # contain -- a mark applied here, a run finished elsewhere -- ends
+        # in a refresh or a rebuilt page, so the cache never outlives its
+        # truth.
+        if self._payload_cache is not None:
+            return self._payload_cache
         try:
-            return self.directions.payload()
+            payload = self.directions.payload()
         except Exception as exc:                     # noqa: BLE001 - reported
             self._report(f"The editing directions could not be read: {exc}",
                          "alarm")
-            return {}
+            payload = {}
+        self._payload_cache = payload
+        return payload
 
     def entry_for(self, photo: str) -> dict[str, Any]:
         directions = self.payload().get("directions") or {}
@@ -511,6 +527,9 @@ class SuggestionsPage(QWidget):
         return {}
 
     def refresh(self) -> None:
+        # A refresh is where anything that could change the payload is
+        # reflected, so the held read starts here and is rebuilt once.
+        self._payload_cache = None
         payload = self.payload()
         self.photos = list(payload.get("selected_photos") or [])
         answered = set(payload.get("processed_photos") or [])
