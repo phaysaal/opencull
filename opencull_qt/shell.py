@@ -403,7 +403,14 @@ class ProjectShell(QWidget):
 
     @staticmethod
     def _adopt(page: QWidget) -> None:
-        """Take over the page's chrome, and leave it its own counter."""
+        """Take over the page's chrome, and leave it its own counter.
+
+        A page whose bar carried verbs is asked to surface them on its
+        body first: hiding the bar must never hide the buttons.
+        """
+        surface = getattr(page, "surface_actions", None)
+        if callable(surface):
+            surface()
         bar = getattr(page, "bar", None)
         if bar is not None:
             bar.hide()

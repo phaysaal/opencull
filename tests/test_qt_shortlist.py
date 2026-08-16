@@ -338,6 +338,51 @@ class ShortlistPageTests(unittest.TestCase):
 
 
 @unittest.skipUnless(QApplication is not None, "PySide6 is not installed")
+class SurfacedActionsTests(ShortlistPageTests):
+    """The page's verbs must outlive the hiding of its bar.
+
+    Inside a project the shell hides every page's own bar under its
+    phase tabs, and everything in it -- Sort, Reassess, and the bulk
+    marks -- was invisible exactly where the photographer stands. Found
+    by a photographer standing there, asking where the buttons were.
+    """
+
+    def test_the_verbs_start_in_the_bar(self):
+        page = self.page()
+        self.assertIs(page.actions.parentWidget(), page.bar)
+
+    def test_hiding_the_bar_the_shells_way_surfaces_them(self):
+        from opencull_qt.shell import ProjectShell
+
+        page = self.page()
+        ProjectShell._adopt(page)
+        self.assertFalse(page.bar.isVisible())
+        self.assertIsNot(page.actions.parentWidget(), page.bar)
+        self.assertTrue(page.mark_all_button.isVisible())
+        self.assertTrue(page.keyframes_button.isVisible())
+
+    def test_surfacing_twice_moves_nothing_twice(self):
+        page = self.page()
+        page.surface_actions()
+        home = page.actions.parentWidget()
+        page.surface_actions()
+        self.assertIs(page.actions.parentWidget(), home)
+
+    def test_mark_all_marks_and_unmark_all_unmarks_from_the_page(self):
+        page = self.page()
+        page.mark_all(True)
+        state = self.reviews.public_state()
+        self.assertTrue(all(
+            entry.get("interesting") is True
+            for entry in state["entries"].values()))
+        self.assertIn("marked to develop", page.status.text())
+        page.mark_all(False)
+        state = self.reviews.public_state()
+        self.assertFalse(any(
+            entry.get("interesting") is True
+            for entry in state["entries"].values()))
+
+
 class SuggestTests(unittest.TestCase):
     """Asking for editing directions, and asking first what it will cost."""
 

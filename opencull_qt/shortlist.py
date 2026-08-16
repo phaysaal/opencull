@@ -320,10 +320,13 @@ class ShortlistPage(QWidget):
         overview_column = QVBoxLayout(overview)
         overview_column.setContentsMargins(22, 18, 22, 18)
         overview_column.setSpacing(10)
+        self._heading_row = QHBoxLayout()
+        self._heading_row.setSpacing(12)
         self.overview_heading = QLabel("")
         self.overview_heading.setObjectName("clusterTitle")
         self.overview_heading.setFont(theme.display(18))
-        overview_column.addWidget(self.overview_heading)
+        self._heading_row.addWidget(self.overview_heading, 1)
+        overview_column.addLayout(self._heading_row)
         self.overview_tally = QLabel("")
         self.overview_tally.setObjectName("hint")
         self.overview_tally.setFont(theme.body(10))
@@ -370,6 +373,19 @@ class ShortlistPage(QWidget):
         self.title.setFont(theme.display(11))
         layout.addWidget(self.title)
         layout.addStretch(1)
+
+        # The page's verbs, as one widget the shell can lift out of this
+        # bar and set on the page body: inside a project the shell hides
+        # every page's own bar under its phase tabs, and everything in
+        # it -- Sort, Reassess, and now the bulk marks -- was invisible
+        # exactly where the photographer stands. Found by a photographer
+        # standing there.
+        self.actions = QWidget()
+        actions = QHBoxLayout(self.actions)
+        actions.setContentsMargins(0, 0, 0, 0)
+        actions.setSpacing(12)
+        layout.addWidget(self.actions)
+        layout = actions
 
         self.mark_all_button = QPushButton("Mark all")
         self.mark_all_button.setObjectName("ghost")
@@ -430,9 +446,27 @@ class ShortlistPage(QWidget):
         self.progress = QLabel("")
         self.progress.setObjectName("hint")
         self.progress.setFont(theme.body(9))
-        layout.addWidget(self.progress)
+        bar.layout().addWidget(self.progress)
         self.indicator = self.progress
         return bar
+
+    def surface_actions(self) -> None:
+        """Move the bar's verbs onto the page body.
+
+        Called by a host that hides this page's own bar. The overview
+        heading row takes them, right of the headline, so the bulk
+        marks sit above the grid they act on and Sort and Reassess
+        come back from wherever the phase tabs had buried them.
+        """
+        if getattr(self, "_actions_surfaced", False):
+            return
+        self._actions_surfaced = True
+        self.actions.setParent(None)
+        self._heading_row.addWidget(self.actions)
+        # Reparenting hides a widget until it is shown again -- so a page
+        # adopted after it was already on screen would keep the verbs
+        # invisible, which is the very thing this exists to prevent.
+        self.actions.show()
 
     def _decision(self) -> QWidget:
         panel = QFrame()
