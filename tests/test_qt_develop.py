@@ -621,6 +621,23 @@ class TimelapseDoorTests(FinetuneDoorTests):
         self.assertEqual(request["parameters"]["recipe"],
                          "infrared-720-false-colour")
 
+    def test_the_look_opens_on_the_treatment_carried_from_development(self):
+        # A preset chosen on the develop page arrives as its short id, and
+        # the dialog opens with that look already selected rather than on
+        # "As shot", so the timelapse wears the treatment being looked at.
+        from opencull_qt.timelapse import TimelapseDialog
+
+        dialog = TimelapseDialog(str(self.photos_path), look="infrared-850-mono")
+        self.assertEqual(dialog.look.currentData(), "infrared-850-mono")
+        self.assertEqual(dialog.run_request()["parameters"]["recipe"],
+                         "infrared-850-mono")
+
+    def test_an_unknown_look_falls_back_to_no_colour_change(self):
+        from opencull_qt.timelapse import TimelapseDialog
+
+        dialog = TimelapseDialog(str(self.photos_path), look="not-a-preset")
+        self.assertEqual(dialog.look.currentData(), "")
+
     def test_the_button_emits_the_program_and_its_parameters(self):
         page = self.page()
         heard = []
@@ -630,8 +647,20 @@ class TimelapseDoorTests(FinetuneDoorTests):
         class Stub:
             DialogCode = type("D", (), {"Accepted": 1})
 
-            def __init__(self, photos, parent=None):
+            def __init__(self, photos, parent=None, look=""):
                 self.photos = photos
+                self.look = look
+
+            def adjustSize(self):
+                pass
+
+            def rect(self):
+                from PySide6.QtCore import QRect
+
+                return QRect(0, 0, 0, 0)
+
+            def move(self, *args):
+                pass
 
             def exec(self):
                 return 1

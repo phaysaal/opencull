@@ -39,7 +39,8 @@ from .widgets import tooltip
 class TimelapseDialog(QDialog):
     """What the subject is, what it wears, where it lands."""
 
-    def __init__(self, photos: str, parent: QWidget | None = None):
+    def __init__(self, photos: str, parent: QWidget | None = None,
+                 look: str = ""):
         super().__init__(parent)
         self.photos = str(photos)
         self.setWindowTitle("Timelapse")
@@ -110,6 +111,13 @@ class TimelapseDialog(QDialog):
             short = str(preset["id"]).removeprefix("preset-")
             self.look.addItem(str(preset["name"]), short)
         self.look.addItem("A recipe file of my own…", "…browse…")
+        # Open on the look already chosen in Development, so the timelapse
+        # wears the treatment the photographer is looking at rather than
+        # reverting to no colour change.
+        if look:
+            at = self.look.findData(look)
+            if at >= 0:
+                self.look.setCurrentIndex(at)
         self.look.currentIndexChanged.connect(self._chose_look)
         column.addWidget(self.look)
         self._custom_recipe = ""

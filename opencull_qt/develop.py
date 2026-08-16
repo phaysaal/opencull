@@ -1497,7 +1497,18 @@ class DevelopPage(QWidget):
         photos = str(self.workspace.project.get("source_folder") or "")
         if not photos:
             return
-        dialog = TimelapseDialog(photos, self)
+        # The look already chosen on this page, carried into the dialog so
+        # the timelapse wears the same treatment being looked at.
+        look = (self.treatment[len("preset-"):]
+                if self.treatment.startswith("preset-") else "")
+        # No Qt parent on purpose: a modal dialog with a transient parent is
+        # glued to it by some desktops (GNOME attaches modal dialogs) and
+        # then cannot be dragged. exec() keeps it application-modal without a
+        # parent; it is centred on this window by hand instead.
+        dialog = TimelapseDialog(photos, look=look)
+        dialog.adjustSize()
+        host = self.window().frameGeometry()
+        dialog.move(host.center() - dialog.rect().center())
         if dialog.exec() != dialog.DialogCode.Accepted:
             return
         request = dialog.run_request()
