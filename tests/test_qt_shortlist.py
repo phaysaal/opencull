@@ -338,6 +338,56 @@ class ShortlistPageTests(unittest.TestCase):
 
 
 @unittest.skipUnless(QApplication is not None, "PySide6 is not installed")
+class RowIdentityTests(ShortlistPageTests):
+    """A row opens the photograph it names -- whatever order it is in.
+
+    The list is drawn in the chosen order, by time or by standing; the
+    click handler indexed the shortlist's own order. Once the two
+    differed by one, row 160 opened photograph 159 and the row that
+    said DSCF1163 could not be reached at all.
+    """
+
+    def test_every_row_opens_the_photograph_it_names_under_rating_sort(self):
+        page = self.page()
+        # Overrule a tier so the standing order and the shortlist order
+        # part company, exactly the situation that drifted.
+        page.show_entry("C.JPG")
+        page.set_rating("exceptional")
+        page.save()
+        page.sort_by.setCurrentIndex(page.sort_by.findData("rating"))
+        for row in range(page.list.count()):
+            said = page.list.item(row).data(Qt.ItemDataRole.UserRole)
+            page.list.setCurrentRow(row)
+            self.assertEqual(page.current, said,
+                             f"row {row} says {said}, opened {page.current}")
+
+    def test_stepping_follows_the_shown_order_not_the_hidden_one(self):
+        page = self.page()
+        page.show_entry("C.JPG")
+        page.set_rating("exceptional")
+        page.save()
+        page.sort_by.setCurrentIndex(page.sort_by.findData("rating"))
+        shown = [page.list.item(row).data(Qt.ItemDataRole.UserRole)
+                 for row in range(page.list.count())]
+        page.show_entry(shown[0])
+        page.step(1)
+        self.assertEqual(page.current, shown[1])
+        page.step(1)
+        self.assertEqual(page.current, shown[2])
+        page.step(-1)
+        self.assertEqual(page.current, shown[1])
+
+    def test_showing_an_entry_selects_its_own_row(self):
+        page = self.page()
+        page.show_entry("C.JPG")
+        page.set_rating("exceptional")
+        page.save()
+        page.sort_by.setCurrentIndex(page.sort_by.findData("rating"))
+        page.show_entry("B.JPG")
+        self.assertEqual(
+            page.list.currentItem().data(Qt.ItemDataRole.UserRole), "B.JPG")
+
+
 class StillListTests(ShortlistPageTests):
     """Marking a frame must not move the list under the hand doing it.
 

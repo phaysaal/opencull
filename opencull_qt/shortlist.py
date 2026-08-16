@@ -900,8 +900,16 @@ class ShortlistPage(QWidget):
         return " · ".join(parts)
 
     def _chose_row(self, row: int) -> None:
-        if 0 <= row < len(self.entries):
-            self.show_entry(str(self.entries[row]["photo"]))
+        # The row carries its own photograph. Indexing self.entries by
+        # row assumed the list was drawn in the shortlist's order, and
+        # it is drawn in the CHOSEN order -- by time or by standing --
+        # so once the two differed by one, row 160 opened photograph
+        # 159, and the row that said DSCF1163 was nowhere to be seen.
+        item = self.list.item(row)
+        if item is not None:
+            photo = item.data(Qt.ItemDataRole.UserRole)
+            if photo:
+                self.show_entry(str(photo))
 
     def entry_for(self, photo: str) -> dict:
         return self.shortlist.entry_by_photo.get(photo, {})
@@ -974,8 +982,8 @@ class ShortlistPage(QWidget):
         self.edit_raw.setChecked(bool(mark.get("edit_raw")))
         self.note.setPlainText(str(mark.get("note", "")))
 
-        row = [item["photo"] for item in self.entries].index(photo)
-        if self.list.currentRow() != row:
+        row = self._row_of(photo)
+        if row >= 0 and self.list.currentRow() != row:
             self.list.blockSignals(True)
             self.list.setCurrentRow(row)
             self.list.blockSignals(False)
@@ -1197,12 +1205,19 @@ class ShortlistPage(QWidget):
             styles=self.styles)
 
     def step(self, delta: int) -> None:
-        if not self.entries:
+        """Next or previous, in the order the list is actually showing."""
+        if not self.list.count():
             return
-        names = [str(item["photo"]) for item in self.entries]
-        row = names.index(self.current) + delta
-        if 0 <= row < len(names):
-            self.show_entry(names[row])
+        row = self._row_of(self.current) + delta
+        if 0 <= row < self.list.count():
+            self.show_entry(
+                str(self.list.item(row).data(Qt.ItemDataRole.UserRole)))
+
+    def _row_of(self, photo: str) -> int:
+        for row in range(self.list.count()):
+            if self.list.item(row).data(Qt.ItemDataRole.UserRole) == photo:
+                return row
+        return -1
 
     def keyPressEvent(self, event) -> None:  # noqa: N802 - Qt naming
         if (event.key() == Qt.Key.Key_Escape
