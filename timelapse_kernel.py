@@ -637,15 +637,35 @@ def _screen(frames: list[dict[str, Any]]) -> list[dict[str, Any]]:
         spans = [max(f["box"][2] - f["box"][0],
                      f["box"][3] - f["box"][1]) for f in kept]
         track = _smoothed(spans)
-        for frame, span, near in zip(kept, spans, track):
+        # A frame whose scale departs from the smoothed run is a
+        # suspect -- either a botched fit or a zoom. The smoothed
+        # median only swings onto a new scale once the run is long
+        # enough to outvote it, so a SHORT burst (two frames at a new
+        # zoom) reads as two lone spikes and would be lost. What tells
+        # a burst from a botch is that its members agree with EACH
+        # OTHER: a zoom's neighbours share its extent to within fit
+        # noise, two independent failed fits land at different wrong
+        # diameters. So a suspect flanked by a suspect of nearly its
+        # own extent is a zoom run, and is kept.
+        suspect = [abs(span - near) > 0.5 * near
+                   for span, near in zip(spans, track)]
+        for index, frame in enumerate(kept):
+            if not suspect[index]:
+                continue
+            span = spans[index]
+            in_run = any(
+                suspect[j] and abs(spans[j] - span) <= 0.15 * span
+                for j in (index - 1, index + 1)
+                if 0 <= j < len(kept))
+            if in_run:
+                continue
             # A lone spike: this frame's scale disagrees with the
-            # smoothed run around it. A zoom moves the whole run, so it
-            # survives; a botched fit is alone, so it does not.
-            if abs(span - near) > 0.5 * near:
-                frame["excluded"] = (
-                    f"subject extent {span:.0f}px leaps from its "
-                    f"neighbours' {near:.0f}px -- a failed find, not a "
-                    "zoom (a zoom moves several frames together)")
+            # smoothed run around it, and no neighbour shares the new
+            # extent. A botched fit is alone, so it does not survive.
+            frame["excluded"] = (
+                f"subject extent {span:.0f}px leaps from its "
+                f"neighbours' {track[index]:.0f}px -- a failed find, not a "
+                "zoom (a zoom moves several frames together)")
     kept = [f for f in frames if "excluded" not in f]
     if len(kept) >= 7:
         centres_x = [(f["box"][0] + f["box"][2]) / 2 for f in kept]

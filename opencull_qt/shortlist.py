@@ -36,7 +36,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from opencull_gui.scenes import capture_time, photos_root_of, shooting_order
+from opencull_gui.scenes import capture_times, photos_root_of, shooting_order
 from opencull_gui.shortlist import (
     ASSESSMENT_FIELDS,
     rated_by_hand,
@@ -585,10 +585,10 @@ class ShortlistPage(QWidget):
         # timed ones rather than throwing them all back to names.
         if not hasattr(self, "_taken"):
             root = photos_root_of(self.shortlist)
-            self._taken = {}
-            for entry in self.entries:
-                photo = str(entry["photo"])
-                self._taken[photo] = capture_time(Path(root) / photo)
+            names = [str(entry["photo"]) for entry in self.entries]
+            untimed: dict[str, float | None] = {name: None for name in names}
+            self._taken = (capture_times(Path(root), names) if root
+                           else untimed)
 
         placed_by_time = shooting_order(
             [str(entry["photo"]) for entry in self.entries], self._taken)

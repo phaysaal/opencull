@@ -493,7 +493,7 @@ def write_manual_shortlist(
     order the shutter went, which is the only order that means anything
     before anyone has judged.
     """
-    from .scenes import capture_time, shooting_order
+    from .scenes import capture_times, shooting_order
 
     destination = Path(destination).expanduser()
     cluster_of = {
@@ -510,8 +510,7 @@ def write_manual_shortlist(
             found = found.parent
         photos_root = (found.parent if found.name == ".darkimiya"
                        else destination.parent)
-    taken = {photo: capture_time(Path(photos_root) / photo)
-             for photo in photos}
+    taken = capture_times(Path(photos_root), list(photos))
     ordered = shooting_order(list(photos), taken)
     entries = []
     for rank, photo in enumerate(ordered, start=1):

@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 import unittest
 from datetime import datetime
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -127,6 +129,116 @@ class RawClockTests(unittest.TestCase):
         path = root / "DSCF0003.RAF"
         path.write_bytes(b"not a photograph at all")
         self.assertIsNone(scenes.capture_time(path))
+
+
+class SmallHeadTests(unittest.TestCase):
+    """The marker sits near the start, so a small head finds it -- and a
+    large read is only the fallback for a file that buries it deeper.
+    This is the read that a gigabyte of pointless disk shrank to."""
+
+    def raw(self, root: Path, name: str, when: str, pad: int = 512) -> Path:
+        jpeg = root / "preview.jpg"
+        timed_photo(jpeg, when)
+        path = root / name
+        path.write_bytes(b"FUJIFILMCCD-RAW 0201FF12345678"
+                         + b"\x00" * pad + jpeg.read_bytes())
+        jpeg.unlink()
+        return path
+
+    def test_the_small_head_alone_reads_a_normal_raw(self):
+        # With the large read shrunk to the small one, a normal frame is
+        # still read: proof the marker was found inside the small head,
+        # because the fallback now offers nothing more.
+        root = Path(tempfile.mkdtemp())
+        path = self.raw(root, "NEAR.RAF", "2026:01:01 08:00:00")
+        with mock.patch.object(scenes, "_LARGE_HEAD", scenes._SMALL_HEAD):
+            found = scenes._embedded_capture_time(path)
+        self.assertIsNotNone(found)
+        self.assertEqual(
+            datetime.fromtimestamp(found).strftime("%H:%M"), "08:00")
+
+    def test_the_large_head_fallback_finds_exif_past_the_small_head(self):
+        # A camera that buries the preview beyond the small head still
+        # works: the small read misses, the large read finds it.
+        root = Path(tempfile.mkdtemp())
+        path = self.raw(root, "DEEP.RAF", "2026:01:01 09:00:00",
+                        pad=scenes._SMALL_HEAD + 4096)
+        # The small head alone cannot see it...
+        with mock.patch.object(scenes, "_LARGE_HEAD", scenes._SMALL_HEAD):
+            self.assertIsNone(scenes._embedded_capture_time(path))
+        # ...but with the fallback restored, it does.
+        found = scenes.capture_time(path)
+        self.assertIsNotNone(found)
+        self.assertEqual(
+            datetime.fromtimestamp(found).strftime("%H:%M"), "09:00")
+
+
+class CaptureTimesMapTests(unittest.TestCase):
+    """The persisted map: opened once, read from disk forever after,
+    and touched again only where a file actually changed."""
+
+    def raw(self, root: Path, name: str, when: str) -> Path:
+        jpeg = root / "preview.jpg"
+        timed_photo(jpeg, when)
+        path = root / name
+        path.write_bytes(b"FUJIFILMCCD-RAW 0201FF12345678"
+                         + b"\x00" * 512 + jpeg.read_bytes())
+        jpeg.unlink()
+        return path
+
+    def hhmm(self, stamp) -> str:
+        return datetime.fromtimestamp(stamp).strftime("%H:%M")
+
+    def test_the_map_is_written_beside_the_photographs(self):
+        root = Path(tempfile.mkdtemp())
+        self.raw(root, "DSCF0001.RAF", "2026:01:01 10:00:00")
+        times = scenes.capture_times(root, ["DSCF0001.RAF"])
+        self.assertEqual(self.hhmm(times["DSCF0001.RAF"]), "10:00")
+        sidecar = root / ".darkimiya" / "capture-times.json"
+        self.assertTrue(sidecar.is_file())
+        stored = json.loads(sidecar.read_text())
+        self.assertEqual(stored["format"], scenes.CAPTURE_TIMES_FORMAT)
+        self.assertIn("DSCF0001.RAF", stored["frames"])
+
+    def test_a_reopen_answers_from_the_map_without_reading_the_file(self):
+        root = Path(tempfile.mkdtemp())
+        self.raw(root, "DSCF0001.RAF", "2026:01:01 10:00:00")
+        first = scenes.capture_times(root, ["DSCF0001.RAF"])
+        # A second open must not scan the file again: make the scanner
+        # explode, and prove it is never reached.
+        with mock.patch.object(scenes, "_capture_time",
+                               side_effect=AssertionError("rescanned")):
+            second = scenes.capture_times(root, ["DSCF0001.RAF"])
+        self.assertEqual(second, first)
+
+    def test_a_changed_file_is_rescanned(self):
+        root = Path(tempfile.mkdtemp())
+        path = self.raw(root, "DSCF0001.RAF", "2026:01:01 10:00:00")
+        scenes.capture_times(root, ["DSCF0001.RAF"])
+        # Rewrite with a later clock, and move the mtime so the change is
+        # visible -- size alone can match when only the timestamp differs.
+        self.raw(root, "DSCF0001.RAF", "2026:01:01 18:00:00")
+        moved = path.stat().st_mtime_ns + 10 ** 9
+        os.utime(path, ns=(moved, moved))
+        again = scenes.capture_times(root, ["DSCF0001.RAF"])
+        self.assertEqual(self.hhmm(again["DSCF0001.RAF"]), "18:00")
+
+    def test_a_partial_reopen_keeps_the_other_frames_cached(self):
+        root = Path(tempfile.mkdtemp())
+        self.raw(root, "A.RAF", "2026:01:01 10:00:00")
+        self.raw(root, "B.RAF", "2026:01:01 11:00:00")
+        scenes.capture_times(root, ["A.RAF", "B.RAF"])
+        # A later view asks only about A; B's cached answer must survive.
+        scenes.capture_times(root, ["A.RAF"])
+        stored = json.loads(
+            (root / ".darkimiya" / "capture-times.json").read_text())
+        self.assertIn("B.RAF", stored["frames"])
+        self.assertIn("A.RAF", stored["frames"])
+
+    def test_a_missing_file_is_none_not_a_crash(self):
+        root = Path(tempfile.mkdtemp())
+        got = scenes.capture_times(root, ["ghost.RAF"])
+        self.assertIsNone(got["ghost.RAF"])
 
 
 class PlanTests(unittest.TestCase):

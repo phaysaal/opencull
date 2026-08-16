@@ -201,6 +201,43 @@ class PlanTests(unittest.TestCase):
             names = [item["name"] for item in told["excluded"]]
             self.assertIn("frame-050.jpg", names)
 
+    def test_a_short_zoom_burst_of_two_is_admitted_as_a_run(self):
+        """A strong zoom lasting only two frames cannot swing a
+        window-5 median onto its scale, so each frame reads as a lone
+        spike. What saves it is that the two agree with each OTHER: a
+        suspect flanked by a suspect of nearly its own extent is a
+        zoom, not a botched fit, and is kept and normalised."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            # Normals on both sides so the median stays put; a two-frame
+            # burst at double the sun's radius in the middle.
+            for index in list(range(5)) + list(range(7, 12)):
+                crescent(root / f"frame-{index:03d}.jpg",
+                         centre=(430, 300), radius=90)
+            crescent(root / "frame-005.jpg", centre=(400, 300), radius=180)
+            crescent(root / "frame-006.jpg", centre=(400, 300), radius=180)
+            told = json.loads(timelapse.survey(str(root), "frame-*.jpg"))
+            excluded = {item["name"] for item in told["excluded"]}
+            self.assertNotIn("frame-005.jpg", excluded)
+            self.assertNotIn("frame-006.jpg", excluded)
+
+    def test_two_adjacent_spikes_that_disagree_are_not_a_run(self):
+        """Adjacency alone is not a zoom. Two neighbouring wild fits
+        that land at DIFFERENT wrong sizes agree with the run around
+        them on nothing -- not the smoothed track, not each other -- so
+        both are still excluded as failed finds."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for index in list(range(5)) + list(range(7, 12)):
+                crescent(root / f"frame-{index:03d}.jpg",
+                         centre=(430, 300), radius=90)
+            crescent(root / "frame-005.jpg", centre=(400, 300), radius=150)
+            crescent(root / "frame-006.jpg", centre=(400, 300), radius=200)
+            told = json.loads(timelapse.survey(str(root), "frame-*.jpg"))
+            excluded = {item["name"] for item in told["excluded"]}
+            self.assertIn("frame-005.jpg", excluded)
+            self.assertIn("frame-006.jpg", excluded)
+
     def test_a_sun_touching_the_edge_is_excluded_before_it_can_lie(self):
         """A clipped disc does not fail loudly -- it fits a wrong circle
         with a straight face (measured: a sun at x=60 fitted to x=113).

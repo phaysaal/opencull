@@ -56,10 +56,18 @@ _EXIF_IFD = 0x8769
 # here and a whole shoot collapsed into one scene. But a camera writes an
 # ordinary JPEG preview inside the raw for its own screen, and that preview
 # carries the usual EXIF block, introduced by this marker. Reading the head
-# of the file and looking for it costs a megabyte of disk and no decode at
-# all -- 177 Fujifilm frames in under a third of a second.
+# of the file and looking for it needs no decode at all.
+#
+# The marker sits within the first bytes of that preview -- byte 154 in
+# every Fujifilm frame measured -- so a small head finds it while reading
+# kilobytes, not megabytes. Only when the small head does not carry a
+# usable time do we pay for the large one, which keeps a camera that
+# buries EXIF deeper working. The old code read the large head every time:
+# 4 MB from each of a few hundred raws is a gigabyte of disk to reach a
+# timestamp 154 bytes in, and that is what made opening a folder slow.
 _EXIF_MARKER = b"Exif\x00\x00"
-_HEAD_BYTES = 4 << 20
+_SMALL_HEAD = 64 << 10
+_LARGE_HEAD = 4 << 20
 
 
 def _stamp(value: Any) -> float | None:
@@ -86,21 +94,35 @@ def _from_exif(exif: Any) -> float | None:
 
 
 def _embedded_capture_time(path: Path) -> float | None:
-    """The EXIF of the preview a raw file carries, without decoding it."""
-    try:
-        with open(path, "rb") as handle:
-            head = handle.read(_HEAD_BYTES)
-    except OSError:
-        return None
-    at = head.find(_EXIF_MARKER)
-    if at < 0:
-        return None
-    exif = Image.Exif()
-    try:
-        exif.load(head[at:])
-    except Exception:                                # noqa: BLE001 - unreadable
-        return None
-    return _from_exif(exif)
+    """The EXIF of the preview a raw file carries, without decoding it.
+
+    A small head is tried first and answers almost every frame. The
+    large head is read only when the small one carried no usable time --
+    the marker was further in, or the EXIF block ran past the small
+    head and truncated before the timestamp. A file shorter than the
+    head it was given has nothing more to offer, so the fallback stops.
+    """
+    seen = -1
+    for cap in (_SMALL_HEAD, _LARGE_HEAD):
+        try:
+            with open(path, "rb") as handle:
+                head = handle.read(cap)
+        except OSError:
+            return None
+        if len(head) == seen:
+            break                                    # file shorter than cap
+        seen = len(head)
+        at = head.find(_EXIF_MARKER)
+        if at >= 0:
+            exif = Image.Exif()
+            try:
+                exif.load(head[at:])
+                found = _from_exif(exif)
+            except Exception:                        # noqa: BLE001 - unreadable
+                found = None
+            if found is not None:
+                return found
+    return None
 
 
 @lru_cache(maxsize=8192)
@@ -126,6 +148,76 @@ def capture_time(path: Path) -> float | None:
     except OSError:
         return None
     return _capture_time(str(path), (status.st_size, status.st_mtime_ns))
+
+
+# The map is written beside the photographs, under the house folder, so it
+# travels with them: a folder moved to another disk keeps its answers,
+# because they are keyed by filename rather than by path.
+CAPTURE_TIMES_FORMAT = "opencull-capture-times-v1"
+_CAPTURE_TIMES_FILE = "capture-times.json"
+
+
+def _capture_times_path(root: Path) -> Path:
+    return Path(root) / ".darkimiya" / _CAPTURE_TIMES_FILE
+
+
+def _load_capture_times(path: Path) -> dict[str, dict[str, Any]]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict) or data.get("format") != CAPTURE_TIMES_FORMAT:
+        return {}
+    frames = data.get("frames")
+    return frames if isinstance(frames, dict) else {}
+
+
+def capture_times(root: Path, names: list[str]) -> dict[str, float | None]:
+    """Capture times for many frames of one folder, read once and kept.
+
+    The per-file scan is cheap now, but a fresh process still pays it for
+    every frame each time the folder is opened -- and opening a folder is
+    the very thing that was slow. So the answers are written beside the
+    photographs, keyed by each file's size and modification time: a reopen
+    stats the files (metadata, no content) and reads only the frames that
+    are new or have changed since. Frames whose size and mtime still match
+    are answered from the map without touching the file at all.
+
+    The call is given the frames it needs, which may be a subset of the
+    folder; entries it does not ask about are left in the map untouched,
+    so a partial call never discards another view's cached answers. An
+    entry for a file that has since been deleted simply lingers, harmless
+    and tiny, until a frame of that name is asked for again.
+    """
+    root = Path(root)
+    sidecar = _capture_times_path(root)
+    stored = _load_capture_times(sidecar)
+    merged = dict(stored)
+    out: dict[str, float | None] = {}
+    changed = False
+    for name in names:
+        try:
+            status = (root / name).stat()
+        except OSError:
+            out[name] = None
+            continue
+        size, mtime_ns = status.st_size, status.st_mtime_ns
+        record = stored.get(name)
+        if (isinstance(record, dict) and record.get("size") == size
+                and record.get("mtime_ns") == mtime_ns):
+            out[name] = record.get("time")
+            continue
+        found = _capture_time(str(root / name), (size, mtime_ns))
+        out[name] = found
+        merged[name] = {"size": size, "mtime_ns": mtime_ns, "time": found}
+        changed = True
+    if changed:
+        try:
+            _atomic_json(sidecar, {"format": CAPTURE_TIMES_FORMAT,
+                                   "frames": merged})
+        except OSError:                              # a read-only folder still
+            pass                                     # works, just uncached
+    return out
 
 
 def _sequence(name: str) -> int | None:
@@ -209,10 +301,15 @@ def scene_groups(
     groups: list[list[dict[str, Any]]] = []
     current: list[dict[str, Any]] = []
 
+    # One persisted read for the whole group, rather than a file touch per
+    # entry: the grouping is recomputed every time a page that shows scenes
+    # is opened, and this is what keeps that free after the first time.
+    clock = (capture_times(Path(photos_root),
+                           [str(entry["photo"]) for entry in ordered])
+             if photos_root is not None else {})
+
     def times(entry: dict[str, Any]) -> float | None:
-        if photos_root is None:
-            return None
-        return capture_time(Path(photos_root) / str(entry["photo"]))
+        return clock.get(str(entry["photo"]))
 
     previous: dict[str, Any] | None = None
     previous_time: float | None = None

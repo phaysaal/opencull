@@ -44,7 +44,7 @@ from PySide6.QtWidgets import (
 
 from opencull_gui.development import BUILTIN_STYLES
 from opencull_gui.directions import verdict_of
-from opencull_gui.scenes import capture_time, photos_root_of
+from opencull_gui.scenes import capture_times, photos_root_of
 from opencull_gui.shortlist import settled_order, tier_rank
 
 from . import theme
@@ -743,10 +743,8 @@ def scene_when(photos, photos_root) -> str:
     """The clock times a scene spans, as a photographer would say them."""
     if photos_root is None:
         return ""
-    stamps = sorted(
-        stamp for stamp in
-        (capture_time(Path(photos_root) / photo) for photo in photos)
-        if stamp)
+    clock = capture_times(Path(photos_root), [str(photo) for photo in photos])
+    stamps = sorted(stamp for stamp in clock.values() if stamp)
     if not stamps:
         return ""
     first = datetime.fromtimestamp(stamps[0])
