@@ -67,6 +67,7 @@ from .finetune import FineTunePage
 from .previews import LibraryPreviewLoader, PreviewLoader
 from .provenance import ProvenanceDialog
 from .providers import ProvidersDialog
+from .queuebadge import QueueBadge
 from .review import ReviewPage
 from .sheet import ContactSheet
 from .shell import Invitation, ProjectShell
@@ -77,13 +78,6 @@ from .suggestions import SuggestionsPage
 from .widgets import ProjectCard, Row, band, replace_rows, short_path, tooltip
 
 ACTIVE = {"running", "queued", "stopping", "detached"}
-
-
-TIMELAPSE_PROGRAMS = {
-    "eclipse_timelapse.kim",
-    "subject_timelapse.kim",
-    "named_subject_timelapse.kim",
-}
 
 
 def job_progress(job: dict) -> int | None:
@@ -912,6 +906,10 @@ class Launcher(QMainWindow):
             "serve every folder alike."))
         self.studio_button.clicked.connect(self.show_studio)
         layout.addWidget(self.studio_button)
+
+        self.queue_badge_home = QueueBadge()
+        self._wire_badge(self.queue_badge_home)
+        layout.addWidget(self.queue_badge_home)
         return bar
 
     def _hero(self) -> QWidget:
@@ -982,6 +980,7 @@ class Launcher(QMainWindow):
         self.notice.show()
 
     def refresh(self) -> None:
+        self._feed_queue_badge()
         if self.pages.currentWidget() is not self.projects_page:
             self._refresh_phases()
             return
@@ -1478,6 +1477,7 @@ class Launcher(QMainWindow):
             self.report(f"{name} could not be opened: {exc}", "alarm")
             return
         shell = ProjectShell(project, lambda key: self._phase_page(bench, key))
+        self._wire_badge(shell.queue_badge)
         shell.closed.connect(self.show_projects)
         self.bench = bench
         self.review_page = shell
@@ -2271,11 +2271,8 @@ class Launcher(QMainWindow):
             support_dir() / "Programs",
             self.services.providers.project_root,
             python=self.services.jobs.python)
-        job = self.run_program(store, name, parameters)
-        # A timelapse is minutes of work with nothing to watch; give it a
-        # bar rather than a toast that points at the queue page.
-        if job and name in TIMELAPSE_PROGRAMS:
-            self._watch_timelapse(job)
+        # The queue badge in the chrome shows the run; no per-program dialog.
+        self.run_program(store, name, parameters)
 
     def run_program(self, store, name: str, parameters: dict):
         """Queue one of the photographer's programs like any built-in."""
@@ -2292,24 +2289,40 @@ class Launcher(QMainWindow):
             "log lands beside the output.", "ok")
         return job
 
-    def _watch_timelapse(self, job: dict) -> None:
-        """Open a progress bar over a queued timelapse run."""
+    # --- the queue badge -------------------------------------------------
+
+    def _wire_badge(self, badge: QueueBadge) -> None:
+        badge.cancel_wanted.connect(self._cancel_job)
+        badge.resume_wanted.connect(self.resume_job)
+        badge.reveal_wanted.connect(self._reveal_path)
+        badge.log_wanted.connect(self._reveal_path)
+
+    def _feed_queue_badge(self) -> None:
+        page = self.pages.currentWidget()
+        badge = (self.queue_badge_home
+                 if page is self.projects_page
+                 else getattr(page, "queue_badge", None))
+        if badge is None:
+            return
+        try:
+            badge.set_snapshot(self.services.jobs.public())
+        except Exception:                            # noqa: BLE001 - transient
+            pass
+
+    def _cancel_job(self, job_id: str) -> None:
+        try:
+            self.services.jobs.action(str(job_id), "cancel")
+        except Exception as exc:                     # noqa: BLE001 - reported
+            self._say(str(exc), "alarm")
+        self.refresh()
+
+    def _reveal_path(self, path: str) -> None:
         from opencull_gui.dialogs import DialogError, reveal
 
-        from .timelapse import TimelapseProgress
-
-        def show_video(path: str) -> None:
-            try:
-                reveal(Path(path))
-            except DialogError as exc:
-                self._say(str(exc), "alarm")
-
-        dialog = TimelapseProgress(
-            self.services.jobs, str(job.get("id") or ""), show_video, self)
-        # Held so it is not garbage-collected, and non-modal so the run keeps
-        # going and the photographer can keep working while it renders.
-        self._timelapse_watch = dialog
-        dialog.show()
+        try:
+            reveal(Path(str(path)))
+        except DialogError as exc:
+            self._say(str(exc), "alarm")
 
     def edit_providers(self) -> None:
         dialog = ProvidersDialog(self.services.providers, self)

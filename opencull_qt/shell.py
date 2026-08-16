@@ -42,6 +42,7 @@ from PySide6.QtWidgets import (
 from opencull_gui import phases
 
 from . import theme
+from .queuebadge import QueueBadge
 from .widgets import Paragraph, tooltip
 
 # Blocked and ready must not be told apart by colour alone: the two dimmest
@@ -417,6 +418,9 @@ class ProjectShell(QWidget):
         self.subtitle.setObjectName("hint")
         self.subtitle.setFont(theme.body(9))
         layout.addWidget(self.subtitle)
+
+        self.queue_badge = QueueBadge()
+        layout.addWidget(self.queue_badge)
         return bar
 
     # --- state ------------------------------------------------------------

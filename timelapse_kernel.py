@@ -52,6 +52,7 @@ import random
 import shlex
 import shutil
 import subprocess
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -941,6 +942,54 @@ def _ffmpeg_argv(frames_dir: Path, target: Path) -> list[str]:
         str(target)]
 
 
+def _encode(frames_dir: Path, target: Path,
+            total: int) -> tuple[int | None, list[str]]:
+    """Run ffmpeg, moving the bar across the encode as frames are written.
+
+    ffmpeg reports its own progress on ``-progress pipe:1`` as a stream of
+    key=value lines; ``frame=N`` against the known frame count is a smooth
+    fill across the encode's band of the whole, instead of a jump from 92
+    to 100. A watchdog keeps the old timeout: a hung encoder is killed and
+    reads as a failure rather than hanging the run. Returns the exit code
+    (None if ffmpeg could not be launched) and the tail of its output for
+    the error line.
+    """
+    argv = _ffmpeg_argv(frames_dir, target)
+    argv = argv[:1] + ["-progress", "pipe:1", "-nostats"] + argv[1:]
+    try:
+        proc = subprocess.Popen(
+            argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    except OSError as exc:
+        return None, [str(exc)]
+    watchdog = threading.Timer(1800, proc.kill)
+    watchdog.start()
+    tail: list[str] = []
+    said = _ENCODE_AT
+    span = 100 - _ENCODE_AT
+    try:
+        for raw in proc.stdout or []:
+            line = raw.strip()
+            if line.startswith("frame="):
+                try:
+                    done = int(line.split("=", 1)[1])
+                except ValueError:
+                    continue
+                # Cap below 100: the last percent is the commit, not the
+                # encode, so the bar never claims done before the run is.
+                percent = min(round(_ENCODE_AT + span * min(done / max(total, 1),
+                                                            1.0)), 99)
+                if percent != said:
+                    said = percent
+                    _say_progress(percent, "encoding the video")
+            elif line:
+                tail.append(line)
+                del tail[:-6]
+        proc.wait()
+    finally:
+        watchdog.cancel()
+    return proc.returncode, tail
+
+
 def assemble_video(report_text: str) -> str:
     """Encode the numbered frames into the video, and record where it went.
 
@@ -968,20 +1017,16 @@ def assemble_video(report_text: str) -> str:
             "was not made; install ffmpeg and run the assemble line above")
         return json.dumps(report, indent=2, sort_keys=True)
     _say_progress(_ENCODE_AT, "encoding the video")
-    try:
-        finished = subprocess.run(
-            _ffmpeg_argv(frames_dir, target),
-            capture_output=True, text=True, timeout=1800)
-    except (OSError, subprocess.TimeoutExpired) as exc:
+    returncode, tail = _encode(frames_dir, target, len(frames))
+    if returncode is None:
         report["video"] = None
-        report["video_note"] = f"ffmpeg could not run: {exc}"
+        report["video_note"] = f"ffmpeg could not run: {tail[-1] if tail else ''}"
         return json.dumps(report, indent=2, sort_keys=True)
-    if finished.returncode != 0 or not target.is_file():
-        tail = (finished.stderr or "").strip().splitlines()
+    if returncode != 0 or not target.is_file():
         report["video"] = None
         report["video_note"] = (
             "ffmpeg did not produce a video: "
-            + (tail[-1] if tail else f"exit {finished.returncode}"))
+            + (tail[-1] if tail else f"exit {returncode}"))
         return json.dumps(report, indent=2, sort_keys=True)
     report["video"] = str(target)
     report["video_note"] = (

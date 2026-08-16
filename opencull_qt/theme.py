@@ -223,6 +223,26 @@ QMessageBox QPushButton:default, QDialogButtonBox QPushButton:default {{
     border-color: {SAFELIGHT}; color: {PAPER};
 }}
 
+/* The queue badge's popover: the whole queue as a panel under the ring. */
+QFrame#queuePopover {{
+    background: {RAISED}; border: 1px solid {EDGE}; border-radius: 12px;
+}}
+QFrame#queueRow {{ background: transparent; border-top: 1px solid {EDGE_SOFT}; }}
+QFrame#queueRow:hover {{ background: {SURFACE}; }}
+QLabel#queueCheck {{ color: {FIXED}; font-size: 13px; }}
+QLabel#queueDot {{ color: {FAINT}; font-size: 11px; }}
+QLabel#queueDotErr {{ color: {ALARM}; font-size: 11px; }}
+QPushButton#queueMini {{
+    background: transparent; color: {PAPER};
+    border: 1px solid {EDGE}; border-radius: 7px; padding: 5px 11px;
+}}
+QPushButton#queueMini:hover {{ background: {EDGE}; }}
+QPushButton#queuePrimary {{
+    background: {SAFELIGHT}; color: #241203; font-weight: 600;
+    border: 1px solid {SAFELIGHT_BRIGHT}; border-radius: 7px; padding: 5px 11px;
+}}
+QPushButton#queuePrimary:hover {{ background: {SAFELIGHT_BRIGHT}; }}
+
 QFrame#rows {{
     background: {SURFACE}; border: 1px solid {EDGE_SOFT}; border-radius: 10px;
 }}
