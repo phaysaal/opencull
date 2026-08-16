@@ -36,7 +36,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from opencull_gui.scenes import capture_time, photos_root_of
+from opencull_gui.scenes import capture_time, photos_root_of, shooting_order
 from opencull_gui.shortlist import (
     ASSESSMENT_FIELDS,
     rated_by_hand,
@@ -590,14 +590,10 @@ class ShortlistPage(QWidget):
                 photo = str(entry["photo"])
                 self._taken[photo] = capture_time(Path(root) / photo)
 
-        def when(entry: dict) -> tuple:
-            photo = str(entry["photo"])
-            taken = self._taken.get(photo)
-            return (0 if taken is not None else 1,
-                    taken if taken is not None else 0.0,
-                    photo.casefold())
-
-        by_time = sorted(self.entries, key=when)
+        placed_by_time = shooting_order(
+            [str(entry["photo"]) for entry in self.entries], self._taken)
+        by_entry = {str(entry["photo"]): entry for entry in self.entries}
+        by_time = [by_entry[photo] for photo in placed_by_time]
         # By hand there is no standing to sort by -- every frame is
         # unrated until the photographer says otherwise -- so the order
         # is the shoot's own: time. Only a model-assessed shortlist has

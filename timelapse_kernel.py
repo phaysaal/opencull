@@ -129,12 +129,18 @@ def _taken_at(path: Path) -> str:
 
 
 def list_frames(photos: str, pattern: str = "*.RAF") -> list[dict[str, str]]:
+    """The frames in shooting order: the clock, and the counter within
+    a tied second, unwrapped -- the same order the assessment list shows,
+    from the same function, so the two can never disagree about which
+    frame follows which."""
+    from opencull_gui.scenes import capture_time, shooting_order
+
     root = Path(str(photos)).expanduser().resolve()
     found = sorted(root.glob(str(pattern)))
-    ordered = sorted(
-        ({"name": path.name, "taken": _taken_at(path)} for path in found),
-        key=lambda item: (item["taken"], item["name"]))
-    return ordered
+    taken = {path.name: capture_time(path) for path in found}
+    names = shooting_order([path.name for path in found], taken)
+    return [{"name": name, "taken": _taken_at(root / name)}
+            for name in names]
 
 
 # --- finding the sun -------------------------------------------------------

@@ -729,6 +729,46 @@ class KeyframeTests(unittest.TestCase):
                 "entries"][hand]["interesting"])
 
 
+class ShootingOrderTests(unittest.TestCase):
+    """The clock leads; within a tied second the counter decides -- and
+    the counter wraps. EXIF is one-second resolution, a burst puts
+    several frames in one second, and the photographer's own folder
+    has DSCF9999 and DSCF1001 sharing a second across the wrap."""
+
+    def test_the_wrap_inside_a_tied_second_reads_as_the_shutter_went(self):
+        from opencull_gui.scenes import shooting_order
+
+        taken = {"DSCF9998.RAF": 21.0, "DSCF9999.RAF": 26.0,
+                 "DSCF1001.RAF": 26.0, "DSCF1002.RAF": 33.0}
+        self.assertEqual(
+            shooting_order(sorted(taken), taken),
+            ["DSCF9998.RAF", "DSCF9999.RAF", "DSCF1001.RAF", "DSCF1002.RAF"])
+
+    def test_a_tied_second_without_a_wrap_sorts_by_counter(self):
+        from opencull_gui.scenes import shooting_order
+
+        taken = {"DSCF1003.RAF": 33.0, "DSCF1002.RAF": 33.0,
+                 "DSCF1004.RAF": 33.0}
+        self.assertEqual(
+            shooting_order(sorted(taken), taken),
+            ["DSCF1002.RAF", "DSCF1003.RAF", "DSCF1004.RAF"])
+
+    def test_the_clock_still_beats_the_counter_across_seconds(self):
+        from opencull_gui.scenes import shooting_order
+
+        # A low counter shot EARLIER (different second) stays earlier.
+        taken = {"DSCF0100.RAF": 10.0, "DSCF9999.RAF": 20.0}
+        self.assertEqual(shooting_order(sorted(taken), taken),
+                         ["DSCF0100.RAF", "DSCF9999.RAF"])
+
+    def test_frames_without_a_clock_fall_after_the_timed_ones_by_name(self):
+        from opencull_gui.scenes import shooting_order
+
+        taken = {"B.JPG": 5.0, "A.JPG": None, "C.JPG": None}
+        self.assertEqual(shooting_order(sorted(taken), taken),
+                         ["B.JPG", "A.JPG", "C.JPG"])
+
+
 class MarkAllTests(KeyframeTests):
     """A hundred and eighty frames should not be a hundred and eighty
     clicks -- nor a hundred and eighty writes."""

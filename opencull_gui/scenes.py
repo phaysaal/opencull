@@ -134,6 +134,61 @@ def _sequence(name: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
+def shooting_order(names: list[str], taken: dict[str, float | None]) -> list[str]:
+    """Frames in the order they were shot, from the clock and the counter.
+
+    The clock leads. But EXIF is one-second resolution and a burst
+    puts several frames in one second, so within a tied second the
+    camera's counter decides -- and the counter WRAPS: after 9999 the
+    next frame is 1001 (or 0001), so among frames tied on the clock,
+    a counter thousands lower than its neighbours' is the later frame,
+    not the earlier. Read plainly, that second's frames come out
+    9998, 9999, 1001, 1002 -- the order the shutter went. Read by name
+    they came out 1001, 9998, 9999, which put the wrap's first frame
+    before the frames shot just before it. Frames with no clock at all
+    fall after the timed ones, by name.
+    """
+    def counter(name: str) -> int:
+        found = _sequence(name)
+        return found if found is not None else -1
+
+    def key(name: str) -> tuple:
+        when = taken.get(name)
+        return (0 if when is not None else 1,
+                when if when is not None else 0.0,
+                name.casefold())
+
+    ordered = sorted(names, key=key)
+    # Within each tied second, place by counter, unwrapping. The wrap
+    # is where a counter drops by more than half its span from the
+    # previous frame; everything after it, within the tie, sorts as if
+    # the counter had kept counting.
+    result: list[str] = []
+    index = 0
+    while index < len(ordered):
+        stamp = taken.get(ordered[index])
+        run = [ordered[index]]
+        index += 1
+        while (index < len(ordered) and stamp is not None
+               and taken.get(ordered[index]) == stamp):
+            run.append(ordered[index])
+            index += 1
+        if len(run) > 1 and stamp is not None:
+            counters = [counter(name) for name in run]
+            if all(value >= 0 for value in counters):
+                span = max(counters) - min(counters)
+                if span > 5000:
+                    # A wrap inside this second: the small numbers are
+                    # the later frames. Lift them past the large ones.
+                    pivot = min(counters) + span / 2
+                    run.sort(key=lambda name: (
+                        counter(name) < pivot, counter(name)))
+                else:
+                    run.sort(key=counter)
+        result.extend(run)
+    return result
+
+
 def scene_groups(
     entries: list[dict[str, Any]],
     photos_root: Path | None = None,
