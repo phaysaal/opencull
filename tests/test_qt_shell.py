@@ -283,6 +283,52 @@ class SelectionIsNotACullTests(unittest.TestCase):
     def test_a_real_cull_reads_as_one(self):
         self.assertTrue(self.bench("adaptive").culled())
 
+    def test_the_phase_bar_never_clips_it_shortens(self):
+        """Eight full names overflowed a laptop window and Qt clipped
+        the middle tabs to "DVANCED FINE TUNIN". The bar measures
+        itself: full names where they fit, short names where they do
+        not, numbers alone at the narrowest -- and the tooltip always
+        carries the whole name."""
+        from PySide6.QtWidgets import QLabel
+
+        from opencull_gui import phases
+        from opencull_qt.shell import PhaseBar
+
+        plan = phases.plan({"available": True, "report_available": True,
+                            "shortlist_available": True, "photos": "/p"},
+                           manifest={}, marked=5)
+        bar = PhaseBar()
+        bar.show_plan(plan)
+        bar.set_indicator(QLabel("5 of 8 worth developing"))
+        bar.resize(1900, 38); bar.show()
+        wide = [b.text() for b in bar._buttons.values()]
+        self.assertIn("ADVANCED FINE TUNING", wide[5])
+        bar.resize(1000, 38)
+        mid = [b.text() for b in bar._buttons.values()]
+        self.assertIn("FINE TUNE", mid[5])
+        self.assertNotIn("ADVANCED", mid[5])
+        bar.resize(520, 38)
+        narrow = [b.text() for b in bar._buttons.values()]
+        self.assertTrue(narrow[5].startswith("6"))
+        self.assertNotIn("FINE", narrow[5])
+        # Whatever the row shows, the tooltip has the whole name.
+        button = list(bar._buttons.values())[5]
+        self.assertIn("Advanced fine tuning", button.toolTip())
+        # The invariant, at every width tried: the chosen wording's tabs
+        # fit the room -- unless even the bare numbers do not, in which
+        # case numbers it is, and no wider wording was chosen over them.
+        for width in (1900, 1400, 1000, 800, 640, 520):
+            bar.resize(width, 38)
+            hints = sum(b.sizeHint().width() for b in bar._buttons.values())
+            margins = bar._row.contentsMargins()
+            room = (width - margins.left() - margins.right()
+                    - bar._tail.sizeHint().width()
+                    - bar._row.spacing() * (len(bar._buttons) + 1))
+            numbers_only = all(
+                len(b.text().split()) <= 2 for b in bar._buttons.values())
+            self.assertTrue(hints <= room or numbers_only,
+                            f"clipped at {width}: {hints} > {room}")
+
     def test_the_phase_bar_believes_the_report_not_the_catalog(self):
         plan = phases.plan(culled(), culled=False, manifest={})
         state = next(item["state"] for item in plan if item["id"] == phases.CULL)

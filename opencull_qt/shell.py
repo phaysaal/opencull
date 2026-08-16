@@ -51,18 +51,37 @@ from .widgets import Paragraph, tooltip
 MARKS = {"done": "✓", "running": "…", "ready": "▸"}
 
 
+# Shorter names for the tabs when the window is too narrow for the full
+# ones. A tab clipped to "DVANCED FINE TUNIN" is worse than a tab called
+# "FINE TUNE": the first is a bug, the second is a label.
+SHORT_TITLES = {
+    "cull": "Cull",
+    "assessment": "Assess",
+    "profile": "Style",
+    "suggestions": "AI edit",
+    "development": "Develop",
+    "fine_tuning": "Fine tune",
+    "export": "Export",
+    "debrief": "Debrief",
+}
+
+
 class PhaseButton(QPushButton):
     """One phase of the pipeline, in the order it happens."""
 
     def __init__(self, phase: dict[str, Any]):
-        mark = MARKS.get(phase["state"], "")
-        super().__init__(
-            f"{phase['number']}  {phase['title'].upper()}"
-            f"{'  ' + mark if mark else ''}")
+        super().__init__("")
         self.phase = phase
         self.setObjectName("phase")
         self.setFont(theme.display(9))
         self.setFlat(True)
+        # A button's minimum is its full text, so a row of eight holds
+        # the bar wider than the window and the window clips it -- the
+        # bar could never become narrow enough to notice it should
+        # shorten. Let it compress; the wording logic keeps the text
+        # honest at whatever width results.
+        self.setMinimumWidth(24)
+        self.set_wording("full")
         self.setProperty("state", phase["state"])
         self.setProperty("current", False)
         blocked = phase["state"] == "blocked"
@@ -71,6 +90,29 @@ class PhaseButton(QPushButton):
             else Qt.CursorShape.PointingHandCursor)
         self.setToolTip(tooltip(phase["reason"] if blocked else (
             f"{phase['purpose']}\n{phase['detail']}".strip())))
+
+    def set_wording(self, wording: str) -> None:
+        """Full title, short title, or number alone, as the row allows.
+
+        Whatever the row can show, the tooltip always carries the whole
+        name and state, so a narrow window loses room and not meaning.
+        """
+        phase = self.phase
+        mark = MARKS.get(phase["state"], "")
+        tail = f"  {mark}" if mark else ""
+        if wording == "full":
+            label = f"{phase['number']}  {phase['title'].upper()}{tail}"
+        elif wording == "short":
+            short = SHORT_TITLES.get(phase["id"], phase["title"])
+            label = f"{phase['number']}  {short.upper()}{tail}"
+        else:
+            label = f"{phase['number']}{tail}"
+        self.setText(label)
+        blocked = phase["state"] == "blocked"
+        why = phase["reason"] if blocked else (
+            f"{phase['purpose']}\n{phase['detail']}".strip())
+        self.setToolTip(tooltip(
+            f"{phase['number']}. {phase['title']}\n{why}".strip()))
 
     def set_current(self, current: bool) -> None:
         self.setProperty("current", current)
@@ -118,6 +160,41 @@ class PhaseBar(QFrame):
         self._row.addStretch(1)
         self._row.addWidget(self._tail)
         self.set_current(self._current)
+        self._fit()
+
+    def _fit(self, width: int | None = None) -> None:
+        """Choose the longest wording the row can hold without clipping.
+
+        Eight tabs at full length overflow a 1280px window once a page's
+        own counter sits in the tail, and Qt clips flat buttons from the
+        middle -- "DVANCED FINE TUNIN" -- rather than saying so. Measured
+        every time the plan or the width changes: full names, then short
+        names, then the numbers alone; the tooltip carries the rest.
+        """
+        available = int(width if width is not None else self.width())
+        if not self._buttons or available <= 0:
+            return
+        margins = self._row.contentsMargins()
+        room = (available - margins.left() - margins.right()
+                - self._tail.sizeHint().width()
+                - self._row.spacing() * (len(self._buttons) + 1))
+        for wording in ("full", "short", "number"):
+            for button in self._buttons.values():
+                button.set_wording(wording)
+            needed = sum(button.sizeHint().width()
+                         for button in self._buttons.values())
+            if needed <= room:
+                return
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        super().resizeEvent(event)
+        self._fit(event.size().width())
+
+    def showEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        # The plan is often shown before the bar has a width; measure
+        # once it is really on screen, and again on every resize after.
+        super().showEvent(event)
+        self._fit()
 
     def set_indicator(self, widget: QWidget | None) -> None:
         """Hold the open page's own counter at the end of the row."""
@@ -127,6 +204,8 @@ class PhaseBar(QFrame):
                 held.setParent(None)
         if widget is not None:
             self._tail_row.addWidget(widget)
+        # A longer counter is less room for the tabs.
+        self._fit()
 
     def set_current(self, key: str) -> None:
         self._current = key
