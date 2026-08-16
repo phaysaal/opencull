@@ -371,6 +371,25 @@ class ShortlistPage(QWidget):
         layout.addWidget(self.title)
         layout.addStretch(1)
 
+        self.mark_all_button = QPushButton("Mark all")
+        self.mark_all_button.setObjectName("ghost")
+        self.mark_all_button.setFont(theme.body(9))
+        self.mark_all_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.mark_all_button.setToolTip(tooltip(
+            "Mark every frame here as worth developing, in one move. "
+            "Ratings and notes stay as they are."))
+        self.mark_all_button.clicked.connect(lambda: self.mark_all(True))
+        layout.addWidget(self.mark_all_button)
+        self.unmark_all_button = QPushButton("Unmark all")
+        self.unmark_all_button.setObjectName("ghost")
+        self.unmark_all_button.setFont(theme.body(9))
+        self.unmark_all_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.unmark_all_button.setToolTip(tooltip(
+            "Take the develop mark off every frame here. Nothing else "
+            "changes, and Detect keyframes or a click puts marks back."))
+        self.unmark_all_button.clicked.connect(lambda: self.mark_all(False))
+        layout.addWidget(self.unmark_all_button)
+
         self.keyframes_button = QPushButton("Detect keyframes")
         self.keyframes_button.setObjectName("ghost")
         self.keyframes_button.setFont(theme.body(9))
@@ -949,6 +968,28 @@ class ShortlistPage(QWidget):
                     break
 
     # --- decisions ------------------------------------------------------
+
+    def mark_all(self, interesting: bool) -> None:
+        """Every frame marked, or unmarked, as worth developing at once."""
+        state = self._state()
+        before = sum(
+            1 for entry in state.get("entries", {}).values()
+            if entry.get("interesting") is True)
+        try:
+            self.reviews.mark_all(interesting, state.get("revision"))
+        except ShortlistReviewError as exc:
+            self._report(str(exc), "alarm")
+            return
+        after = sum(
+            1 for entry in self._state().get("entries", {}).values()
+            if entry.get("interesting") is True)
+        self._fill_entries()
+        if self.current:
+            self.show_entry(self.current)
+        self._report(
+            f"{after} of {len(self.entries)} marked to develop"
+            + (f" ({after - before:+d})." if after != before else
+               " -- nothing changed."), "ok")
 
     def detect_keyframes(self) -> None:
         """Scenes found locally; each scene's keyframe marked to develop."""

@@ -729,6 +729,61 @@ class KeyframeTests(unittest.TestCase):
                 "entries"][hand]["interesting"])
 
 
+class MarkAllTests(KeyframeTests):
+    """A hundred and eighty frames should not be a hundred and eighty
+    clicks -- nor a hundred and eighty writes."""
+
+    def test_mark_all_marks_every_frame_in_one_revision(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            shortlist, reviews = self.stores(Path(temporary))
+            before = reviews.public_state()["revision"]
+            state = reviews.mark_all(True, before)
+            self.assertEqual(state["revision"], before + 1)
+            marked = [photo for photo, entry in state["entries"].items()
+                      if entry.get("interesting") is True]
+            self.assertEqual(len(marked), len(shortlist.entries))
+
+    def test_unmark_all_takes_only_the_mark(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            shortlist, reviews = self.stores(Path(temporary))
+            first = str(shortlist.entries[0]["photo"])
+            state = reviews.public_state()
+            reviews.update(first, "strong", True, "keep the sky", True,
+                           state["revision"], True)
+            state = reviews.public_state()
+            reviews.mark_all(False, state["revision"])
+            entry = reviews.public_state()["entries"][first]
+            self.assertFalse(entry["interesting"])
+            self.assertEqual(entry["tier"], "strong")
+            self.assertEqual(entry["note"], "keep the sky")
+            self.assertTrue(entry["edit_raw"])
+
+    def test_nothing_to_change_writes_nothing(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            _shortlist, reviews = self.stores(Path(temporary))
+            before = reviews.public_state()["revision"]
+            reviews.mark_all(False, before)      # already all unmarked
+            self.assertEqual(reviews.public_state()["revision"], before)
+
+    def test_a_subset_can_be_marked_which_is_what_the_detector_uses(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            shortlist, reviews = self.stores(Path(temporary))
+            names = [str(e["photo"]) for e in shortlist.entries]
+            state = reviews.mark_all(True, reviews.public_state()["revision"],
+                                     photos=names[:2])
+            marked = [p for p, e in state["entries"].items()
+                      if e.get("interesting") is True]
+            self.assertEqual(sorted(marked), sorted(names[:2]))
+
+    def test_a_stale_revision_is_refused_like_any_other_write(self):
+        from opencull_gui.shortlist_reviews import ShortlistReviewError
+
+        with tempfile.TemporaryDirectory() as temporary:
+            _shortlist, reviews = self.stores(Path(temporary))
+            with self.assertRaises(ShortlistReviewError):
+                reviews.mark_all(True, 999)
+
+
 class UnwatchedCompletionTests(unittest.TestCase):
 
 

@@ -262,6 +262,53 @@ class ShortlistReviewStore:
                 },
             }
 
+    def mark_all(self, interesting: bool, revision: Any,
+                 photos: list[str] | None = None) -> dict[str, Any]:
+        """Mark, or unmark, many frames as worth developing in one move.
+
+        One revision, one write, one history record per frame that
+        actually changed: a photographer with a hundred and eighty
+        frames should not tick a hundred and eighty times, and the
+        store should not write a hundred and eighty files. Everything
+        else about each entry -- the tier, the note, whether it was
+        reviewed -- is left exactly as it was; where no entry exists
+        yet, one is made from the shortlist's own tier so the mark has
+        something honest to sit on.
+        """
+        with self._lock:
+            self._require_revision(revision)
+            wanted = (list(photos) if photos is not None
+                      else [str(e["photo"]) for e in self.shortlist.entries])
+            changed = 0
+            for photo in wanted:
+                ai = self.shortlist.entry_by_photo.get(photo)
+                if ai is None:
+                    continue
+                before = deepcopy(self._state["entries"].get(photo))
+                current = before or {}
+                if bool(current.get("interesting")) == bool(interesting):
+                    continue
+                value = self._validate_entry(photo, {
+                    "tier": current.get("tier", ai.get("tier", "ordinary")),
+                    "edit_raw": current.get("edit_raw", False),
+                    "interesting": bool(interesting),
+                    "note": current.get("note", ""),
+                    "reviewed": current.get("reviewed", False),
+                    "updated_at": _now(),
+                })
+                self._state["entries"][photo] = value
+                self._state["history"].append({
+                    "photo": photo, "before": before,
+                    "after": deepcopy(value), "at": _now(),
+                })
+                changed += 1
+            if changed:
+                self._state["history"] = (
+                    self._state["history"][-MAX_HISTORY:])
+                self._state["revision"] += 1
+                self._write()
+            return self.public_state()
+
     def update(
         self,
         photo: str,

@@ -252,25 +252,15 @@ def detect_keyframes(shortlist: Any, reviews: Any,
     photos = [str(entry["photo"]) for entry in shortlist.entries]
     plan = plan_for(shortlist, photos)
     keyframes = [scene["representative"] for scene in plan]
-    already, marked = 0, 0
-    for photo in keyframes:
-        state = reviews.public_state()
-        entry = state.get("entries", {}).get(photo, {})
-        if entry.get("interesting") is True:
-            already += 1
-            continue
-        reviews.update(
-            photo,
-            entry.get("tier",
-                      shortlist.entry_by_photo[photo].get(
-                          "tier", "ordinary")),
-            entry.get("edit_raw", False),
-            entry.get("note", ""),
-            True,
-            state.get("revision"),
-            True,
-        )
-        marked += 1
+    state = reviews.public_state()
+    already = sum(
+        1 for photo in keyframes
+        if state.get("entries", {}).get(photo, {}).get("interesting")
+        is True)
+    # One revision, one write, whatever the count: the store's own bulk
+    # mark leaves every other field of every entry exactly as it was.
+    reviews.mark_all(True, state.get("revision"), photos=keyframes)
+    marked = len(keyframes) - already
     written = write_plan(
         Path(recipes), shortlist.path,
         int(reviews.public_state().get("revision") or 0), plan)
