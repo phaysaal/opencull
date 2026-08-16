@@ -12,6 +12,8 @@ culling report and its review already keep.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
@@ -34,7 +36,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from opencull_gui.scenes import photos_root_of
+from opencull_gui.scenes import capture_time, photos_root_of
 from opencull_gui.shortlist import (
     ASSESSMENT_FIELDS,
     rated_by_hand,
@@ -575,13 +577,33 @@ class ShortlistPage(QWidget):
         first, so the strongest frames rise together without losing their
         chronology within a tier.
         """
+        # The real clock, from each frame's own EXIF, read once and held:
+        # file names lie about order the moment a counter wraps -- this
+        # very folder's DSCF9999 was shot before its DSCF1001 -- and a
+        # list in name order put the end of the eclipse at the start.
+        # Where a frame has no clock, its name breaks the tie among the
+        # timed ones rather than throwing them all back to names.
+        if not hasattr(self, "_taken"):
+            root = photos_root_of(self.shortlist)
+            self._taken = {}
+            for entry in self.entries:
+                photo = str(entry["photo"])
+                self._taken[photo] = capture_time(Path(root) / photo)
+
         def when(entry: dict) -> tuple:
-            return (str(entry.get("cluster_id", "")),
-                    str(entry["photo"]).casefold())
+            photo = str(entry["photo"])
+            taken = self._taken.get(photo)
+            return (0 if taken is not None else 1,
+                    taken if taken is not None else 0.0,
+                    photo.casefold())
 
         by_time = sorted(self.entries, key=when)
+        # By hand there is no standing to sort by -- every frame is
+        # unrated until the photographer says otherwise -- so the order
+        # is the shoot's own: time. Only a model-assessed shortlist has
+        # a Sort control, and it defaults to standing.
         mode = (self.sort_by.currentData()
-                if getattr(self, "sort_by", None) is not None else "rating")
+                if getattr(self, "sort_by", None) is not None else "time")
         if mode == "time":
             return by_time
         # The verdict leads and the score breaks its ties, except where

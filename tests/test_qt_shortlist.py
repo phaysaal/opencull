@@ -338,6 +338,48 @@ class ShortlistPageTests(unittest.TestCase):
 
 
 @unittest.skipUnless(QApplication is not None, "PySide6 is not installed")
+class TimeOrderTests(ShortlistPageTests):
+    """The list reads the shoot's own clock, not its file names.
+
+    Names lie the moment a counter wraps: the photographer's folder has
+    DSCF9999 shot before DSCF1001, and a list in name order put the end
+    of the eclipse at the start. EXIF is the truth; names only break
+    ties among frames with no clock.
+    """
+
+    def stamp(self, name: str, when: str) -> None:
+        """Write a capture time into a fixture frame's EXIF."""
+        from PIL import Image
+
+        path = self.photos.root / name
+        image = Image.open(path)
+        exif = image.getexif()
+        exif[0x9003] = when          # DateTimeOriginal
+        exif[0x0132] = when          # DateTime
+        image.save(path, exif=exif.tobytes())
+
+    def test_time_order_follows_exif_where_names_disagree(self):
+        # Names say A < B < C. The clock says C was first, then A, then B.
+        self.stamp("C.JPG", "2026:08:12 10:00:00")
+        self.stamp("A.JPG", "2026:08:12 10:05:00")
+        self.stamp("B.JPG", "2026:08:12 10:10:00")
+        page = self.page()
+        page.sort_by.setCurrentIndex(page.sort_by.findData("time"))
+        shown = [page.list.item(row).data(Qt.ItemDataRole.UserRole)
+                 for row in range(page.list.count())]
+        self.assertEqual(shown, ["C.JPG", "A.JPG", "B.JPG"])
+
+    def test_a_frame_without_a_clock_falls_after_the_timed_ones_by_name(self):
+        self.stamp("C.JPG", "2026:08:12 10:00:00")
+        self.stamp("B.JPG", "2026:08:12 10:05:00")
+        # A.JPG keeps no clock at all.
+        page = self.page()
+        page.sort_by.setCurrentIndex(page.sort_by.findData("time"))
+        shown = [page.list.item(row).data(Qt.ItemDataRole.UserRole)
+                 for row in range(page.list.count())]
+        self.assertEqual(shown, ["C.JPG", "B.JPG", "A.JPG"])
+
+
 class RowIdentityTests(ShortlistPageTests):
     """A row opens the photograph it names -- whatever order it is in.
 
