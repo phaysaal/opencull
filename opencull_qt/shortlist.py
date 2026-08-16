@@ -602,37 +602,83 @@ class ShortlistPage(QWidget):
         self._disagreements = (
             {} if self.by_hand else score_disagreements(self.entries))
         self.title.setText(self.shortlist.path.stem.split(".")[0].upper())
+        # Rebuilding the list clears it, and clearing throws away the
+        # selection AND the scroll position -- so a save that refilled
+        # it sent the pane leaping to wherever Qt put the reselected row.
+        # Both are kept across the refill; the save path below does not
+        # refill at all, it redraws its one row.
+        held = self.list.currentItem()
+        held_photo = (str(held.data(Qt.ItemDataRole.UserRole))
+                      if held is not None else "")
+        scrolled = self.list.verticalScrollBar().value()
         self.list.blockSignals(True)
         self.list.clear()
         for entry in self._ordered_entries():
             photo = str(entry["photo"])
-            mark = "✓" if marks.get(photo, {}).get("interesting") else " "
-            # One line: the default item delegate does not wrap, it replaces a
-            # newline with an ellipsis, so a second line silently truncates
-            # the first.
-            # Your rating where you gave one, because that is the tier the
-            # rest of the pipeline reads. A list showing the assessment's
-            # word beside a decision that overruled it is a list lying about
-            # what will happen next.
-            rated = str(marks.get(photo, {}).get("tier") or entry["tier"])
-            evidence = ("" if self.by_hand else
-                        f"  {standing(rated, entry.get('score', 0)):.0f}")
-            overruled = " *" if rated != str(entry["tier"]) else ""
-            odd = "  ⚠" if photo in self._disagreements else ""
-            item = QListWidgetItem(
-                f" {mark}  {entry['rank']:>2}.  {photo}"
-                f"{evidence}{overruled}{odd}")
+            item = QListWidgetItem("")
             item.setData(Qt.ItemDataRole.UserRole, photo)
-            # Your rating where you gave one: the stars the icon wears are
-            # the tier the rest of the pipeline reads.
-            item.setData(Qt.ItemDataRole.UserRole + 1, tier_stars(rated))
-            if odd:
-                item.setToolTip(tooltip(
-                    f"The model {self._disagreements[photo]}."))
-            item.setIcon(plain_icon(self._entry_pixmap(photo, rated)))
             item.setSizeHint(QSize(0, max(ROW, 64)))
+            self._dress_row(item, entry, marks)
             self.list.addItem(item)
+        if held_photo:
+            for row in range(self.list.count()):
+                if self.list.item(row).data(
+                        Qt.ItemDataRole.UserRole) == held_photo:
+                    self.list.setCurrentRow(row)
+                    break
+        self.list.verticalScrollBar().setValue(scrolled)
         self.list.blockSignals(False)
+        self._retell_counts()
+
+    def _dress_row(self, item: QListWidgetItem, entry: dict,
+                   marks: dict) -> None:
+        """One row's text, stars and icon, from the current marks."""
+        photo = str(entry["photo"])
+        mark = "✓" if marks.get(photo, {}).get("interesting") else " "
+        # One line: the default item delegate does not wrap, it replaces a
+        # newline with an ellipsis, so a second line silently truncates
+        # the first.
+        # Your rating where you gave one, because that is the tier the
+        # rest of the pipeline reads. A list showing the assessment's
+        # word beside a decision that overruled it is a list lying about
+        # what will happen next.
+        rated = str(marks.get(photo, {}).get("tier") or entry["tier"])
+        evidence = ("" if self.by_hand else
+                    f"  {standing(rated, entry.get('score', 0)):.0f}")
+        overruled = " *" if rated != str(entry["tier"]) else ""
+        odd = "  ⚠" if photo in self._disagreements else ""
+        item.setText(
+            f" {mark}  {entry['rank']:>2}.  {photo}"
+            f"{evidence}{overruled}{odd}")
+        # Your rating where you gave one: the stars the icon wears are
+        # the tier the rest of the pipeline reads.
+        item.setData(Qt.ItemDataRole.UserRole + 1, tier_stars(rated))
+        item.setToolTip(tooltip(
+            f"The model {self._disagreements[photo]}.") if odd else "")
+        item.setIcon(plain_icon(self._entry_pixmap(photo, rated)))
+
+    def _redraw_row(self, photo: str) -> None:
+        """One frame's row, brought up to date without touching the rest.
+
+        A save changes one row; rebuilding three hundred to show it was
+        the leap the photographer felt. Nothing scrolls, nothing loses
+        its selection, because nothing is cleared.
+        """
+        marks = self._state().get("entries", {})
+        entry = next((item for item in self.entries
+                      if str(item["photo"]) == photo), None)
+        if entry is None:
+            return
+        for row in range(self.list.count()):
+            item = self.list.item(row)
+            if item.data(Qt.ItemDataRole.UserRole) == photo:
+                self._dress_row(item, entry, marks)
+                break
+        self._retell_counts()
+
+    def _retell_counts(self) -> None:
+        """The marked-count line and the suggest button, from the store."""
+        state = self._state()
         summary = state.get("summary", {})
         chosen = int(summary.get("interesting", 0))
         self.progress.setText(
@@ -1110,7 +1156,16 @@ class ShortlistPage(QWidget):
                     "interesting")))
             return
         self.interesting.setChecked(chosen)
-        self._fill_entries()
+        # A tier can move a row when the list is sorted by standing; a
+        # mark or a note cannot. Refill only where the order may change,
+        # and even then the refill keeps selection and scroll.
+        before_tier = str(state.get("entries", {}).get(
+            self.current, {}).get("tier") or "")
+        if self.rating() != before_tier and getattr(
+                self, "sort_by", None) is not None:
+            self._fill_entries()
+        else:
+            self._redraw_row(self.current)
         if self.views.currentIndex() == 0:
             self.show_overview()
         else:

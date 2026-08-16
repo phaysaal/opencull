@@ -338,6 +338,50 @@ class ShortlistPageTests(unittest.TestCase):
 
 
 @unittest.skipUnless(QApplication is not None, "PySide6 is not installed")
+class StillListTests(ShortlistPageTests):
+    """Marking a frame must not move the list under the hand doing it.
+
+    A save refilled the whole list; clearing it threw away the scroll
+    position and the selection, and Qt then scrolled to wherever it
+    put the reselected row -- the pane leapt on every tick. One row
+    changed, so one row is redrawn; and a real refill keeps both.
+    """
+
+    def test_a_save_redraws_the_row_without_moving_the_list(self):
+        page = self.page()
+        page.show_entry(self.shortlist.entries[-1]["photo"])
+        page.list.verticalScrollBar().setValue(
+            page.list.verticalScrollBar().maximum())
+        scrolled = page.list.verticalScrollBar().value()
+        current = page.list.currentRow()
+        page.set_interesting(True)
+        self.assertEqual(page.list.currentRow(), current)
+        self.assertEqual(page.list.verticalScrollBar().value(), scrolled)
+        # And the row does show the mark now.
+        item = page.list.item(current)
+        self.assertTrue(item.text().lstrip().startswith("✓"))
+
+    def test_a_full_refill_keeps_selection_and_scroll(self):
+        page = self.page()
+        page.show_entry(self.shortlist.entries[-1]["photo"])
+        page.list.verticalScrollBar().setValue(
+            page.list.verticalScrollBar().maximum())
+        scrolled = page.list.verticalScrollBar().value()
+        photo = page.list.currentItem().data(Qt.ItemDataRole.UserRole)
+        page._fill_entries()
+        self.assertEqual(
+            page.list.currentItem().data(Qt.ItemDataRole.UserRole), photo)
+        self.assertEqual(page.list.verticalScrollBar().value(), scrolled)
+
+    def test_the_counts_line_still_updates_from_a_single_row_save(self):
+        page = self.page()
+        page.show_entry(self.shortlist.entries[0]["photo"])
+        page.set_interesting(True)
+        self.assertIn("worth developing", page.progress.text())
+        self.assertTrue(page.progress.text().startswith("1 of")
+                        or "1 " in page.progress.text())
+
+
 class SurfacedActionsTests(ShortlistPageTests):
     """The page's verbs must outlive the hiding of its bar.
 
