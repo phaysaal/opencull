@@ -270,6 +270,55 @@ class PlanTests(unittest.TestCase):
         self.assertFalse(timelapse.plan_valid(json.dumps(plan)))
 
 
+class ProgressMarkerTests(unittest.TestCase):
+    """The long run narrates itself, so the queue can draw a bar."""
+
+    def test_survey_and_render_print_progress_across_the_whole(self):
+        import contextlib
+        import io
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for index, centre in enumerate([(430, 300), (470, 300),
+                                            (450, 320)]):
+                crescent(root / f"frame-{index:03d}.jpg", centre=centre)
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                plan = timelapse.crop_plan(
+                    timelapse.survey(str(root), "frame-*.jpg"))
+                timelapse.render_sequence(str(root), plan, str(root / "out"))
+            markers = [line for line in out.getvalue().splitlines()
+                       if line.startswith("TIMELAPSE_PROGRESS")]
+            percents = [int(line.split()[1]) for line in markers]
+            self.assertTrue(markers)
+            # Aligning sits in the first band, rendering in the second, and
+            # the percentages only advance -- one bar across both phases.
+            self.assertTrue(any("aligning" in m for m in markers))
+            self.assertTrue(any("rendering" in m for m in markers))
+            self.assertEqual(percents, sorted(percents))
+            self.assertLessEqual(max(percents), 90)
+
+    def test_the_queue_reads_the_marker_into_a_fraction(self):
+        from opencull_gui.jobs import JobManager
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            log = root / "run.log"
+            log.write_text(
+                "some noise\n"
+                "TIMELAPSE_PROGRESS 45 aligning frame 130 of 289\n"
+                "TIMELAPSE_PROGRESS 70 rendering frame 40 of 260\n")
+            job = {"kind": "kimiya_program", "log": str(log),
+                   "output": str(root / "report.json"),
+                   "checkpoint": str(root / "cp.json")}
+            progress = JobManager._progress(job)
+            self.assertAlmostEqual(progress["fraction"], 0.70)
+            self.assertIn("rendering", progress["stage"])
+            # Once the report is written the run is done: a full bar.
+            (root / "report.json").write_text("{}")
+            self.assertEqual(JobManager._progress(job)["fraction"], 1.0)
+
+
 class SequenceTests(unittest.TestCase):
     """From plan to numbered frames, colour-shifted the house way."""
 

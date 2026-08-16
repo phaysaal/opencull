@@ -11,9 +11,11 @@ here is a second pipeline.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -22,6 +24,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QProgressBar,
     QPushButton,
     QRadioButton,
     QSpinBox,
@@ -30,6 +33,7 @@ from PySide6.QtWidgets import (
 )
 
 from opencull_gui import presets
+from opencull_gui.jobs import TERMINAL
 from timelapse_kernel import default_run
 
 from . import theme
@@ -241,3 +245,118 @@ class TimelapseDialog(QDialog):
     def _go(self) -> None:
         if self.run_request() is not None:
             self.accept()
+
+
+class TimelapseProgress(QDialog):
+    """A bar for the long part of a timelapse: it is minutes of work with
+    nothing to see, which is exactly what read as "the button did nothing".
+
+    The run is on the ordinary queue; this only watches it. It polls the
+    job for the marker each phase prints -- aligning the frames, rendering
+    them, the encode -- and moves one bar across all three. When the run
+    finishes it offers the video; when it fails it says so, and either way
+    the run continues whether this window is open or not.
+    """
+
+    POLL_MS = 500
+
+    def __init__(self, jobs: Any, job_id: str,
+                 on_reveal: Callable[[str], None],
+                 parent: QWidget | None = None):
+        super().__init__(parent)
+        self._jobs = jobs
+        self._job_id = str(job_id)
+        self._on_reveal = on_reveal
+        self._video = ""
+        self.setWindowTitle("Making the timelapse")
+        self.setMinimumWidth(460)
+
+        column = QVBoxLayout(self)
+        title = QLabel("MAKING THE TIMELAPSE")
+        title.setObjectName("eyebrow")
+        title.setFont(theme.display(8))
+        column.addWidget(title)
+        self.stage = QLabel("Starting…")
+        self.stage.setObjectName("hint")
+        self.stage.setFont(theme.body(10))
+        self.stage.setWordWrap(True)
+        column.addWidget(self.stage)
+        self.bar = QProgressBar()
+        self.bar.setRange(0, 100)
+        self.bar.setValue(0)
+        self.bar.setTextVisible(True)
+        column.addWidget(self.bar)
+
+        row = QHBoxLayout()
+        row.addStretch(1)
+        self.reveal_button = QPushButton("Show the video")
+        self.reveal_button.setObjectName("primary")
+        self.reveal_button.setVisible(False)
+        self.reveal_button.clicked.connect(self._reveal)
+        row.addWidget(self.reveal_button)
+        self.close_button = QPushButton("Close")
+        self.close_button.clicked.connect(self.accept)
+        row.addWidget(self.close_button)
+        column.addLayout(row)
+
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._poll)
+        self._timer.start(self.POLL_MS)
+        self._poll()
+
+    def _current(self) -> dict[str, Any] | None:
+        try:
+            for job in self._jobs.public().get("jobs", []):
+                if str(job.get("id")) == self._job_id:
+                    return job
+        except Exception:                            # noqa: BLE001 - transient
+            return None
+        return None
+
+    def _poll(self) -> None:
+        job = self._current()
+        if job is not None:
+            self.apply(job)
+
+    def apply(self, job: dict[str, Any]) -> None:
+        """Reflect one job snapshot. Separated so it can be tested."""
+        progress = job.get("progress") or {}
+        fraction = float(progress.get("fraction") or 0.0)
+        self.bar.setValue(max(0, min(100, round(fraction * 100))))
+        status = str(job.get("status") or "")
+        if status in TERMINAL:
+            self._timer.stop()
+            if status == "completed":
+                self._finish(job)
+            else:
+                self.stage.setText(
+                    str(job.get("message") or "The run did not finish."))
+            return
+        stage = str(progress.get("stage") or job.get("message") or "")
+        if stage:
+            self.stage.setText(stage)
+
+    def _finish(self, job: dict[str, Any]) -> None:
+        self.bar.setValue(100)
+        self._video = self._video_of(job)
+        if self._video:
+            self.stage.setText("Done — the timelapse is ready.")
+            self.reveal_button.setVisible(True)
+        else:
+            self.stage.setText(
+                "The frames are ready, but no video was made. The log beside "
+                "the output says why (often: ffmpeg is not installed).")
+
+    @staticmethod
+    def _video_of(job: dict[str, Any]) -> str:
+        try:
+            report = json.loads(
+                Path(str(job.get("output", ""))).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return ""
+        video = str(report.get("video") or "")
+        return video if video and Path(video).is_file() else ""
+
+    def _reveal(self) -> None:
+        if self._video:
+            self._on_reveal(self._video)

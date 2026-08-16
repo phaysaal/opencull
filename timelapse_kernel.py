@@ -63,6 +63,21 @@ from development_engine import _apply_global, _decoded, _encoded, active
 
 FORMAT = "darkimiya-timelapse-plan-v2"
 
+# Progress the queue can read while the run is long. Each phase prints a
+# marker for its band of the whole -- aligning the frames, then rendering
+# them, then the encode -- flushed so it reaches the log as it happens
+# rather than all at once at the end. The percentages are of the whole
+# run, so a single bar moves smoothly across the phases.
+PROGRESS_MARKER = "TIMELAPSE_PROGRESS"
+_ALIGN_BAND = 45     # 0 .. 45%  : fitting every frame
+_RENDER_BAND = 90    # 45 .. 90% : cropping and colour-shifting every frame
+_ENCODE_AT = 92      # the encode is the short tail
+
+
+def _say_progress(percent: float, stage: str) -> None:
+    print(f"{PROGRESS_MARKER} {max(0, min(100, round(percent)))} {stage}",
+          flush=True)
+
 # A fitted diameter this far from the sequence's median means a
 # different lens or a failed fit; either way the frame cannot share a
 # pixel-space crop with the rest and is set aside by name.
@@ -289,7 +304,14 @@ def survey(photos: str, pattern: str = "*.RAF",
     """
     root = Path(str(photos)).expanduser().resolve()
     frames = []
-    for item in list_frames(photos, pattern):
+    items = list_frames(photos, pattern)
+    total = max(1, len(items))
+    said = -1
+    for order, item in enumerate(items, start=1):
+        percent = _ALIGN_BAND * order / total
+        if round(percent) != said:
+            said = round(percent)
+            _say_progress(percent, f"aligning frame {order} of {total}")
         path = root / item["name"]
         try:
             image = _preview(path)
@@ -841,7 +863,13 @@ def render_sequence(photos: str, plan_text: str, directory: str,
     where.mkdir(parents=True, exist_ok=True)
     operations = _shift_operations(recipe, photos)
     written = []
+    total = max(1, len(plan["boxes"]))
+    said = -1
     for index, box in enumerate(plan["boxes"], start=1):
+        percent = _ALIGN_BAND + (_RENDER_BAND - _ALIGN_BAND) * index / total
+        if round(percent) != said:
+            said = round(percent)
+            _say_progress(percent, f"rendering frame {index} of {total}")
         image = _preview(root / box["name"])
         scale = float(box.get("scale", 1.0))
         if abs(scale - 1.0) > 1e-4:
@@ -939,6 +967,7 @@ def assemble_video(report_text: str) -> str:
             "ffmpeg is not installed, so the frames are ready but the video "
             "was not made; install ffmpeg and run the assemble line above")
         return json.dumps(report, indent=2, sort_keys=True)
+    _say_progress(_ENCODE_AT, "encoding the video")
     try:
         finished = subprocess.run(
             _ffmpeg_argv(frames_dir, target),

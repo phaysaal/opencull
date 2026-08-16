@@ -638,6 +638,51 @@ class TimelapseDoorTests(FinetuneDoorTests):
         dialog = TimelapseDialog(str(self.photos_path), look="not-a-preset")
         self.assertEqual(dialog.look.currentData(), "")
 
+    def test_the_progress_bar_tracks_the_run_and_offers_the_video(self):
+        import tempfile
+        from opencull_qt.timelapse import TimelapseProgress
+
+        tmp = Path(tempfile.mkdtemp())
+        report = tmp / "timelapse.json"
+        video = tmp / "timelapse.mp4"
+        video.write_bytes(b"film")
+        report.write_text(json.dumps({"video": str(video)}))
+
+        class Jobs:
+            def public(self):
+                return {"jobs": [{"id": "j", "status": "running",
+                                  "progress": {"fraction": 0.0}}]}
+
+        revealed = []
+        dialog = TimelapseProgress(Jobs(), "j", revealed.append)
+        self.addCleanup(dialog.deleteLater)
+        dialog.apply({"id": "j", "status": "running",
+                      "progress": {"fraction": 0.5,
+                                   "stage": "rendering frame 5 of 10"}})
+        self.assertEqual(dialog.bar.value(), 50)
+        self.assertIn("rendering", dialog.stage.text())
+        dialog.apply({"id": "j", "status": "completed",
+                      "output": str(report), "progress": {"fraction": 1.0}})
+        self.assertEqual(dialog.bar.value(), 100)
+        self.assertFalse(dialog.reveal_button.isHidden())
+        dialog._reveal()
+        self.assertEqual(revealed, [str(video)])
+
+    def test_a_failed_run_says_so_and_offers_no_video(self):
+        from opencull_qt.timelapse import TimelapseProgress
+
+        class Jobs:
+            def public(self):
+                return {"jobs": []}
+
+        dialog = TimelapseProgress(Jobs(), "j", lambda path: None)
+        self.addCleanup(dialog.deleteLater)
+        dialog.apply({"id": "j", "status": "failed",
+                      "message": "Kimiya exited with status 1.",
+                      "progress": {"fraction": 0.3}})
+        self.assertIn("status 1", dialog.stage.text())
+        self.assertTrue(dialog.reveal_button.isHidden())
+
     def test_the_button_emits_the_program_and_its_parameters(self):
         page = self.page()
         heard = []

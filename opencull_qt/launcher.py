@@ -79,6 +79,13 @@ from .widgets import ProjectCard, Row, band, replace_rows, short_path, tooltip
 ACTIVE = {"running", "queued", "stopping", "detached"}
 
 
+TIMELAPSE_PROGRAMS = {
+    "eclipse_timelapse.kim",
+    "subject_timelapse.kim",
+    "named_subject_timelapse.kim",
+}
+
+
 def job_progress(job: dict) -> int | None:
     """How far along a run is, from its own checkpoint when it has one.
 
@@ -2264,21 +2271,45 @@ class Launcher(QMainWindow):
             support_dir() / "Programs",
             self.services.providers.project_root,
             python=self.services.jobs.python)
-        self.run_program(store, name, parameters)
+        job = self.run_program(store, name, parameters)
+        # A timelapse is minutes of work with nothing to watch; give it a
+        # bar rather than a toast that points at the queue page.
+        if job and name in TIMELAPSE_PROGRAMS:
+            self._watch_timelapse(job)
 
-    def run_program(self, store, name: str, parameters: dict) -> None:
+    def run_program(self, store, name: str, parameters: dict):
         """Queue one of the photographer's programs like any built-in."""
         try:
-            self.services.jobs.add_program(
+            job = self.services.jobs.add_program(
                 name, parameters,
                 provider_profile_id=self.provider_id(),
                 store=store)
         except Exception as exc:
             self._say(str(exc), "alarm")
-            return
+            return None
         self._say(
             f"{name} is queued. Its progress is on the queue page and its "
             "log lands beside the output.", "ok")
+        return job
+
+    def _watch_timelapse(self, job: dict) -> None:
+        """Open a progress bar over a queued timelapse run."""
+        from opencull_gui.dialogs import DialogError, reveal
+
+        from .timelapse import TimelapseProgress
+
+        def show_video(path: str) -> None:
+            try:
+                reveal(Path(path))
+            except DialogError as exc:
+                self._say(str(exc), "alarm")
+
+        dialog = TimelapseProgress(
+            self.services.jobs, str(job.get("id") or ""), show_video, self)
+        # Held so it is not garbage-collected, and non-modal so the run keeps
+        # going and the photographer can keep working while it renders.
+        self._timelapse_watch = dialog
+        dialog.show()
 
     def edit_providers(self) -> None:
         dialog = ProvidersDialog(self.services.providers, self)
