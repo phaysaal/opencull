@@ -83,8 +83,8 @@ class ContactSheetTests(unittest.TestCase):
         sheet = self.sheet(many, limit=120)
         self.assertEqual(len(sheet.tiles), 120)
         shown = self.text(sheet)
-        self.assertIn("first 120 of 500", shown)
-        self.assertIn("All of them are read", shown)
+        self.assertIn("Showing 120 of 500", shown)
+        self.assertIn("All 500 are included", shown)
 
     def test_a_sheet_within_the_limit_says_nothing_about_limits(self):
         self.assertNotIn("Showing the first", self.text(self.sheet(list(NAMES))))
@@ -123,20 +123,46 @@ class SelectableSheetTests(ContactSheetTests):
         self.assertEqual(sheet.chosen(), list(NAMES))
         self.assertTrue(sheet.tiles[NAMES[1]].included)
 
-    def test_frames_past_the_draw_cap_cannot_be_left_out(self):
+    def test_frames_past_the_first_page_are_reachable_by_showing_more(self):
+        """The cap used to be a cliff: "only the frames shown can be
+        left out" was the sheet telling a photographer with 300 frames
+        that the zoomed passages at frame 200 did not exist."""
         many = [f"F{index:04d}.JPG" for index in range(500)]
         sheet = self.selectable(many, limit=10)
         sheet.toggle(many[3])
         self.assertEqual(len(sheet.chosen()), 499)
-        # And nothing beyond the cap can be touched: no tile, no toggle.
-        sheet.toggle(many[400])
+        # Beyond the first page: no tile yet, so no toggle yet.
+        sheet.toggle(many[15])
         self.assertEqual(len(sheet.chosen()), 499)
+        sheet.show_more()
+        self.assertEqual(len(sheet.names), 20)
+        sheet.toggle(many[15])
+        self.assertEqual(len(sheet.chosen()), 498)
 
-    def test_the_capped_notice_says_only_shown_frames_can_be_left_out(self):
+    def test_the_notice_says_all_are_included_and_offers_more(self):
         many = [f"F{index:04d}.JPG" for index in range(500)]
-        shown = self.text(self.selectable(many, limit=10))
-        self.assertIn("All 500 are included", shown)
-        self.assertIn("only the frames shown can be left out", shown)
+        sheet = self.selectable(many, limit=10)
+        self.assertIn("All 500 are included", sheet.notice.text())
+        self.assertIn("show more", sheet.notice.text())
+        self.assertEqual(sheet.more_button.text(), "Show 10 more")
+        self.assertTrue(sheet.more_button.isVisibleTo(sheet))
+
+    def test_the_last_page_retires_the_button(self):
+        many = [f"F{index:04d}.JPG" for index in range(25)]
+        sheet = self.selectable(many, limit=10)
+        sheet.show_more()
+        self.assertEqual(sheet.more_button.text(), "Show 5 more")
+        sheet.show_more()
+        self.assertEqual(len(sheet.names), 25)
+        self.assertFalse(sheet.more_button.isVisibleTo(sheet))
+        self.assertIn("All 25 frames shown", sheet.notice.text())
+
+    def test_a_frame_left_out_before_its_page_arrives_stays_left_out(self):
+        many = [f"F{index:04d}.JPG" for index in range(30)]
+        sheet = self.selectable(many, limit=10)
+        sheet.set_all(False)          # everything left out, tiles or not
+        sheet.show_more()
+        self.assertFalse(sheet.tiles[many[12]].included)
 
     def test_a_display_sheet_ignores_clicks_entirely(self):
         sheet = self.sheet(list(NAMES))

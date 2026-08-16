@@ -292,17 +292,29 @@ class ContactSheet(QWidget):
                 row.addWidget(button)
             layout.addLayout(row)
 
-        dropped = len(self.selection) - len(self.names)
-        if dropped:
-            notice = QLabel(
-                f"Showing the first {len(self.names)} of "
-                f"{len(self.selection):,}. "
-                + (f"All {len(self.selection):,} are included; only the "
-                   "frames shown can be left out."
-                   if selectable else "All of them are read."))
-            notice.setObjectName("hint")
-            notice.setFont(theme.body(9))
-            layout.addWidget(notice)
+        self._columns = columns
+        self._opens = opens
+        self._limit = limit
+        # What is beyond the first page is said in numbers and reachable
+        # by a button, never a silent cliff: a photographer with 300
+        # frames must be able to leave out the zoomed passages at frame
+        # 200, and "only the frames shown can be left out" was the sheet
+        # telling her the tail did not exist.
+        self.notice = QLabel("")
+        self.notice.setObjectName("hint")
+        self.notice.setFont(theme.body(9))
+        self.more_button = QPushButton("")
+        self.more_button.setObjectName("ghost")
+        self.more_button.setFont(theme.body(9))
+        self.more_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.more_button.clicked.connect(self.show_more)
+        tail = QHBoxLayout()
+        tail.setContentsMargins(0, 0, 0, 0)
+        tail.setSpacing(10)
+        tail.addWidget(self.notice, 1)
+        tail.addWidget(self.more_button)
+        layout.addLayout(tail)
+        self._retell_tail()
 
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
@@ -315,22 +327,57 @@ class ContactSheet(QWidget):
         self._layout_state = (0, 0)
         self._screen_hooked = False
         for position, name in enumerate(self.names):
-            tile = Tile(name, selectable=selectable)
-            tile.opens = opens
-            if opens:
-                tile.setCursor(Qt.CursorShape.PointingHandCursor)
-                tile.setToolTip(tooltip("Open this frame."))
-            tile.toggled.connect(self.toggle)
-            tile.inspect_wanted.connect(self.inspect_wanted)
-            tile.opened.connect(self.opened)
-            self.tiles[name] = tile
-            self.grid.addWidget(
-                tile, position // columns, position % columns)
-            pixmap = self.loader.request(name, "thumb")
-            if pixmap is not None:
-                tile.set_pixmap(pixmap)
+            self._add_tile(name, position)
         self.scroll.setWidget(holder)
         layout.addWidget(self.scroll, 1)
+
+    def _add_tile(self, name: str, position: int) -> None:
+        tile = Tile(name, selectable=self.selectable)
+        tile.opens = self._opens
+        if self._opens:
+            tile.setCursor(Qt.CursorShape.PointingHandCursor)
+            tile.setToolTip(tooltip("Open this frame."))
+        tile.toggled.connect(self.toggle)
+        tile.inspect_wanted.connect(self.inspect_wanted)
+        tile.opened.connect(self.opened)
+        self.tiles[name] = tile
+        self.grid.addWidget(
+            tile, position // self._columns, position % self._columns)
+        if name in self._left:
+            tile.set_included(False)
+        pixmap = self.loader.request(name, "thumb")
+        if pixmap is not None:
+            tile.set_pixmap(pixmap)
+
+    def show_more(self) -> None:
+        """Another page of tiles, on request; the tail is never a cliff."""
+        start = len(self.names)
+        more = self.selection[start:start + self._limit]
+        if not more:
+            return
+        self.names.extend(more)
+        for offset, name in enumerate(more):
+            self._add_tile(name, start + offset)
+        # Fresh tiles take the current geometry rather than the default.
+        self._layout_state = (0, 0)
+        self._relayout()
+        self._retell_tail()
+
+    def _retell_tail(self) -> None:
+        shown, total = len(self.names), len(self.selection)
+        beyond = total - shown
+        if beyond <= 0:
+            self.notice.setText(
+                f"All {total:,} frames shown." if total > self._limit else "")
+            self.notice.setVisible(total > self._limit)
+            self.more_button.setVisible(False)
+            return
+        self.notice.setText(
+            f"Showing {shown:,} of {total:,}. All {total:,} are included in "
+            "the run; show more to leave out any of the rest.")
+        self.more_button.setText(
+            f"Show {min(self._limit, beyond):,} more")
+        self.more_button.setVisible(True)
 
     @staticmethod
     def sheet_geometry(
@@ -431,10 +478,16 @@ class ContactSheet(QWidget):
         self.changed.emit()
 
     def set_all(self, included: bool) -> None:
-        """Tick or untick every drawn tile at once."""
+        """Tick or untick the whole selection at once -- drawn or not.
+
+        It used to touch only the drawn tiles, so "Untick all" on a
+        300-frame folder quietly kept frames 121-300 in the run. The
+        selection is what the run reads; the tiles are only what fits
+        on screen.
+        """
         if not self.selectable:
             return
-        self._left = set() if included else set(self.tiles)
+        self._left = set() if included else set(self.selection)
         for name, tile in self.tiles.items():
             tile.set_included(name not in self._left)
         self.changed.emit()
