@@ -82,6 +82,56 @@ def mono(size: int = 8) -> QFont:
     return _font(MONO_FAMILIES, size, QFont.Weight.Normal)
 
 
+def _spin_arrows() -> tuple[str, str]:
+    """Two small triangles the spin buttons can show, up and down.
+
+    A QSS arrow sub-control takes an image, not a border-drawn shape -- the
+    border trick a stylesheet would use on the web renders as a flat bar
+    here, so up and down look identical. The glyphs are painted once to a
+    cache in the palette's own paper colour and referenced by url(), which
+    keeps the theme self-contained: no checked-in asset to drift from the
+    colours. If painting is somehow unavailable, the buttons simply keep
+    their dark face without a glyph rather than failing to load.
+    """
+    import tempfile
+    from pathlib import Path
+
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtGui import QColor, QImage, QPainter, QPolygon
+
+    cache = Path(tempfile.gettempdir()) / "darkimiya-theme"
+    shape = {
+        "up": [QPoint(1, 6), QPoint(8, 6), QPoint(4, 2)],
+        "down": [QPoint(1, 3), QPoint(8, 3), QPoint(4, 7)],
+    }
+    urls: list[str] = []
+    try:
+        cache.mkdir(parents=True, exist_ok=True)
+        for name, points in shape.items():
+            path = cache / f"spin-{name}-{PAPER.lstrip('#')}.png"
+            if not path.is_file():
+                image = QImage(10, 10, QImage.Format.Format_ARGB32)
+                image.fill(Qt.GlobalColor.transparent)
+                painter = QPainter(image)
+                painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+                painter.setBrush(QColor(PAPER))
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.drawPolygon(QPolygon(points))
+                painter.end()
+                image.save(str(path))
+            urls.append(path.as_posix())
+        return urls[0], urls[1]
+    except Exception:                                # noqa: BLE001 - see above
+        return "", ""
+
+
+_ARROW_UP, _ARROW_DOWN = _spin_arrows()
+_SPIN_ARROWS = (f"""
+QSpinBox::up-arrow {{ image: url({_ARROW_UP}); width: 10px; height: 10px; }}
+QSpinBox::down-arrow {{ image: url({_ARROW_DOWN}); width: 10px; height: 10px; }}
+""" if _ARROW_UP and _ARROW_DOWN else "")
+
+
 STYLESHEET = f"""
 QMainWindow, QDialog, QWidget#page {{ background: {INK}; }}
 QWidget {{ color: {PAPER}; }}
@@ -102,6 +152,20 @@ QLabel#rowState[tone="ready"] {{ color: {FIXED}; }}
 QLabel#rowState[tone="failed"] {{ color: {ALARM}; }}
 QLabel#status[tone="ok"] {{ color: {FIXED}; }}
 QLabel#status[tone="alarm"] {{ color: {ALARM}; }}
+
+/* Every button that is not given a name of its own. Without this a bare
+   QPushButton in a dialog takes the platform's light-grey face and then
+   inherits PAPER text from the QWidget rule -- near-white on light grey,
+   the label all but invisible, which is what a plain "Cancel" showed. The
+   named buttons below are more specific and still win. */
+QPushButton {{
+    background: {RAISED}; color: {PAPER};
+    border: 1px solid {EDGE}; border-radius: 8px;
+    padding: 7px 16px;
+}}
+QPushButton:hover {{ background: {EDGE}; border-color: #3B3633; }}
+QPushButton:pressed {{ background: {EDGE_SOFT}; }}
+QPushButton:disabled {{ color: {FAINT}; border-color: {EDGE_SOFT}; }}
 
 QPushButton#primary {{
     background: {SAFELIGHT}; color: #241203;
@@ -176,11 +240,30 @@ QFrame#notice[tone="alarm"] {{
 
 QLineEdit, QComboBox, QSpinBox, QPlainTextEdit {{
     background: {INK}; color: {PAPER};
-    border: 1px solid {EDGE}; border-radius: 8px; padding: 8px 10px;
+    border: 1px solid {EDGE}; border-radius: 8px;
+    padding: 9px 11px; min-height: 20px;
 }}
 QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QPlainTextEdit:focus {{
     border-color: {SAFELIGHT};
 }}
+/* Left unstyled, the spin buttons keep the platform's light face and are
+   clipped by the rounded border into a pale sliver at the field's edge.
+   Give them the field's own dark surround, inside the radius, with arrows
+   that read on it. */
+QSpinBox {{ padding-right: 22px; }}
+QSpinBox::up-button, QSpinBox::down-button {{
+    subcontrol-origin: border; width: 20px;
+    background: {RAISED}; border-left: 1px solid {EDGE};
+}}
+QSpinBox::up-button {{
+    subcontrol-position: top right;
+    border-top-right-radius: 8px; border-bottom: 1px solid {EDGE};
+}}
+QSpinBox::down-button {{
+    subcontrol-position: bottom right; border-bottom-right-radius: 8px;
+}}
+QSpinBox::up-button:hover, QSpinBox::down-button:hover {{ background: {EDGE}; }}
+{_SPIN_ARROWS}
 QLineEdit[stored="true"] {{ border-color: #2E5C45; color: {FIXED}; }}
 QComboBox QAbstractItemView {{
     background: {SURFACE}; border: 1px solid {EDGE};

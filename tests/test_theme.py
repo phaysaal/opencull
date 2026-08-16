@@ -134,6 +134,33 @@ class DialogButtonTests(unittest.TestCase):
                 button.width(), button.sizeHint().width(),
                 f"{button.text()!r} is clipped to {button.width()}px")
 
+    def test_a_bare_button_gets_a_base_rule_not_the_platform_face(self):
+        # Without a rule for the unnamed QPushButton, a dialog's own buttons
+        # take the platform's light face and inherit PAPER text -- near-white
+        # on light grey. The base rule must exist at the top level, not only
+        # as the QMessageBox / QDialogButtonBox descendants.
+        self.assertRegex(theme.STYLESHEET, r"(?m)^QPushButton \{")
+
+    def test_a_bare_buttons_label_reads_against_its_fill(self):
+        # The label is PAPER; render a nameless button and sample its fill,
+        # then hold that pair to the same contrast body text must clear.
+        from PySide6.QtGui import QColor
+        from PySide6.QtWidgets import QPushButton
+
+        button = QPushButton("Cancel")
+        button.setStyleSheet(theme.STYLESHEET)
+        button.resize(140, 40)
+        button.show()
+        self.addCleanup(button.deleteLater)
+        self.application.processEvents()
+        fill = QColor(button.grab().toImage().pixel(12, 20))
+        hexfill = "#{:02X}{:02X}{:02X}".format(
+            fill.red(), fill.green(), fill.blue())
+        self.assertGreaterEqual(
+            contrast(theme.PAPER, hexfill), AA_TEXT,
+            f"a bare button's label ({theme.PAPER}) reads at "
+            f"{contrast(theme.PAPER, hexfill):.2f}:1 on its fill ({hexfill})")
+
 
 if __name__ == "__main__":
     unittest.main()
