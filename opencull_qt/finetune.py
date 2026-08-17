@@ -500,6 +500,8 @@ class FineTunePage(QWidget):
         # Which mask is being shown as a tint, if any, and the plain
         # pixmap underneath it.
         self._overlay_for = ""
+        # Which colour layer is waiting for a click on the picture.
+        self._picking_for = ""
         self._plain_pixmap = None
         # The frame as shot, for the press-and-hold comparison, and
         # whether the hold is down right now.
@@ -557,6 +559,7 @@ class FineTunePage(QWidget):
         column.addLayout(head)
         self.frame = PhotoLabel()
         self.frame.setObjectName("paneImage")
+        self.frame.installEventFilter(self)
         column.addWidget(self.frame, 1)
 
         # The treatments, horizontal under the picture -- a filmstrip of
@@ -890,6 +893,69 @@ class FineTunePage(QWidget):
                        else json.loads(json.dumps(self._pristine)))
         self._show_controls()
         self.render()
+
+    def _start_pick(self, mask_id: str) -> None:
+        self._picking_for = mask_id
+        self.frame.setCursor(Qt.CursorShape.CrossCursor)
+        self._report(
+            "Click the picture on the colour this layer should select.")
+
+    def _end_pick(self) -> None:
+        self._picking_for = ""
+        self.frame.unsetCursor()
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802 - Qt naming
+        from PySide6.QtCore import QEvent
+
+        if (watched is self.frame and self._picking_for
+                and event.type() == QEvent.Type.MouseButtonPress):
+            self._pick_at(event.position())
+            return True
+        return super().eventFilter(watched, event)
+
+    def _pick_at(self, pos) -> None:
+        """The hue under the click, in the picture's own pixels.
+
+        The label centres an aspect-fit copy, so the click walks back
+        through that placement; a click on the matting around the
+        picture is no pick at all and the crosshair stays.
+        """
+        shown = self.frame.pixmap()
+        if shown is None or shown.isNull():
+            self._end_pick()
+            return
+        ratio = float(shown.devicePixelRatio() or 1.0)
+        width, height = shown.width() / ratio, shown.height() / ratio
+        left = (self.frame.width() - width) / 2.0
+        top = (self.frame.height() - height) / 2.0
+        x, y = pos.x() - left, pos.y() - top
+        if not (0 <= x < width and 0 <= y < height):
+            return
+        image = shown.toImage()
+        colour = image.pixelColor(int(x * ratio), int(y * ratio))
+        red, green, blue = colour.redF(), colour.greenF(), colour.blueF()
+        brightest = max(red, green, blue)
+        delta = brightest - min(red, green, blue)
+        saturation = delta / brightest if brightest > 1e-6 else 0.0
+        if saturation < 0.06:
+            self._report(
+                "That spot is nearly grey -- it has no honest hue to "
+                "select by. Click something with colour in it.", "alarm")
+            return
+        if brightest == red:
+            hue = ((green - blue) / delta) % 6
+        elif brightest == green:
+            hue = (blue - red) / delta + 2
+        else:
+            hue = (red - green) / delta + 4
+        hue = round(hue * 60) % 360
+        asked = self._picking_for
+        self._end_pick()
+        self._mask_changed(asked, {"geometry": {"hue": float(hue)}})
+        self._show_controls()
+        self._report(
+            f"Picked hue {hue}° -- the layer now selects that colour.",
+            "ok")
 
     def _mask_changed(self, key: str, change: dict) -> None:
         held = self.changes.setdefault(key, {})
@@ -1236,6 +1302,17 @@ class FineTunePage(QWidget):
         elif mask["shape"] == "color":
             # Selected by what the pixels are, not where they sit: a hue
             # around a centre, softly, gated so near-grey stays out.
+            pick = QPushButton("Pick the colour from the picture…")
+            pick.setObjectName("ghost")
+            pick.setFont(theme.body(9))
+            pick.setCursor(Qt.CursorShape.PointingHandCursor)
+            pick.setToolTip(tooltip(
+                "Click, then click the picture: the hue under the click "
+                "becomes this layer's colour. Sampled from the adjusted "
+                "proof -- the picture as it looks right now."))
+            pick.clicked.connect(
+                lambda _checked=False, m=key_prefix: self._start_pick(m))
+            self.body.addWidget(pick)
             for key, label, low, high in (
                     ("hue", "Hue", 0.0, 360.0),
                     ("range", "Range", 5.0, 120.0),

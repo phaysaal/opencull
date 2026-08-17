@@ -117,6 +117,45 @@ class FineTunePageTests(unittest.TestCase):
         self.assertIn("Hue", told)
         self.assertIn("Softness", told)
 
+    def test_picking_a_colour_sets_the_layers_hue_from_the_picture(self):
+        from PySide6.QtCore import QPointF
+        from PySide6.QtGui import QColor, QImage, QPixmap
+
+        page = self.page()
+        made = {"shape": "color", "geometry": {
+            "hue": 0.0, "range": 30.0, "softness": 20.0,
+            "sat_floor": 10.0, "feather": 100, "opacity": 100},
+            "effects": [{"op": "tone.exposure", "value": 0.0}]}
+        page.changes.setdefault("+mask", []).append(made)
+        page.recipe = adjustments.apply(page.recipe, {"+mask": [made]})
+        ordinal = len(adjustments.masks(page.recipe))
+        # A green proof on the pane; the click lands mid-picture.
+        image = QImage(64, 48, QImage.Format.Format_RGB888)
+        image.fill(QColor(30, 200, 40))
+        page.frame.resize(200, 150)
+        page.frame.setPixmap(QPixmap.fromImage(image))
+        page._start_pick(f"mask:{ordinal}")
+        page._pick_at(QPointF(page.frame.width() / 2,
+                              page.frame.height() / 2))
+        told = adjustments.masks(page.recipe)[ordinal - 1]["geometry"]
+        self.assertAlmostEqual(told["hue"], 124, delta=6)   # green
+        self.assertEqual(page._picking_for, "")             # mode ended
+
+    def test_picking_grey_refuses_and_keeps_the_crosshair(self):
+        from PySide6.QtCore import QPointF
+        from PySide6.QtGui import QColor, QImage, QPixmap
+
+        page = self.page()
+        image = QImage(64, 48, QImage.Format.Format_RGB888)
+        image.fill(QColor(128, 128, 128))
+        page.frame.resize(200, 150)
+        page.frame.setPixmap(QPixmap.fromImage(image))
+        page._start_pick("mask:1")
+        page._pick_at(QPointF(page.frame.width() / 2,
+                              page.frame.height() / 2))
+        self.assertEqual(page._picking_for, "mask:1")   # still waiting
+        self.assertIn("grey", page.status.text())
+
     def test_the_histogram_reads_the_arriving_render(self):
         from PySide6.QtGui import QColor, QImage, QPixmap
 
