@@ -65,6 +65,23 @@ TREATMENT_ROWS_SHOWN = 6
 # divided back down, which is finer than any of the units are read at.
 TICKS = 1000
 
+# The controls with a natural colour axis wear it as a thin ramp under
+# the groove: which way does what, in the colour itself. The directions
+# match the engine's math -- positive temperature warms (red up, blue
+# down), positive tint pulls magenta (green divided down), saturation
+# grows from grey. Indicative, not a preview.
+COLOUR_RAMPS = {
+    "color.temperature": [
+        (0.0, (64, 120, 210)), (0.5, (150, 150, 150)),
+        (1.0, (235, 160, 60))],
+    "color.tint": [
+        (0.0, (90, 180, 90)), (0.5, (150, 150, 150)),
+        (1.0, (210, 90, 190))],
+    "color.saturation": [
+        (0.0, (128, 128, 128)), (0.35, (152, 140, 134)),
+        (1.0, (225, 90, 70))],
+}
+
 
 class Control(QWidget):
     """One compiled operation, and the sentence it came from.
@@ -132,6 +149,9 @@ class Control(QWidget):
             control["low"], control["high"],
             None if self.absent else float(control["asked"]),
             float(control.get("neutral", 0.0)))
+        ramp = COLOUR_RAMPS.get(str(control.get("op") or ""))
+        if ramp:
+            self.slider.set_ramp(ramp)
         self.slider.valueChanged.connect(self._moved)
         layout.addWidget(self.slider)
 
@@ -441,6 +461,11 @@ class FineTunePage(QWidget):
         scroll.setWidget(holder)
         layout.addWidget(scroll, 1)
 
+        # Two rows on a real seam -- restore, then persist-and-ask. Five
+        # buttons in one row of this panel clipped every label to a
+        # syllable ("s sho", "pe fi"); a label nobody can read is not a
+        # button, and these five actions are too abstract for icons to
+        # say alone.
         actions = QHBoxLayout()
         actions.setSpacing(8)
         self.shot_button = QPushButton("As shot")
@@ -466,6 +491,10 @@ class FineTunePage(QWidget):
         self.reset_button.clicked.connect(self.reset)
         actions.addWidget(self.reset_button)
         actions.addStretch(1)
+        layout.addLayout(actions)
+
+        keeps = QHBoxLayout()
+        keeps.setSpacing(8)
         self.preset_button = QPushButton("Save as preset…")
         self.preset_button.setObjectName("ghost")
         self.preset_button.setFont(theme.body(10))
@@ -476,7 +505,7 @@ class FineTunePage(QWidget):
             "straightening stay with this frame, because they are about "
             "where its subject is."))
         self.preset_button.clicked.connect(self.save_preset)
-        actions.addWidget(self.preset_button)
+        keeps.addWidget(self.preset_button)
         self.recipe_button = QPushButton("Recipe file…")
         self.recipe_button.setObjectName("ghost")
         self.recipe_button.setFont(theme.body(10))
@@ -486,7 +515,7 @@ class FineTunePage(QWidget):
             "format the develop page imports -- masks and all, so it "
             "renders identically anywhere."))
         self.recipe_button.clicked.connect(self.save_recipe_file)
-        actions.addWidget(self.recipe_button)
+        keeps.addWidget(self.recipe_button)
         self.advise_button = QPushButton("Advise ranges…")
         self.advise_button.setObjectName("ghost")
         self.advise_button.setFont(theme.body(10))
@@ -498,8 +527,9 @@ class FineTunePage(QWidget):
             "particular. The advice paints the next time this frame's "
             "controls are opened."))
         self.advise_button.clicked.connect(self._ask_zones)
-        actions.addWidget(self.advise_button)
-        layout.addLayout(actions)
+        keeps.addWidget(self.advise_button)
+        keeps.addStretch(1)
+        layout.addLayout(keeps)
 
         self.keep_button = QPushButton("Keep this version")
         self.keep_button.setObjectName("primary")

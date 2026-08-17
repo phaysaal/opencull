@@ -90,6 +90,32 @@ class FineTunePageTests(unittest.TestCase):
     def test_only_frames_with_a_treatment_are_offered(self):
         self.assertEqual(self.page().photos, [NAMES[0]])
 
+    def test_the_colour_controls_wear_their_ramp_and_others_do_not(self):
+        from opencull_qt.finetune import Control
+
+        page = self.page()
+        ramps = {
+            widget.control["op"]: bool(widget.slider._ramp)
+            for widget in page.findChildren(Control)}
+        self.assertTrue(ramps.get("color.temperature"))
+        self.assertTrue(ramps.get("color.tint"))
+        self.assertTrue(ramps.get("color.saturation"))
+        self.assertFalse(ramps.get("tone.exposure"))
+
+    def test_the_action_buttons_sit_in_two_readable_rows(self):
+        # Five buttons in one row of this panel clipped every label to a
+        # syllable. Restore on one row, persist-and-ask on the next.
+        page = self.page()
+        page.resize(1100, 700)
+        page.show()
+        self.addCleanup(page.hide)
+        QApplication.processEvents()
+        restore = page.reset_button.mapToGlobal(
+            page.reset_button.rect().center()).y()
+        keep = page.preset_button.mapToGlobal(
+            page.preset_button.rect().center()).y()
+        self.assertGreater(keep, restore)
+
     def test_the_baseline_is_not_offered_because_it_has_nothing_to_move(self):
         page = self.page()
         self.assertNotIn(
@@ -344,6 +370,43 @@ class ZoneSliderTests(unittest.TestCase):
         slider.render(canvas)
         colours = {canvas.pixelColor(x, 13).name() for x in range(8, 292, 4)}
         self.assertGreater(len(colours), 2)
+
+    def test_a_colour_ramp_paints_under_the_groove(self):
+        """Temperature's blue-to-amber strip: left end cool, right warm,
+        and the zone bands above it untouched."""
+        from PySide6.QtGui import QImage
+
+        slider = self.slider()
+        slider.resize(300, 30)
+        slider.set_zones(-5.0, 5.0, (-1.0, 0.7), (-2.5, 1.5))
+        slider.set_ramp([(0.0, (64, 120, 210)), (0.5, (150, 150, 150)),
+                         (1.0, (235, 160, 60))])
+        canvas = QImage(300, 30, QImage.Format.Format_ARGB32)
+        canvas.fill(0)
+        slider.render(canvas)
+        groove = slider._groove_rect()
+        y = int(groove.bottom() + 3 + slider.RAMP / 2)
+        left = canvas.pixelColor(int(groove.left() + 4), y)
+        right = canvas.pixelColor(int(groove.right() - 4), y)
+        self.assertGreater(left.blue(), left.red())    # cool end
+        self.assertGreater(right.red(), right.blue())  # warm end
+
+    def test_a_slider_without_a_ramp_paints_none(self):
+        from PySide6.QtGui import QImage
+
+        slider = self.slider()
+        slider.resize(300, 30)
+        slider.set_zones(-5.0, 5.0, (-1.0, 0.7), (-2.5, 1.5))
+        canvas = QImage(300, 30, QImage.Format.Format_ARGB32)
+        canvas.fill(0)
+        slider.render(canvas)
+        groove = slider._groove_rect()
+        y = int(groove.bottom() + 3 + slider.RAMP / 2)
+        # Below the groove there is only the widget's own background:
+        # the two ends of the row match, where a ramp would part them.
+        left = canvas.pixelColor(int(groove.left()) + 4, y)
+        right = canvas.pixelColor(int(groove.right()) - 4, y)
+        self.assertEqual(left.name(), right.name())
 
 
 class AbsentControlTests(unittest.TestCase):

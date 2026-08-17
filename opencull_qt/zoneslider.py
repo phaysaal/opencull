@@ -17,7 +17,7 @@ stock mouse behaviour.
 from __future__ import annotations
 
 from PySide6.QtCore import QRectF, Qt
-from PySide6.QtGui import QColor, QPainter, QPen
+from PySide6.QtGui import QColor, QLinearGradient, QPainter, QPen
 from PySide6.QtWidgets import QSlider
 
 # The bands, on both themes. Muted on purpose: the groove is advice,
@@ -38,13 +38,29 @@ class ZoneSlider(QSlider):
     GROOVE = 6
     HANDLE = 14
 
+    RAMP = 3
+
     def __init__(self, parent=None):
         super().__init__(Qt.Orientation.Horizontal, parent)
         # Fractions of the slider's range, settled by set_zones.
         self._bands: list[tuple[float, float, QColor]] = []
         self._asked_fraction: float | None = None
         self._neutral_fraction: float | None = None
+        # The colour ramp under the groove, for controls with a natural
+        # axis: temperature blue to amber, tint green to magenta,
+        # saturation grey to vivid. It says which way does what, where
+        # the bands above it say how far is wise -- two answers, two
+        # strips, neither painted over the other. Indicative, not a
+        # preview: it teaches the direction, it does not promise what
+        # this frame's own pixels will do.
+        self._ramp: list[tuple[float, QColor]] = []
         self.setMinimumHeight(26)
+
+    def set_ramp(self, stops: list[tuple[float, tuple[int, int, int]]]) -> None:
+        """A left-to-right colour ramp; empty paints nothing."""
+        self._ramp = [(float(at), QColor(*rgb)) for at, rgb in stops]
+        self.setMinimumHeight(30 if self._ramp else 26)
+        self.update()
 
     # --- what the paint needs, in range fractions -------------------------
 
@@ -115,6 +131,16 @@ class ZoneSlider(QSlider):
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(_GROOVE_OFF)
             painter.drawRoundedRect(groove, radius, radius)
+
+        if self._ramp and self.isEnabled():
+            strip = QRectF(groove.left(), groove.bottom() + 3,
+                           groove.width(), self.RAMP)
+            gradient = QLinearGradient(strip.left(), 0.0, strip.right(), 0.0)
+            for at, colour in self._ramp:
+                gradient.setColorAt(at, colour)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(gradient)
+            painter.drawRoundedRect(strip, self.RAMP / 2, self.RAMP / 2)
 
         # Neutral hairline, under the asked notch.
         if self._neutral_fraction is not None and self.isEnabled():
