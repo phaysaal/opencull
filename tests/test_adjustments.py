@@ -424,3 +424,69 @@ class CurveColourHoldFoldTests(unittest.TestCase):
         op = next(item for item in out["operations"]
                   if item.get("op") == "tone.curve")
         self.assertEqual(op["value"]["preserve"], 100.0)
+
+
+class WedgeAndEvenerTests(unittest.TestCase):
+    """The colour wedge's walls and eveners travel through the anchor."""
+
+    def colour_mask(self, geometry=None):
+        return adjustments.apply(recipe(), {"+mask": [{
+            "shape": "color",
+            "geometry": {"hue": 200, "range": 40, "softness": 20,
+                         "sat_floor": 8, **(geometry or {})},
+            "effects": []}]})
+
+    def test_walls_round_trip_through_the_anchor(self):
+        out = self.colour_mask({"sat_ceiling": 70, "light_floor": 25,
+                                "light_ceiling": 90})
+        placed = adjustments.masks(out)[-1]
+        self.assertEqual(placed["geometry"]["sat_ceiling"], 70.0)
+        self.assertEqual(placed["geometry"]["light_floor"], 25.0)
+        self.assertEqual(placed["geometry"]["light_ceiling"], 90.0)
+
+    def test_unasked_walls_stay_out_of_the_sentence(self):
+        out = self.colour_mask()
+        anchor = out["operations"][-1]["value"]["anchor"]
+        self.assertNotIn("below", anchor)
+        self.assertNotIn("brighter", anchor)
+        self.assertNotIn("darker", anchor)
+
+    def test_the_aim_rides_the_anchor(self):
+        base = self.colour_mask()
+        out = adjustments.apply(base, {"mask:1": {"geometry": {
+            "aim_sat": 55, "aim_light": 60}}})
+        anchor = out["operations"][-1]["value"]["anchor"]
+        self.assertIn("target saturation 55", anchor)
+        self.assertIn("target light 60", anchor)
+
+    def test_an_evener_lands_and_moves_when_asked_again(self):
+        base = self.colour_mask()
+        once = adjustments.apply(base, {"mask:1": {"add_effects": [
+            {"op": "uniformity.hue", "value": 40.0}]}})
+        held = once["operations"][-1]["value"]["effects"]
+        self.assertEqual(held[-1]["op"], "uniformity.hue")
+        self.assertEqual(held[-1]["value"], 40.0)
+        again = adjustments.apply(once, {"mask:1": {"add_effects": [
+            {"op": "uniformity.hue", "value": 70.0}]}})
+        held = again["operations"][-1]["value"]["effects"]
+        self.assertEqual(len([e for e in held
+                              if e["op"] == "uniformity.hue"]), 1)
+        self.assertEqual(held[-1]["value"], 70.0)
+
+    def test_eveners_stay_off_the_control_surface(self):
+        out = adjustments.apply(self.colour_mask(), {"mask:1": {
+            "add_effects": [{"op": "uniformity.hue", "value": 40.0}]}})
+        names = [item["op"] for item in adjustments.mask_surface(out, 1)]
+        self.assertNotIn("uniformity.hue", names)
+
+
+class CleanColourControlTests(unittest.TestCase):
+    """The cleaner is an ordinary control in the Detail section."""
+
+    def test_clean_colour_sits_on_the_full_surface(self):
+        surface = adjustments.full_surface(recipe())
+        found = next(item for item in surface
+                     if item["op"] == "detail.clean_colour")
+        self.assertEqual(found["section"], "Detail")
+        self.assertEqual(found["label"], "Clean colour")
+        self.assertEqual((found["low"], found["high"]), (0.0, 100.0))

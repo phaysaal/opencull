@@ -126,6 +126,67 @@ class FineTunePageTests(unittest.TestCase):
         page._curve_changed([[0.0, 0.0], [128.0, 190.0], [255.0, 255.0]])
         self.assertEqual(page.changes["curve"]["preserve"], 80.0)
 
+    def test_the_wedge_walls_and_eveners_sit_on_the_colour_layer(self):
+        page = self.page()
+        page._create_mask("color")
+        told = self.text(page)
+        for label in ("Sat ceiling", "Lit floor", "Lit ceiling",
+                      "Even hue", "Even colour", "Even light"):
+            self.assertIn(label, told)
+
+    def test_an_evener_slider_lands_in_recipe_and_survives_a_refold(self):
+        page = self.page()
+        page._create_mask("color")
+        ordinal = adjustments.masks(page.recipe)[-1]["ordinal"]
+        page._mask_changed(f"mask:{ordinal}", {"add_effects": [
+            {"op": "uniformity.hue", "value": 45.0}]})
+        held = [op for op in page.recipe["operations"]
+                if op.get("op") == "mask.color"][-1]
+        placed = [e for e in held["value"]["effects"]
+                  if e.get("op") == "uniformity.hue"]
+        self.assertEqual(placed[0]["value"], 45.0)
+        # Moving it again moves the same effect, live and refolded.
+        page._mask_changed(f"mask:{ordinal}", {"add_effects": [
+            {"op": "uniformity.hue", "value": 80.0}]})
+        page._rebuild_mirror()
+        held = [op for op in page.recipe["operations"]
+                if op.get("op") == "mask.color"][-1]
+        placed = [e for e in held["value"]["effects"]
+                  if e.get("op") == "uniformity.hue"]
+        self.assertEqual(len(placed), 1)
+        self.assertEqual(placed[0]["value"], 80.0)
+
+    def test_painted_strokes_survive_a_refold(self):
+        page = self.page()
+        page._create_mask("brush")
+        ordinal = adjustments.masks(page.recipe)[-1]["ordinal"]
+        page._mask_changed(f"mask:{ordinal}", {"map": "QUJD"})
+        page._rebuild_mirror()
+        held = [op for op in page.recipe["operations"]
+                if op.get("op") == "mask.brush"][-1]
+        self.assertEqual(held["value"].get("map"), "QUJD")
+
+    def test_picking_a_colour_also_sets_the_eveners_aim(self):
+        from PySide6.QtCore import QPointF
+        from PySide6.QtGui import QColor, QImage, QPixmap
+
+        page = self.page()
+        page._create_mask("color")
+        ordinal = adjustments.masks(page.recipe)[-1]["ordinal"]
+        image = QImage(320, 240, QImage.Format.Format_RGB888)
+        image.fill(QColor(204, 128, 102))    # warm skin-ish
+        page.frame.resize(320, 240)
+        page.frame.set_source(QPixmap.fromImage(image))
+        page._start_pick(f"mask:{ordinal}")
+        centre_x = (page.frame.width()) / 2.0
+        centre_y = (page.frame.height()) / 2.0
+        page._pick_at(QPointF(centre_x, centre_y))
+        held = [op for op in page.recipe["operations"]
+                if op.get("op") == "mask.color"][-1]
+        anchor = held["value"]["anchor"]
+        self.assertIn("target saturation", anchor)
+        self.assertIn("target light", anchor)
+
     def test_a_colour_mask_layer_offers_its_own_geometry(self):
         page = self.page()
         made = {"shape": "color", "geometry": {

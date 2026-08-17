@@ -381,6 +381,175 @@ class CurveColourHoldTests(unittest.TestCase):
         self.assertTrue(np.allclose(filmed, plain, atol=1e-5))
 
 
+class CleanColourTests(unittest.TestCase):
+    """Colour cleaned by what green knows: speckle goes, edges stay."""
+
+    def field(self):
+        rng = np.random.default_rng(7)
+        img = np.zeros((96, 128, 3), np.float32)
+        img[..., 0] = 0.5 + rng.normal(0, 0.06, (96, 128))
+        img[..., 1] = 0.4
+        img[..., 2] = 0.3 + rng.normal(0, 0.06, (96, 128))
+        img[:, 64:, :] *= 0.3         # one hard edge green knows about
+        return np.clip(img, 0.0, None)
+
+    def op(self, strength):
+        return [{"op": "detail.clean_colour", "unit": "percent",
+                 "mode": "delta", "value": strength, "enabled": True}]
+
+    def test_colour_speckle_is_averaged_away(self):
+        from development_engine import _apply_global
+
+        img = self.field()
+        out = _apply_global(img, self.op(100.0))
+        before = float(np.std(img[10:40, 10:50, 0]))
+        after = float(np.std(out[10:40, 10:50, 0]))
+        self.assertLess(after, before * 0.35)
+
+    def test_green_the_anchor_is_never_moved(self):
+        from development_engine import _apply_global
+
+        img = self.field()
+        out = _apply_global(img, self.op(100.0))
+        self.assertTrue(np.allclose(out[..., 1], img[..., 1], atol=1e-5))
+
+    def test_the_edge_green_knows_about_survives(self):
+        from development_engine import _apply_global
+
+        img = self.field()
+        out = _apply_global(img, self.op(100.0))
+        step = float(np.mean(out[10:80, 55:62, 0])
+                     - np.mean(out[10:80, 67:74, 0]))
+        self.assertGreater(step, 0.25)     # bright side minus dark side
+
+    def test_zero_strength_changes_nothing(self):
+        from development_engine import _apply_global
+
+        img = self.field()
+        out = _apply_global(img, self.op(0.0))
+        self.assertTrue(np.allclose(out, img, atol=1e-6))
+
+
+class ColourWedgeWallTests(unittest.TestCase):
+    """The wedge's other walls: saturation ceiling, brightness floor."""
+
+    def weights(self, patch, anchor):
+        from development_engine import mask_weights
+
+        return mask_weights(patch, "color", {"anchor": anchor})
+
+    def patch(self, rgb):
+        return np.full((2, 2, 3), rgb, dtype=np.float32)
+
+    def test_a_saturation_ceiling_keeps_the_neon_out(self):
+        anchor = ("colour mask, hue 0, range 40, softness 10, "
+                  "above 5% saturation, below 60% saturation")
+        neon = self.weights(self.patch((0.8, 0.05, 0.05)), anchor)
+        pastel = self.weights(self.patch((0.8, 0.6, 0.6)), anchor)
+        self.assertLess(float(neon[0, 0]), 0.1)
+        self.assertGreater(float(pastel[0, 0]), 0.9)
+
+    def test_a_brightness_floor_keeps_the_shadows_out(self):
+        anchor = ("colour mask, hue 0, range 40, softness 10, "
+                  "above 5% saturation, brighter than 40%")
+        dark = self.weights(self.patch((0.05, 0.01, 0.01)), anchor)
+        lit = self.weights(self.patch((0.8, 0.4, 0.4)), anchor)
+        self.assertLess(float(dark[0, 0]), 0.1)
+        self.assertGreater(float(lit[0, 0]), 0.9)
+
+    def test_a_brightness_ceiling_keeps_the_highlights_out(self):
+        anchor = ("colour mask, hue 0, range 40, softness 10, "
+                  "above 5% saturation, darker than 60%")
+        blazing = self.weights(self.patch((0.95, 0.5, 0.5)), anchor)
+        mid = self.weights(self.patch((0.25, 0.08, 0.08)), anchor)
+        self.assertLess(float(blazing[0, 0]), 0.1)
+        self.assertGreater(float(mid[0, 0]), 0.9)
+
+    def test_a_wall_never_asked_for_moves_nothing(self):
+        bare = ("colour mask, hue 0, range 40, softness 10, "
+                "above 5% saturation")
+        patch = self.patch((0.8, 0.05, 0.05))
+        self.assertGreater(float(self.weights(patch, bare)[0, 0]), 0.9)
+
+
+class UniformityTests(unittest.TestCase):
+    """The eveners: colours in the wedge walk toward one aim."""
+
+    def masked(self, effects, anchor):
+        return [{"op": "mask.color", "unit": "mask", "enabled": True,
+                 "value": {"anchor": anchor, "opacity": 1.0,
+                           "feather": 1.0, "effects": effects}}]
+
+    def test_hues_converge_and_brightness_stays(self):
+        import colorsys
+
+        from development_engine import _apply_global
+
+        patch = np.zeros((1, 2, 3), np.float32)
+        patch[0, 0] = (0.8, 0.5, 0.4)
+        patch[0, 1] = (0.8, 0.65, 0.4)
+        out = _apply_global(patch, self.masked(
+            [{"op": "uniformity.hue", "value": 100.0}],
+            "colour mask, hue 25, range 60, softness 30, "
+            "above 5% saturation"))
+        first = colorsys.rgb_to_hsv(*out[0, 0])[0] * 360
+        second = colorsys.rgb_to_hsv(*out[0, 1])[0] * 360
+        self.assertAlmostEqual(first, 25.0, delta=1.0)
+        self.assertAlmostEqual(second, 25.0, delta=1.0)
+        self.assertAlmostEqual(float(out[0, 0].max()),
+                               float(patch[0, 0].max()), places=3)
+
+    def test_saturation_walks_to_the_stated_aim(self):
+        import colorsys
+
+        from development_engine import _apply_global
+
+        patch = np.full((1, 1, 3), (0.8, 0.5, 0.4), np.float32)
+        out = _apply_global(patch, self.masked(
+            [{"op": "uniformity.saturation", "value": 100.0}],
+            "colour mask, hue 25, range 60, softness 30, "
+            "above 5% saturation, target saturation 40"))
+        self.assertAlmostEqual(
+            colorsys.rgb_to_hsv(*out[0, 0])[1], 0.40, places=2)
+
+    def test_half_strength_walks_half_way(self):
+        import colorsys
+
+        from development_engine import _apply_global
+
+        patch = np.full((1, 1, 3), (0.8, 0.5, 0.4), np.float32)
+        before = colorsys.rgb_to_hsv(*patch[0, 0])[1]
+        out = _apply_global(patch, self.masked(
+            [{"op": "uniformity.saturation", "value": 50.0}],
+            "colour mask, hue 25, range 60, softness 30, "
+            "above 5% saturation, target saturation 40"))
+        self.assertAlmostEqual(
+            colorsys.rgb_to_hsv(*out[0, 0])[1],
+            before + (0.40 - before) * 0.5, places=2)
+
+    def test_lightness_walks_to_the_stated_aim(self):
+        from development_engine import _ENCODE_GAMMA, _apply_global
+
+        patch = np.full((1, 1, 3), (0.8, 0.5, 0.4), np.float32)
+        out = _apply_global(patch, self.masked(
+            [{"op": "uniformity.lightness", "value": 100.0}],
+            "colour mask, hue 25, range 60, softness 30, "
+            "above 5% saturation, target light 70"))
+        self.assertAlmostEqual(
+            float(out[0, 0].max()) ** (1.0 / _ENCODE_GAMMA), 0.70,
+            places=2)
+
+    def test_a_pixel_outside_the_wedge_is_untouched(self):
+        from development_engine import _apply_global
+
+        patch = np.full((1, 1, 3), (0.1, 0.2, 0.8), np.float32)   # blue
+        out = _apply_global(patch, self.masked(
+            [{"op": "uniformity.hue", "value": 100.0}],
+            "colour mask, hue 25, range 30, softness 10, "
+            "above 5% saturation"))
+        self.assertTrue(np.allclose(out, patch, atol=1e-3))
+
+
 class BrushMaskWeightTests(unittest.TestCase):
     """Ink where the hand painted, nothing where it did not."""
 

@@ -42,3 +42,26 @@ def overlay_png(image_path: str | Path, shape: str,
     out = io.BytesIO()
     Image.fromarray(sheet, "RGBA").save(out, "PNG")
     return out.getvalue()
+
+
+def range_png(image_path: str | Path, shape: str,
+              value: dict[str, Any], edge: int = 1100) -> bytes:
+    """The selection's own view: everything outside it drained of colour.
+
+    The way a feather is actually judged -- not a tint on top, but the
+    picture itself holding colour only where the wedge holds it, so the
+    edge of the selection is the edge of the colour.
+    """
+    with Image.open(str(image_path)) as opened:
+        picture = opened.convert("RGB")
+        picture.thumbnail((edge, edge), Image.Resampling.LANCZOS)
+    rgb = np.asarray(picture, dtype=np.float32) / 255.0
+    weights = np.clip(
+        mask_weights(rgb, str(shape), dict(value)), 0.0, 1.0)[..., None]
+    grey = rgb @ np.asarray([0.2126, 0.7152, 0.0722], dtype=np.float32)
+    drained = np.repeat(grey[..., None] * 0.55 + 0.12, 3, axis=2)
+    shown = rgb * weights + drained * (1.0 - weights)
+    sheet = (np.clip(shown, 0.0, 1.0) * 255).astype(np.uint8)
+    out = io.BytesIO()
+    Image.fromarray(sheet, "RGB").save(out, "PNG")
+    return out.getvalue()

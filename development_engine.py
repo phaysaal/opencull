@@ -410,7 +410,12 @@ def _apply_global(rgb: np.ndarray, operations: list[dict[str, Any]],
             opacity = float(value.get("opacity", 1.0))
             blend = np.clip(mask * opacity, 0, 1)[..., None]
             for effect in value.get("effects", []):
-                adjusted = _apply_global(result, [effect])
+                effect_name = str(effect.get("op", "")) if isinstance(
+                    effect, dict) else ""
+                if effect_name.startswith("uniformity."):
+                    adjusted = _uniformity(result, effect, value)
+                else:
+                    adjusted = _apply_global(result, [effect])
                 result = result * (1 - blend) + adjusted * blend
             if progress is not None:
                 progress(done, total, _named(item))
@@ -536,6 +541,8 @@ def _apply_global(rgb: np.ndarray, operations: list[dict[str, Any]],
             weight = min(max(value / 100.0, 0.0), 1.0) * DENOISE_COLOR_STRENGTH
             result = lum + chroma + (
                 _blur(chroma, DENOISE_RADIUS * detail_scale) - chroma) * weight
+        elif op == "detail.clean_colour":
+            result = _clean_colour(result, value, detail_scale)
         elif op == "levels.midpoint":
             # The levels midpoint is a gamma about the middle of the scale.
             if value > 0:
@@ -832,10 +839,154 @@ def _spatial_mask(rgb: np.ndarray, shape: str, value: dict[str, Any]) -> np.ndar
         if floor > 0:
             gate = np.clip(saturation / max(floor, 1e-6), 0.0, 1.0)
             weight = weight * (gate * gate * (3.0 - 2.0 * gate))
+        # The wedge's other walls, each a feathered ramp rather than a
+        # cliff: a ceiling on saturation (pastels without the neon), and
+        # a floor and ceiling on brightness (the sky without the sea).
+        # All default wide open, so a mask that never asked is unmoved.
+        ceiling = min(max(stated("below", 100.0), 0.0), 100.0) / 100.0
+        lit = min(max(stated("brighter than", 0.0), 0.0), 100.0) / 100.0
+        dim = min(max(stated("darker than", 100.0), 0.0), 100.0) / 100.0
+        ramp = 0.05 + soft / 200.0
+        if ceiling < 1.0:
+            gate = np.clip((ceiling - saturation) / ramp + 0.5, 0.0, 1.0)
+            weight = weight * (gate * gate * (3.0 - 2.0 * gate))
+        if lit > 0.0 or dim < 1.0:
+            shown = np.clip(
+                np.power(np.maximum(mx, 0.0), 1.0 / _ENCODE_GAMMA), 0.0, 1.0)
+            if lit > 0.0:
+                gate = np.clip((shown - lit) / ramp + 0.5, 0.0, 1.0)
+                weight = weight * (gate * gate * (3.0 - 2.0 * gate))
+            if dim < 1.0:
+                gate = np.clip((dim - shown) / ramp + 0.5, 0.0, 1.0)
+                weight = weight * (gate * gate * (3.0 - 2.0 * gate))
         if "invert" in anchor or "outside" in anchor or "except" in anchor:
             return (1.0 - weight).astype(np.float32)
         return weight.astype(np.float32)
     return _hue_mask(rgb, anchor)
+
+
+def _box_mean(plane: np.ndarray, radius: int) -> np.ndarray:
+    """A box average by integral image: any radius, one pass."""
+    height, width = plane.shape
+    integral = np.zeros((height + 1, width + 1), np.float64)
+    integral[1:, 1:] = np.cumsum(np.cumsum(plane, axis=0), axis=1)
+    y0 = np.clip(np.arange(height) - radius, 0, height)
+    y1 = np.clip(np.arange(height) + radius + 1, 0, height)
+    x0 = np.clip(np.arange(width) - radius, 0, width)
+    x1 = np.clip(np.arange(width) + radius + 1, 0, width)
+    area = (y1 - y0)[:, None] * (x1 - x0)[None, :]
+    summed = (integral[y1][:, x1] - integral[y0][:, x1]
+              - integral[y1][:, x0] + integral[y0][:, x0])
+    return (summed / area).astype(np.float32)
+
+
+def _clean_colour(rgb: np.ndarray, strength: float,
+                  detail_scale: float) -> np.ndarray:
+    """Colour cleaned by what the green channel knows.
+
+    Phase One's old moiré patent, done the modern fast way: red and
+    blue are each rebuilt as a locally-linear function of green (a
+    guided filter with green as the guide), so colour speckle and
+    false-colour shimmer -- places where red or blue wander while
+    green holds still -- are averaged away, while every edge green
+    knows about survives untouched. Green itself, the luminance
+    anchor, is never moved.
+    """
+    k = min(max(float(strength), 0.0), 100.0) / 100.0
+    if k <= 0.0:
+        return rgb
+    height, width = rgb.shape[:2]
+    radius = max(2, int(round(min(height, width) * 0.008 * detail_scale)))
+    guide = rgb[..., 1].astype(np.float32)
+    mean_guide = _box_mean(guide, radius)
+    variance = _box_mean(guide * guide, radius) - mean_guide * mean_guide
+    eps = 4e-4   # how strong an edge must be before it is kept
+    cleaned = rgb.copy()
+    for channel in (0, 2):
+        plane = rgb[..., channel].astype(np.float32)
+        mean_plane = _box_mean(plane, radius)
+        covariance = _box_mean(guide * plane, radius) \
+            - mean_guide * mean_plane
+        slope = covariance / (variance + eps)
+        offset = mean_plane - slope * mean_guide
+        smoothed = _box_mean(slope, radius) * guide \
+            + _box_mean(offset, radius)
+        cleaned[..., channel] = plane + (smoothed - plane) * k
+    return np.clip(cleaned, 0.0, None).astype(np.float32)
+
+
+def _uniformity(rgb: np.ndarray, effect: dict[str, Any],
+                value: dict[str, Any]) -> np.ndarray:
+    """Pull every pixel's hue, colour or light toward the mask's own aim.
+
+    The evener: skin that wanders between red and yellow, a sky that
+    shifts across a gradient -- each pixel walks part of the way toward
+    one chosen colour, and the walk is gated by the mask outside, so
+    only the wedge's inhabitants move. The aim rides in the anchor
+    sentence ("target saturation 55") where the eyedropper wrote it;
+    without one, the wedge's own middle serves.
+    """
+    anchor = str(value.get("anchor") or "").casefold()
+
+    def stated(name: str, default: float) -> float:
+        found = re.search(rf"(?i)\b{name}\s*(-?\d+(?:\.\d+)?)", anchor)
+        return float(found.group(1)) if found else default
+
+    k = min(max(float(effect.get("value", 0.0) or 0.0), 0.0), 100.0) / 100.0
+    if k <= 0.0:
+        return rgb
+    which = str(effect.get("op", "")).split(".", 1)[-1]
+    r, g, b = [np.clip(rgb[..., i], 0, None) for i in range(3)]
+    mx = np.maximum.reduce([r, g, b])
+    mn = np.minimum.reduce([r, g, b])
+    delta = mx - mn
+    if which == "hue":
+        hue = np.zeros_like(mx)
+        nonzero = delta > 1e-6
+        red = (mx == r) & nonzero
+        green = (mx == g) & nonzero
+        blue = (mx == b) & nonzero
+        hue[red] = ((g[red] - b[red]) / delta[red]) % 6
+        hue[green] = (b[green] - r[green]) / delta[green] + 2
+        hue[blue] = (r[blue] - g[blue]) / delta[blue] + 4
+        hue *= 60
+        aim = stated("hue", 0.0) % 360.0
+        walked = (hue + (((aim - hue) + 180.0) % 360.0 - 180.0) * k) % 360.0
+        # The same brightness and chroma, rebuilt on the walked hue.
+        sixth = (walked / 60.0) % 6.0
+        x = delta * (1.0 - np.abs(sixth % 2.0 - 1.0))
+        zeros = np.zeros_like(delta)
+        band = (np.floor(sixth).astype(np.int32) % 6)[..., None]
+        highs = np.select(
+            [band == 0, band == 1, band == 2, band == 3, band == 4],
+            [np.stack([delta, x, zeros], -1), np.stack([x, delta, zeros], -1),
+             np.stack([zeros, delta, x], -1), np.stack([zeros, x, delta], -1),
+             np.stack([x, zeros, delta], -1)],
+            np.stack([delta, zeros, x], -1))
+        return (highs + mn[..., None]).astype(np.float32)
+    if which == "saturation":
+        floor = stated("above", 10.0)
+        ceiling = stated("below", 100.0)
+        aim = min(max(stated(
+            "target saturation", (floor + ceiling) / 2.0), 0.0), 100.0) / 100.0
+        saturation = np.where(mx > 1e-6, delta / np.maximum(mx, 1e-6), 0.0)
+        scale = np.where(
+            saturation > 1e-6,
+            (saturation + (aim - saturation) * k)
+            / np.maximum(saturation, 1e-6), 1.0)
+        walked = mx[..., None] + (rgb - mx[..., None]) * scale[..., None]
+        return np.clip(walked, 0.0, None).astype(np.float32)
+    if which == "lightness":
+        lit = stated("brighter than", 0.0)
+        dim = stated("darker than", 100.0)
+        aim = min(max(stated(
+            "target light", (lit + dim) / 2.0), 0.0), 100.0) / 100.0
+        shown = np.power(np.maximum(mx, 1e-6), 1.0 / _ENCODE_GAMMA)
+        walked = shown + (aim - shown) * k
+        scale = np.power(np.clip(walked, 0.0, None), _ENCODE_GAMMA) \
+            / np.maximum(mx, 1e-6)
+        return np.clip(rgb * scale[..., None], 0.0, None).astype(np.float32)
+    return rgb
 
 
 def mask_weights(rgb: np.ndarray, shape: str, value: dict[str, Any]) -> np.ndarray:

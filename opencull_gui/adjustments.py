@@ -42,7 +42,8 @@ SECTIONS = (
               "tone.highlight", "tone.shadow", "tone.white", "tone.black")),
     ("Levels", ("levels.black_input", "levels.white_input", "levels.midpoint")),
     ("Colour", ("color.temperature", "color.tint", "color.saturation")),
-    ("Detail", ("detail.clarity", "detail.structure", "detail.dehaze")),
+    ("Detail", ("detail.clarity", "detail.structure", "detail.dehaze",
+                "detail.clean_colour")),
     ("Finish", ("finish.vignette",)),
 )
 
@@ -63,6 +64,7 @@ LABELS = {
     "detail.clarity": "Clarity",
     "detail.structure": "Structure",
     "detail.dehaze": "Dehaze",
+    "detail.clean_colour": "Clean colour",
     "finish.vignette": "Vignette",
 }
 
@@ -261,6 +263,15 @@ def _parse_anchor(shape: str, anchor: str) -> dict[str, Any]:
         found["range"] = stated("range", 30.0)
         found["softness"] = stated("softness", 20.0)
         found["sat_floor"] = stated("above", 10.0)
+        found["sat_ceiling"] = stated("below", 100.0)
+        found["light_floor"] = stated("brighter than", 0.0)
+        found["light_ceiling"] = stated("darker than", 100.0)
+        aim_sat = stated("target saturation", -1.0)
+        aim_light = stated("target light", -1.0)
+        if aim_sat >= 0:
+            found["aim_sat"] = aim_sat
+        if aim_light >= 0:
+            found["aim_light"] = aim_light
     return found
 
 
@@ -292,6 +303,20 @@ def _build_anchor(shape: str, geometry: dict[str, Any]) -> str:
         parts.append(f"softness {float(geometry.get('softness', 20)):.0f}")
         parts.append(f"above {float(geometry.get('sat_floor', 10)):.0f}% "
                      "saturation")
+        ceiling = float(geometry.get("sat_ceiling", 100))
+        if ceiling < 100:
+            parts.append(f"below {ceiling:.0f}% saturation")
+        lit = float(geometry.get("light_floor", 0))
+        if lit > 0:
+            parts.append(f"brighter than {lit:.0f}%")
+        dim = float(geometry.get("light_ceiling", 100))
+        if dim < 100:
+            parts.append(f"darker than {dim:.0f}%")
+        if geometry.get("aim_sat") is not None:
+            parts.append(
+                f"target saturation {float(geometry['aim_sat']):.0f}")
+        if geometry.get("aim_light") is not None:
+            parts.append(f"target light {float(geometry['aim_light']):.0f}")
     if geometry.get("inverted"):
         parts.append("inverted")
     return ", ".join(parts)
@@ -688,12 +713,20 @@ def apply(recipe: dict[str, Any], changes: dict[str, Any]) -> dict[str, Any]:
                 if not isinstance(item, dict):
                     continue
                 op = str(item.get("op", ""))
-                if op not in RANGES or any(
-                        isinstance(effect, dict)
-                        and str(effect.get("op")) == op
-                        for effect in value.get("effects", []) or []):
+                if op not in RANGES:
                     continue
                 low, high, unit = RANGES[op]
+                already = next(
+                    (effect for effect in value.get("effects", []) or []
+                     if isinstance(effect, dict)
+                     and str(effect.get("op")) == op), None)
+                if already is not None:
+                    # Asking again moves the same effect: the change set
+                    # carries the latest value, and a live re-application
+                    # must land it rather than shrug.
+                    already["value"] = max(
+                        low, min(high, float(item.get("value", 0.0))))
+                    continue
                 value.setdefault("effects", []).append({
                     "op": op, "unit": unit, "mode": "delta",
                     "value": max(low, min(high,

@@ -1727,11 +1727,16 @@ class FineTunePage(QWidget):
         hue = round(hue * 60) % 360
         asked = self._picking_for
         self._end_pick()
-        self._mask_changed(asked, {"geometry": {"hue": float(hue)}})
+        # The pick is also the aim: the eveners walk toward exactly the
+        # colour the hand chose, not merely the wedge's middle.
+        self._mask_changed(asked, {"geometry": {
+            "hue": float(hue),
+            "aim_sat": round(saturation * 100.0),
+            "aim_light": round(brightest * 100.0)}})
         self._show_controls()
         self._report(
-            f"Picked hue {hue}° -- the layer now selects that colour.",
-            "ok")
+            f"Picked hue {hue}° -- the layer now selects that colour, "
+            "and the eveners aim at it.", "ok")
 
     def _mask_changed(self, key: str, change: dict) -> None:
         self._remember(f"{key} shape")
@@ -1740,6 +1745,19 @@ class FineTunePage(QWidget):
             held.setdefault("geometry", {}).update(change["geometry"])
         if "enabled" in change:
             held["enabled"] = change["enabled"]
+        if "map" in change:
+            # The strokes must survive a refold from the pristine
+            # recipe, not just this render's live application.
+            held["map"] = change["map"]
+        for effect in change.get("add_effects", []) or []:
+            placed = held.setdefault("add_effects", [])
+            already = next(
+                (item for item in placed
+                 if item.get("op") == effect.get("op")), None)
+            if already is not None:
+                already["value"] = effect.get("value")
+            else:
+                placed.append(dict(effect))
         # The recipe the overlay reads must be the recipe being rendered.
         self.recipe = adjustments.apply(self.recipe, {key: change})
         self.changes[key] = held
@@ -1834,9 +1852,10 @@ class FineTunePage(QWidget):
         self._show_controls()
         self.render()
 
-    def _show_mask(self, key: str, on: bool) -> None:
+    def _show_mask(self, key: str, on: bool, style: str = "tint") -> None:
         """Tint the proof where one mask lands, from the engine's weights."""
         self._overlay_for = key if on else ""
+        self._overlay_style = style if on else "tint"
         if on:
             self._paint_overlay()
         elif self._plain_pixmap is not None:
@@ -1866,6 +1885,15 @@ class FineTunePage(QWidget):
         try:
             reference = self.workspace._as_shot_preview(
                 self.current, PROOF_EDGE)
+            if getattr(self, "_overlay_style", "tint") == "range":
+                # The feather judged in the picture's own colours:
+                # outside the selection drains to grey.
+                png = maskpaint.range_png(
+                    reference, mask["shape"], values[ordinal - 1])
+                shown = QPixmap()
+                shown.loadFromData(png)
+                self.frame.set_source(shown)
+                return
             png = maskpaint.overlay_png(
                 reference, mask["shape"], values[ordinal - 1])
         except Exception as exc:                     # noqa: BLE001 - shown
@@ -2188,6 +2216,20 @@ class FineTunePage(QWidget):
         show.toggled.connect(
             lambda on, key=mask["id"]: self._show_mask(key, on))
         row.addWidget(show)
+        ranged = QPushButton("Range")
+        ranged.setObjectName("ghost")
+        ranged.setFont(theme.body(8))
+        ranged.setCheckable(True)
+        ranged.setChecked(self._overlay_for == mask["id"]
+                          and getattr(self, "_overlay_style", "") == "range")
+        ranged.setCursor(Qt.CursorShape.PointingHandCursor)
+        ranged.setToolTip(tooltip(
+            "See the selection itself: everything outside this mask "
+            "drains to grey, so the feather's edge is the colour's "
+            "edge. The honest way to tune Range and Softness."))
+        ranged.toggled.connect(
+            lambda on, key=mask["id"]: self._show_mask(key, on, "range"))
+        row.addWidget(ranged)
         holder = QWidget()
         holder.setLayout(row)
         holder.layout().setContentsMargins(0, 0, 0, 0)
@@ -2308,17 +2350,50 @@ class FineTunePage(QWidget):
                 (2 / 6, (70, 190, 80)), (3 / 6, (60, 190, 200)),
                 (4 / 6, (70, 90, 210)), (5 / 6, (200, 70, 200)),
                 (1.0, (210, 60, 60))]
+            walls = {"hue": 25.0, "range": 30.0, "softness": 20.0,
+                     "sat_floor": 10.0, "sat_ceiling": 100.0,
+                     "light_floor": 0.0, "light_ceiling": 100.0}
             for key, label, low, high in (
                     ("hue", "Hue", 0.0, 360.0),
                     ("range", "Range", 5.0, 120.0),
                     ("softness", "Softness", 0.0, 90.0),
-                    ("sat_floor", "Sat floor", 0.0, 80.0)):
+                    ("sat_floor", "Sat floor", 0.0, 80.0),
+                    ("sat_ceiling", "Sat ceiling", 20.0, 100.0),
+                    ("light_floor", "Lit floor", 0.0, 100.0),
+                    ("light_ceiling", "Lit ceiling", 0.0, 100.0)):
                 slider = GeometrySlider(
-                    key, label, low, high, float(geometry.get(key, 20)),
+                    key, label, low, high,
+                    float(geometry.get(key, walls.get(key, 20.0))),
                     ramp=wheel if key == "hue" else None)
                 slider.changed.connect(
                     lambda k, v, m=key_prefix: self._mask_changed(
                         m, {"geometry": {k: v}}))
+                self.body.addWidget(slider)
+            # The eveners: every pixel the wedge holds walks part of the
+            # way toward one colour -- the picked one, or the wedge's
+            # own middle. Skin that wanders, skies that shift; this is
+            # the tool that settles them.
+            evens = QLabel("EVEN OUT")
+            evens.setObjectName("axisName")
+            evens.setFont(theme.display(7))
+            self.body.addWidget(evens)
+            strengths = {str(item.get("op", "")): float(item.get("value", 0))
+                         for item in mask.get("effects", [])}
+            for even_op, label in (
+                    ("uniformity.hue", "Even hue"),
+                    ("uniformity.saturation", "Even colour"),
+                    ("uniformity.lightness", "Even light")):
+                slider = GeometrySlider(
+                    even_op, label, 0.0, 100.0,
+                    strengths.get(even_op, 0.0))
+                slider.setToolTip(tooltip(
+                    "How far every colour in this wedge walks toward the "
+                    "picked one. Some is an evener; all of it looks "
+                    "plastic. Pick the colour first so the walk has "
+                    "somewhere to go."))
+                slider.changed.connect(
+                    lambda k, v, m=key_prefix: self._mask_changed(
+                        m, {"add_effects": [{"op": k, "value": float(v)}]}))
                 self.body.addWidget(slider)
             inverted = QCheckBox("Inverted — everything except it")
             inverted.setChecked(bool(geometry.get("inverted")))

@@ -36,6 +36,12 @@ RANGES = {
     "detail.dehaze": (-100.0, 100.0, "percent"),
     "finish.vignette": (-100.0, 100.0, "percent"),
     "color.neutralize": (0.0, 100.0, "percent"),
+    "detail.clean_colour": (0.0, 100.0, "percent"),
+    # The eveners: how far each pixel in a colour mask's wedge walks
+    # toward the wedge's own aim. Only meaningful inside a mask.
+    "uniformity.hue": (0.0, 100.0, "percent"),
+    "uniformity.saturation": (0.0, 100.0, "percent"),
+    "uniformity.lightness": (0.0, 100.0, "percent"),
 }
 
 # Infrared work needs two things no ordinary photograph does: a white
