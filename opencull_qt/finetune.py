@@ -338,6 +338,140 @@ class Histogram(QWidget):
         painter.end()
 
 
+class CurvePanel(QWidget):
+    """The classic RGB tone curve, drawn with the renderer's own math.
+
+    The line on the panel is the engine's LUT for these points -- the
+    same monotone interpolation the render runs -- so what is drawn is
+    what develops. Drag a point; click the line to add one; right-click
+    a middle point to remove it. The endpoints move only up and down.
+    """
+
+    changed = Signal(list)   # the control points, 0..255
+
+    HEIGHT = 170
+    GRAB = 12.0
+
+    def __init__(self, points: list | None = None, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(self.HEIGHT)
+        self.setCursor(Qt.CursorShape.CrossCursor)
+        self.points: list[list[float]] = [
+            [float(x), float(y)] for x, y in (points or [[0, 0], [255, 255]])]
+        self._dragging: int | None = None
+
+    def is_identity(self) -> bool:
+        return self.points == [[0.0, 0.0], [255.0, 255.0]]
+
+    # --- panel space <-> curve space --------------------------------------
+
+    def _rect(self):
+        from PySide6.QtCore import QRectF
+
+        return QRectF(6, 6, self.width() - 12, self.height() - 12)
+
+    def _to_panel(self, x: float, y: float):
+        from PySide6.QtCore import QPointF
+
+        area = self._rect()
+        return QPointF(area.left() + area.width() * x / 255.0,
+                       area.bottom() - area.height() * y / 255.0)
+
+    def _to_curve(self, pos) -> tuple[float, float]:
+        area = self._rect()
+        x = (pos.x() - area.left()) / max(area.width(), 1) * 255.0
+        y = (area.bottom() - pos.y()) / max(area.height(), 1) * 255.0
+        return max(0.0, min(255.0, x)), max(0.0, min(255.0, y))
+
+    # --- the hand ----------------------------------------------------------
+
+    def _near(self, pos) -> int | None:
+        for index, (x, y) in enumerate(self.points):
+            spot = self._to_panel(x, y)
+            if (abs(spot.x() - pos.x()) <= self.GRAB
+                    and abs(spot.y() - pos.y()) <= self.GRAB):
+                return index
+        return None
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        index = self._near(event.position())
+        if event.button() == Qt.MouseButton.RightButton:
+            if index is not None and 0 < index < len(self.points) - 1:
+                del self.points[index]
+                self.update()
+                self.changed.emit([list(p) for p in self.points])
+            return
+        if index is None:
+            x, y = self._to_curve(event.position())
+            self.points.append([x, y])
+            self.points.sort(key=lambda p: p[0])
+            index = next(i for i, p in enumerate(self.points)
+                         if p[0] == x and p[1] == y)
+        self._dragging = index
+        self.update()
+
+    def mouseMoveEvent(self, event) -> None:   # noqa: N802 - Qt naming
+        if self._dragging is None:
+            return
+        x, y = self._to_curve(event.position())
+        index = self._dragging
+        if index == 0:
+            x = 0.0
+        elif index == len(self.points) - 1:
+            x = 255.0
+        else:
+            # A point stays between its neighbours: the curve is a
+            # function, and the engine's interpolation demands it.
+            x = max(self.points[index - 1][0] + 1.0,
+                    min(self.points[index + 1][0] - 1.0, x))
+        self.points[index] = [x, y]
+        self.update()
+        self.changed.emit([list(p) for p in self.points])
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        self._dragging = None
+
+    # --- the paint ---------------------------------------------------------
+
+    def paintEvent(self, event) -> None:       # noqa: N802 - Qt naming
+        from PySide6.QtCore import QPointF
+        from PySide6.QtGui import QColor, QPainter, QPen
+
+        from development_engine import _curve_lut
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(QColor(theme.EDGE_SOFT), 1))
+        painter.setBrush(QColor(theme.INK))
+        painter.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), 8, 8)
+        area = self._rect()
+        painter.setPen(QPen(QColor(theme.EDGE_SOFT), 1))
+        for quarter in (0.25, 0.5, 0.75):
+            x = area.left() + area.width() * quarter
+            y = area.top() + area.height() * quarter
+            painter.drawLine(int(x), int(area.top()), int(x),
+                             int(area.bottom()))
+            painter.drawLine(int(area.left()), int(y),
+                             int(area.right()), int(y))
+        # The identity diagonal, faint: what "no curve" would do.
+        painter.setPen(QPen(QColor(theme.FAINT), 1, Qt.PenStyle.DotLine))
+        painter.drawLine(self._to_panel(0, 0).toPoint(),
+                         self._to_panel(255, 255).toPoint())
+        # The curve itself, from the engine's own LUT.
+        lut = _curve_lut(self.points)
+        painter.setPen(QPen(QColor(theme.SAFELIGHT), 2))
+        line = [self._to_panel(i, float(lut[i]) * 255.0)
+                for i in range(256)]
+        painter.drawPolyline([QPointF(p) for p in line])
+        # The hands.
+        for x, y in self.points:
+            spot = self._to_panel(x, y)
+            painter.setPen(QPen(QColor(theme.INK), 1))
+            painter.setBrush(QColor(theme.PAPER))
+            painter.drawEllipse(spot, 4.5, 4.5)
+        painter.end()
+
+
 class FineTunePage(QWidget):
     """The operations behind one treatment, and the proof of moving them."""
 
@@ -773,17 +907,20 @@ class FineTunePage(QWidget):
     def _add_mask(self) -> None:
         shapes = ["radial — around a point",
                   "linear — from an edge",
-                  "luma — a band of brightness"]
+                  "luma — a band of brightness",
+                  "color — a range of colour"]
         chosen, agreed = QInputDialog.getItem(
             self, "Add a mask", "What is this mask the answer to?",
             shapes, 0, False)
         if not agreed:
             return
         shape = chosen.split(" ", 1)[0]
-        made = {"shape": shape,
-                "geometry": {"centre_x": 50.0, "centre_y": 50.0,
-                             "radius": 30.0, "feather": 100,
-                             "reach": 40.0},
+        geometry = {"centre_x": 50.0, "centre_y": 50.0,
+                    "radius": 30.0, "feather": 100, "reach": 40.0}
+        if shape == "color":
+            geometry = {"hue": 25.0, "range": 30.0, "softness": 20.0,
+                        "sat_floor": 10.0, "feather": 100, "opacity": 100}
+        made = {"shape": shape, "geometry": geometry,
                 "effects": [{"op": "tone.exposure", "value": 0.0}]}
         self.changes.setdefault("+mask", []).append(made)
         self.recipe = adjustments.apply(self.recipe, {"+mask": [made]})
@@ -906,6 +1043,33 @@ class FineTunePage(QWidget):
             self.current) if self.current else {}
         if on_mask:
             self._show_geometry(self.layer)
+        else:
+            # The tone curve belongs to the whole frame, so it lives on
+            # the base layer, above the sections. Seeded from the curve
+            # already drawn -- pending change first, then the recipe's own
+            # operation -- so reopening the frame reopens the same curve.
+            pending = self.changes.get("curve")
+            if isinstance(pending, dict) and pending.get("points"):
+                points = pending["points"]
+            else:
+                held = next(
+                    (item for item in self.recipe.get("operations", []) or []
+                     if isinstance(item, dict)
+                     and item.get("op") == "tone.curve"
+                     and isinstance(item.get("value"), dict)),
+                    None)
+                points = (held["value"].get("points")
+                          if held is not None else None)
+            self.body.addWidget(self._heading("Curve", ""))
+            curve = CurvePanel(points)
+            curve.setToolTip(tooltip(
+                "The classic RGB tone curve, on top of everything else "
+                "the treatment does. Drag a point; click the line to add "
+                "one; right-click a middle point to remove it. The line "
+                "is the renderer's own interpolation -- what is drawn is "
+                "what develops."))
+            curve.changed.connect(self._curve_changed)
+            self.body.addWidget(curve)
         # Every control of every section, always. The first shape folded
         # the unused ones behind a per-section count, and the fold read
         # as absence: the photographer this page is for looked at it and
@@ -973,6 +1137,14 @@ class FineTunePage(QWidget):
             self.render()
             return
         self.changes.setdefault(key, {}).update(change)
+        self.render()
+
+    def _curve_changed(self, points: list) -> None:
+        identity = points == [[0.0, 0.0], [255.0, 255.0]]
+        if identity:
+            self.changes.pop("curve", None)
+        else:
+            self.changes["curve"] = {"points": points}
         self.render()
 
     def _ask_zones(self) -> None:
@@ -1061,6 +1233,27 @@ class FineTunePage(QWidget):
                 lambda text, m=key_prefix: self._mask_changed(
                     m, {"geometry": {"band": text}}))
             self.body.addWidget(band)
+        elif mask["shape"] == "color":
+            # Selected by what the pixels are, not where they sit: a hue
+            # around a centre, softly, gated so near-grey stays out.
+            for key, label, low, high in (
+                    ("hue", "Hue", 0.0, 360.0),
+                    ("range", "Range", 5.0, 120.0),
+                    ("softness", "Softness", 0.0, 90.0),
+                    ("sat_floor", "Sat floor", 0.0, 80.0)):
+                slider = GeometrySlider(
+                    key, label, low, high, float(geometry.get(key, 20)))
+                slider.changed.connect(
+                    lambda k, v, m=key_prefix: self._mask_changed(
+                        m, {"geometry": {k: v}}))
+                self.body.addWidget(slider)
+            inverted = QCheckBox("Inverted — everything except it")
+            inverted.setChecked(bool(geometry.get("inverted")))
+            inverted.setFont(theme.body(9))
+            inverted.toggled.connect(
+                lambda on, m=key_prefix: self._mask_changed(
+                    m, {"geometry": {"inverted": bool(on)}}))
+            self.body.addWidget(inverted)
 
     def _heading(self, title: str, resettable: str) -> QWidget:
         """A section's name -- and, where the section has been moved,

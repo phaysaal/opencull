@@ -90,6 +90,33 @@ class FineTunePageTests(unittest.TestCase):
     def test_only_frames_with_a_treatment_are_offered(self):
         self.assertEqual(self.page().photos, [NAMES[0]])
 
+    def test_a_drawn_curve_lands_in_the_changes_and_identity_clears_it(self):
+        page = self.page()
+        page._curve_changed([[0.0, 0.0], [128.0, 190.0], [255.0, 255.0]])
+        self.assertEqual(page.changes["curve"]["points"][1],
+                         [128.0, 190.0])
+        applied = adjustments.apply(page.recipe, page.changes)
+        self.assertIn("tone.curve",
+                      [item["op"] for item in applied["operations"]])
+        page._curve_changed([[0.0, 0.0], [255.0, 255.0]])
+        self.assertNotIn("curve", page.changes)
+
+    def test_a_colour_mask_layer_offers_its_own_geometry(self):
+        page = self.page()
+        made = {"shape": "color", "geometry": {
+            "hue": 25.0, "range": 30.0, "softness": 20.0,
+            "sat_floor": 10.0, "feather": 100, "opacity": 100},
+            "effects": [{"op": "tone.exposure", "value": 0.0}]}
+        page.changes.setdefault("+mask", []).append(made)
+        page.recipe = adjustments.apply(page.recipe, {"+mask": [made]})
+        placed = adjustments.masks(page.recipe)
+        self.assertEqual(placed[-1]["shape"], "color")
+        page.layer = len(placed)
+        page._show_controls()          # must build the colour geometry rows
+        told = self.text(page)
+        self.assertIn("Hue", told)
+        self.assertIn("Softness", told)
+
     def test_the_histogram_reads_the_arriving_render(self):
         from PySide6.QtGui import QColor, QImage, QPixmap
 
@@ -362,6 +389,57 @@ class HistogramTests(unittest.TestCase):
         canvas.fill(0)
         widget.resize(200, 88)
         widget.render(canvas)
+
+
+class CurvePanelTests(unittest.TestCase):
+    """The curve the hand draws is the curve the renderer runs."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.application = QApplication.instance() or QApplication([])
+
+    def panel(self, points=None):
+        from opencull_qt.finetune import CurvePanel
+
+        made = CurvePanel(points)
+        made.resize(300, 170)
+        return made
+
+    def test_panel_and_curve_space_round_trip(self):
+        panel = self.panel()
+        for x, y in ((0, 0), (128, 128), (255, 255), (64, 200)):
+            spot = panel._to_panel(x, y)
+            back = panel._to_curve(spot)
+            self.assertAlmostEqual(back[0], x, delta=1)
+            self.assertAlmostEqual(back[1], y, delta=1)
+
+    def test_a_middle_point_stays_between_its_neighbours(self):
+        panel = self.panel([[0, 0], [128, 128], [255, 255]])
+        panel._dragging = 1
+
+        class Event:
+            def position(self_inner):
+                return panel._to_panel(250, 100)   # dragged past the end
+
+        panel.mouseMoveEvent(Event())
+        self.assertLess(panel.points[1][0], 255.0)
+        self.assertGreater(panel.points[1][0], 0.0)
+
+    def test_endpoints_move_only_up_and_down(self):
+        panel = self.panel()
+        panel._dragging = 0
+
+        class Event:
+            def position(self_inner):
+                return panel._to_panel(90, 40)
+
+        panel.mouseMoveEvent(Event())
+        self.assertEqual(panel.points[0][0], 0.0)
+        self.assertAlmostEqual(panel.points[0][1], 40, delta=2)
+
+    def test_identity_reads_as_identity(self):
+        self.assertTrue(self.panel().is_identity())
+        self.assertFalse(self.panel([[0, 10], [255, 255]]).is_identity())
 
 
 class ZoneSliderTests(unittest.TestCase):

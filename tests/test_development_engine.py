@@ -7,6 +7,7 @@ import tifffile
 from PIL import Image
 
 from development_engine import (
+    _curve_lut,
     DevelopmentError,
     _apply_global,
     apply_adjustment_draft,
@@ -243,6 +244,78 @@ class TemperatureTests(unittest.TestCase):
                 {"op": "color.temperature", "value": value, "mode": mode}])
             self.assertTrue(np.isfinite(out).all(), (value, mode))
             self.assertGreaterEqual(float(out.min()), 0.0, (value, mode))
+
+
+class CurveTests(unittest.TestCase):
+    """The tone curve: monotone, exact through its points, honest at rest."""
+
+    def grey(self, level=0.30):
+        frame = np.zeros((4, 6, 3), np.float32)
+        frame[...] = level
+        return frame
+
+    def curve(self, points):
+        return [{"op": "tone.curve", "unit": "curve", "mode": "absolute",
+                 "value": {"points": points}, "enabled": True}]
+
+    def test_the_lut_is_monotone_and_passes_through_its_points(self):
+        lut = _curve_lut([[0, 0], [96, 40], [200, 230], [255, 255]])
+        self.assertTrue(np.all(np.diff(lut) >= -1e-6))
+        self.assertAlmostEqual(float(lut[96]) * 255, 40, delta=1)
+        self.assertAlmostEqual(float(lut[200]) * 255, 230, delta=1)
+
+    def test_an_identity_curve_changes_nothing(self):
+        frame = self.grey()
+        out = _apply_global(frame, self.curve([[0, 0], [255, 255]]))
+        self.assertTrue(np.allclose(out, frame, atol=1e-3))
+
+    def test_a_lifting_curve_lifts_and_never_folds(self):
+        out = _apply_global(self.grey(), self.curve(
+            [[0, 0], [128, 200], [255, 255]]))
+        self.assertGreater(float(out.mean()), 0.30)
+        # Steeper input still comes out at least as bright: monotone.
+        brighter = _apply_global(self.grey(0.5), self.curve(
+            [[0, 0], [128, 200], [255, 255]]))
+        self.assertGreaterEqual(float(brighter.mean()),
+                                float(out.mean()) - 1e-4)
+
+
+class ColourMaskTests(unittest.TestCase):
+    """Weights from what the pixels are, gated against the greys."""
+
+    def canvas(self):
+        frame = np.zeros((1, 4, 3), np.float32)
+        frame[0, 0] = (0.8, 0.15, 0.1)   # red-orange
+        frame[0, 1] = (0.1, 0.8, 0.15)   # green
+        frame[0, 2] = (0.5, 0.5, 0.5)    # grey: no honest hue
+        frame[0, 3] = (0.8, 0.45, 0.1)   # orange
+        return frame
+
+    def weights(self, anchor):
+        from development_engine import mask_weights
+
+        return mask_weights(self.canvas(), "color", {"anchor": anchor})[0]
+
+    def test_the_asked_hue_is_selected_and_the_rest_is_not(self):
+        told = self.weights(
+            "colour mask, hue 20, range 40, softness 15, "
+            "above 10% saturation")
+        self.assertGreater(float(told[0]), 0.8)     # red-orange in
+        self.assertGreater(float(told[3]), 0.8)     # orange in
+        self.assertLess(float(told[1]), 0.05)       # green out
+
+    def test_grey_is_out_whatever_the_hue_says(self):
+        told = self.weights(
+            "colour mask, hue 20, range 360, softness 0, "
+            "above 10% saturation")
+        self.assertLess(float(told[2]), 0.05)
+
+    def test_inverted_selects_everything_except_it(self):
+        told = self.weights(
+            "colour mask, hue 20, range 40, softness 15, "
+            "above 10% saturation, inverted")
+        self.assertLess(float(told[0]), 0.2)
+        self.assertGreater(float(told[1]), 0.95)
 
 
 class MidtoneBandTests(unittest.TestCase):

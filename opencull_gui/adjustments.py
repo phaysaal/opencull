@@ -250,6 +250,15 @@ def _parse_anchor(shape: str, anchor: str) -> dict[str, Any]:
         found["band"] = next(
             (band for band in BANDS
              if band.rstrip("s") in text or band in text), "shadows")
+    elif shape == "color":
+        def stated(name: str, default: float) -> float:
+            match = re.search(rf"\b{name}\s*(-?\d+(?:\.\d+)?)", text)
+            return float(match.group(1)) if match else default
+
+        found["hue"] = stated("hue", 0.0) % 360
+        found["range"] = stated("range", 30.0)
+        found["softness"] = stated("softness", 20.0)
+        found["sat_floor"] = stated("above", 10.0)
     return found
 
 
@@ -272,6 +281,13 @@ def _build_anchor(shape: str, geometry: dict[str, Any]) -> str:
     elif shape == "luma":
         band = str(geometry.get("band", "shadows"))
         parts.append(band if band in BANDS else "shadows")
+    elif shape == "color":
+        parts = ["colour mask"]
+        parts.append(f"hue {float(geometry.get('hue', 0)):.0f}")
+        parts.append(f"range {float(geometry.get('range', 30)):.0f}")
+        parts.append(f"softness {float(geometry.get('softness', 20)):.0f}")
+        parts.append(f"above {float(geometry.get('sat_floor', 10)):.0f}% "
+                     "saturation")
     if geometry.get("inverted"):
         parts.append("inverted")
     return ", ".join(parts)
@@ -436,13 +452,42 @@ def apply(recipe: dict[str, Any], changes: dict[str, Any]) -> dict[str, Any]:
                          "enabled": True,
                          "unit": RANGES[op][2], "inserted": True})
 
+    # The curve the photographer drew. One per recipe: drawing again
+    # replaces it, and clearing the change removes nothing the model
+    # asked for, because a model cannot ask for one.
+    curve = changes.get("curve")
+    if isinstance(curve, dict) and isinstance(curve.get("points"), list):
+        points = [[max(0.0, min(255.0, float(x))),
+                   max(0.0, min(255.0, float(y)))]
+                  for x, y in curve["points"]][:16]
+        existing = next(
+            (item for item in result.get("operations", []) or []
+             if isinstance(item, dict) and item.get("op") == "tone.curve"),
+            None)
+        if existing is not None:
+            existing["value"] = {"points": points}
+        else:
+            operations = result.setdefault("operations", [])
+            at = next(
+                (index for index, item in enumerate(operations)
+                 if isinstance(item, dict)
+                 and str(item.get("op", "")).startswith("mask.")),
+                len(operations))
+            operations.insert(at, {
+                "op": "tone.curve", "unit": "curve", "mode": "absolute",
+                "value": {"points": points},
+                "source": "curve drawn by hand", "enabled": True})
+        recorded.append({"id": "tone.curve", "op": "tone.curve",
+                         "asked": 0.0, "set": 0.0, "enabled": True,
+                         "unit": "curve", "inserted": True})
+
     # New masks, appended after everything, which is where the engine
     # blends them anyway.
     for item in changes.get("+mask", []) or []:
         if not isinstance(item, dict):
             continue
         shape = str(item.get("shape", "radial"))
-        if shape not in {"radial", "linear", "luma"}:
+        if shape not in {"radial", "linear", "luma", "color"}:
             shape = "radial"
         geometry = dict(item.get("geometry") or {})
         result.setdefault("operations", []).append({

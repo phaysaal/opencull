@@ -204,3 +204,65 @@ class SpokenTests(unittest.TestCase):
 
     def test_an_empty_box_is_nothing_at_all(self):
         self.assertEqual(adjustments.compile_words("   "), ([], []))
+
+
+class CurveTests(unittest.TestCase):
+    """The drawn curve folds into the recipe as one operation."""
+
+    def test_a_curve_is_inserted_before_the_masks(self):
+        base = recipe()
+        base["operations"].append({
+            "op": "mask.radial", "unit": "mask", "mode": "absolute",
+            "value": {"anchor": "radial gradient at 50%, 50% radius 30%",
+                      "effects": []}})
+        out = adjustments.apply(base, {
+            "curve": {"points": [[0, 0], [128, 190], [255, 255]]}})
+        ops = [item["op"] for item in out["operations"]]
+        self.assertIn("tone.curve", ops)
+        self.assertLess(ops.index("tone.curve"), ops.index("mask.radial"))
+        held = next(item for item in out["operations"]
+                    if item["op"] == "tone.curve")
+        self.assertEqual(held["value"]["points"][1], [128.0, 190.0])
+
+    def test_drawing_again_replaces_rather_than_stacks(self):
+        base = adjustments.apply(recipe(), {
+            "curve": {"points": [[0, 0], [128, 190], [255, 255]]}})
+        again = adjustments.apply(base, {
+            "curve": {"points": [[0, 20], [255, 235]]}})
+        curves = [item for item in again["operations"]
+                  if item["op"] == "tone.curve"]
+        self.assertEqual(len(curves), 1)
+        self.assertEqual(curves[0]["value"]["points"][0], [0.0, 20.0])
+
+    def test_points_are_clamped_to_the_eight_bit_frame(self):
+        out = adjustments.apply(recipe(), {
+            "curve": {"points": [[-40, 300], [512, -9]]}})
+        held = next(item for item in out["operations"]
+                    if item["op"] == "tone.curve")
+        self.assertEqual(held["value"]["points"],
+                         [[0.0, 255.0], [255.0, 0.0]])
+
+
+class ColourMaskTests(unittest.TestCase):
+    """Selected by what the pixels are, spelled like every other mask."""
+
+    def test_the_anchor_carries_the_numbers_and_reads_back(self):
+        out = adjustments.apply(recipe(), {"+mask": [{
+            "shape": "color", "label": "the orange sun",
+            "geometry": {"hue": 25, "range": 40, "softness": 25,
+                         "sat_floor": 12, "opacity": 100, "feather": 100},
+            "effects": [{"op": "tone.exposure", "value": 0.5}]}]})
+        placed = adjustments.masks(out)
+        self.assertEqual(placed[-1]["shape"], "color")
+        told = placed[-1]["geometry"]
+        self.assertEqual((told["hue"], told["range"],
+                          told["softness"], told["sat_floor"]),
+                         (25.0, 40.0, 25.0, 12.0))
+        anchor = out["operations"][-1]["value"]["anchor"]
+        self.assertIn("hue 25", anchor)
+        self.assertIn("above 12% saturation", anchor)
+
+    def test_an_unknown_shape_still_falls_back_to_radial(self):
+        out = adjustments.apply(recipe(), {"+mask": [{
+            "shape": "swirl", "geometry": {}, "effects": []}]})
+        self.assertEqual(adjustments.masks(out)[-1]["shape"], "radial")

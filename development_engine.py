@@ -364,6 +364,21 @@ def _apply_global(rgb: np.ndarray, operations: list[dict[str, Any]],
             if progress is not None:
                 progress(done, total, _named(item))
             continue
+        if op == "tone.curve" and isinstance(value, dict):
+            # The curve is a display-referred instrument: it is drawn
+            # against the picture as shown, so it runs on the encoded
+            # values and the result is decoded back. Identical on all
+            # three channels, the classic RGB curve.
+            points = value.get("points") or []
+            if len(points) >= 2:
+                shown = np.clip(_encoded(np.clip(result, 0.0, None)),
+                                0.0, 1.0)
+                lut = _curve_lut(points)
+                curved = np.interp(shown * 255.0, np.arange(256), lut)
+                result = _decoded(curved.astype(np.float32))
+            if progress is not None:
+                progress(done, total, _named(item))
+            continue
         if op.startswith("mask.") and isinstance(value, dict):
             mask = _spatial_mask(result, op[5:], value)
             opacity = float(value.get("opacity", 1.0))
@@ -577,6 +592,53 @@ def _rotate_hue(rgb: np.ndarray, degrees: float, mask: np.ndarray) -> np.ndarray
     return rgb * (1 - blend) + shifted * blend
 
 
+def _curve_lut(points: list) -> np.ndarray:
+    """A 256-entry tone curve through the given points, monotone.
+
+    Fritsch-Carlson tangents: the interpolant never overshoots between
+    control points, so a curve that looks gentle on the panel cannot
+    fold values back on themselves in the render.
+    """
+    settled = sorted(
+        (float(x), float(y)) for x, y in points
+        if isinstance((x, y), tuple) or True)
+    if not settled or settled[0][0] > 0:
+        settled.insert(0, (0.0, settled[0][1] if settled else 0.0))
+    if settled[-1][0] < 255:
+        settled.append((255.0, settled[-1][1]))
+    xs = np.array([p[0] for p in settled], dtype=np.float64)
+    ys = np.array([p[1] for p in settled], dtype=np.float64)
+    xs, keep = np.unique(xs, return_index=True)
+    ys = ys[keep]
+    if len(xs) == 1:
+        return np.full(256, np.clip(ys[0] / 255.0, 0, 1), dtype=np.float32)
+    h = np.diff(xs)
+    slopes = np.diff(ys) / np.maximum(h, 1e-6)
+    tangents = np.empty(len(xs))
+    tangents[0] = slopes[0]
+    tangents[-1] = slopes[-1]
+    for i in range(1, len(xs) - 1):
+        if slopes[i - 1] * slopes[i] <= 0:
+            tangents[i] = 0.0
+        else:
+            weight = 3 * (h[i - 1] + h[i])
+            tangents[i] = weight / (
+                (2 * h[i] + h[i - 1]) / slopes[i - 1]
+                + (h[i] + 2 * h[i - 1]) / slopes[i])
+    grid = np.arange(256, dtype=np.float64)
+    spans = np.clip(np.searchsorted(xs, grid, side="right") - 1,
+                    0, len(xs) - 2)
+    t = (grid - xs[spans]) / np.maximum(h[spans], 1e-6)
+    t = np.clip(t, 0.0, 1.0)
+    h00 = (1 + 2 * t) * (1 - t) ** 2
+    h10 = t * (1 - t) ** 2
+    h01 = t * t * (3 - 2 * t)
+    h11 = t * t * (t - 1)
+    out = (h00 * ys[spans] + h10 * h[spans] * tangents[spans]
+           + h01 * ys[spans + 1] + h11 * h[spans] * tangents[spans + 1])
+    return np.clip(out / 255.0, 0.0, 1.0).astype(np.float32)
+
+
 def _spatial_mask(rgb: np.ndarray, shape: str, value: dict[str, Any]) -> np.ndarray:
     height, width = rgb.shape[:2]
     yy, xx = np.indices((height, width), dtype=np.float32)
@@ -675,6 +737,47 @@ def _spatial_mask(rgb: np.ndarray, shape: str, value: dict[str, Any]) -> np.ndar
             shown = np.power(np.clip(lum, 0.0, 1.0), 1.0 / _ENCODE_GAMMA)
             return np.clip(1.0 - np.abs(shown - 0.5) * 2.5, 0.0, 1.0)
         return np.clip((1 - lum * 2) if "shadow" in anchor else lum * 2, 0, 1)
+    if shape == "color":
+        # Selected by what the pixels ARE rather than where they sit: a
+        # hue around a centre, softly, gated so near-grey pixels -- which
+        # have no honest hue -- stay out. The numbers ride in the anchor
+        # sentence like every other mask's, so the same carrier serves
+        # the engine, the page and a reader.
+        def stated(name: str, default: float) -> float:
+            found = re.search(
+                rf"(?i)\b{name}\s*(-?\d+(?:\.\d+)?)", anchor)
+            return float(found.group(1)) if found else default
+
+        centre = stated("hue", 0.0) % 360.0
+        core = max(stated("range", 30.0), 1.0) / 2.0
+        soft = max(stated("softness", 20.0), 0.0)
+        floor = min(max(stated("above", 10.0), 0.0), 100.0) / 100.0
+        r, g, b = [np.clip(rgb[..., i], 0, None) for i in range(3)]
+        mx = np.maximum.reduce([r, g, b])
+        mn = np.minimum.reduce([r, g, b])
+        delta = mx - mn
+        hue = np.zeros_like(mx)
+        nonzero = delta > 1e-6
+        red = (mx == r) & nonzero
+        green = (mx == g) & nonzero
+        blue = (mx == b) & nonzero
+        hue[red] = ((g[red] - b[red]) / delta[red]) % 6
+        hue[green] = (b[green] - r[green]) / delta[green] + 2
+        hue[blue] = (r[blue] - g[blue]) / delta[blue] + 4
+        hue *= 60
+        away = np.abs(((hue - centre) + 180.0) % 360.0 - 180.0)
+        if soft > 0:
+            weight = np.clip(1.0 - (away - core) / soft, 0.0, 1.0)
+        else:
+            weight = (away <= core).astype(np.float32)
+        weight = weight * weight * (3.0 - 2.0 * weight)
+        saturation = np.where(mx > 1e-6, delta / np.maximum(mx, 1e-6), 0.0)
+        if floor > 0:
+            gate = np.clip(saturation / max(floor, 1e-6), 0.0, 1.0)
+            weight = weight * (gate * gate * (3.0 - 2.0 * gate))
+        if "invert" in anchor or "outside" in anchor or "except" in anchor:
+            return (1.0 - weight).astype(np.float32)
+        return weight.astype(np.float32)
     return _hue_mask(rgb, anchor)
 
 
