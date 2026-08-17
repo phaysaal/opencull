@@ -71,6 +71,7 @@ FORMAT = "darkimiya-timelapse-plan-v2"
 # run, so a single bar moves smoothly across the phases.
 PROGRESS_MARKER = "TIMELAPSE_PROGRESS"
 _ALIGN_BAND = 45     # 0 .. 45%  : fitting every frame
+_ANCHOR_BAND = 25    # 0 .. 25%  : the named path's model calls
 _RENDER_BAND = 90    # 45 .. 90% : cropping and colour-shifting every frame
 _ENCODE_AT = 92      # the encode is the short tail
 
@@ -454,7 +455,13 @@ def track_survey(photos: str, pattern: str, subject_box: str,
     template_size = (0, 0)
     last: tuple[float, float] | None = None
     scale = 1.0
-    for item in listed:
+    total = max(1, len(listed))
+    said = -1
+    for order, item in enumerate(listed, start=1):
+        percent = _ALIGN_BAND * order / total
+        if round(percent) != said:
+            said = round(percent)
+            _say_progress(percent, f"tracking frame {order} of {total}")
         path = root / item["name"]
         try:
             image = _preview(path)
@@ -532,6 +539,8 @@ def keyframes(photos: str, pattern: str, every: float = 30) -> str:
     chosen = listed[::stride]
     if listed and (not chosen or chosen[-1]["name"] != listed[-1]["name"]):
         chosen.append(listed[-1])
+    _say_progress(1, (
+        f"{len(chosen)} keyframes chosen -- a model call each"))
     return json.dumps([item["name"] for item in chosen])
 
 
@@ -549,7 +558,7 @@ def keyframe_proof(photos: str, name: str, directory: str,
 
 
 def collect_anchor(anchors_json: str, photos: str, name: str,
-                   proof: str, answer: Any) -> str:
+                   proof: str, answer: Any, chosen: str = "") -> str:
     """One model answer, validated and scaled to full resolution.
 
     The model answered in the proof's own pixels; the survey speaks
@@ -586,6 +595,13 @@ def collect_anchor(anchors_json: str, photos: str, name: str,
             max(0.0, min(values[3], shown_h)) * scale,
         ]
     held.append(entry)
+    try:
+        total = len(json.loads(chosen)) if chosen else 0
+    except (ValueError, TypeError):
+        total = 0
+    if total:
+        _say_progress(_ANCHOR_BAND * len(held) / total,
+                      f"anchored keyframe {len(held)} of {total}")
     return json.dumps(held)
 
 
@@ -628,7 +644,14 @@ def anchored_survey(photos: str, pattern: str, anchors_json: str,
     template = None
     template_size = (0, 0)
     last: tuple[float, float] | None = None
-    for item in listed:
+    total = max(1, len(listed))
+    said = -1
+    for order, item in enumerate(listed, start=1):
+        percent = _ANCHOR_BAND + (
+            _ALIGN_BAND - _ANCHOR_BAND) * order / total
+        if round(percent) != said:
+            said = round(percent)
+            _say_progress(percent, f"tracking frame {order} of {total}")
         path = root / item["name"]
         try:
             image = _preview(path)

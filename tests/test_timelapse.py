@@ -781,6 +781,59 @@ class AnchoredTests(unittest.TestCase):
             self.assertFalse(timelapse.anchors_usable(
                 json.dumps(hidden)))
 
+    def test_the_named_path_narrates_its_anchoring_and_its_tracking(self):
+        """The named subject's long first phase -- model calls, then the
+        carry between anchors -- printed nothing, so its run showed no
+        progress at all until rendering began. Each anchor now ticks the
+        anchor band, and the survey ticks the tracking band above it."""
+        import contextlib
+        import io
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            positions = [(80 + 10 * i, 90 + 4 * i) for i in range(9)]
+            self.sequence(root, positions)
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                chosen = timelapse.keyframes(str(root), "frame-*.jpg", 8)
+                anchors = "[]"
+                for index in (0, 8):
+                    x, y = positions[index]
+                    proof = timelapse.keyframe_proof(
+                        str(root), f"frame-{index:03d}.jpg",
+                        str(root / "anchors"))
+                    anchors = timelapse.collect_anchor(
+                        anchors, str(root), f"frame-{index:03d}.jpg", proof,
+                        {"x0": x, "y0": y, "x1": x + 48, "y1": y + 48,
+                         "visible": True, "what": "the stamp"},
+                        chosen)
+                timelapse.anchored_survey(str(root), "frame-*.jpg", anchors)
+            markers = [line for line in out.getvalue().splitlines()
+                       if line.startswith("TIMELAPSE_PROGRESS")]
+            self.assertTrue(any("keyframes chosen" in m for m in markers))
+            self.assertTrue(any("anchored keyframe 1 of 2" in m
+                                for m in markers))
+            self.assertTrue(any("tracking frame" in m for m in markers))
+            percents = [int(m.split()[1]) for m in markers]
+            self.assertEqual(percents, sorted(percents))
+            self.assertLessEqual(max(percents), 45)
+
+    def test_the_box_path_narrates_its_tracking(self):
+        import contextlib
+        import io
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.sequence(root, [(100, 100), (130, 100), (150, 104)])
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                timelapse.track_survey(
+                    str(root), "frame-*.jpg", "100,100,148,148")
+            markers = [line for line in out.getvalue().splitlines()
+                       if line.startswith("TIMELAPSE_PROGRESS")]
+            self.assertTrue(any("tracking frame 3 of 3" in m
+                                for m in markers))
+
     def test_the_tracker_carries_between_anchors_and_resets_on_them(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

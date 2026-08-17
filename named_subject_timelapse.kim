@@ -41,7 +41,7 @@ forall name in chosen:
     shown := observe image(proof)
     check shown.exists
     found := memo gen<Anchor>(anchor_prompt(subject, proof), images=[shown]) by A
-    anchors := collect_anchor(anchors, photos, name, proof, found)
+    anchors := collect_anchor(anchors, photos, name, proof, found, chosen)
 
 -- The tracker's seed is the first anchor; without one there is
 -- nothing to carry between keyframes.
