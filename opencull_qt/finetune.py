@@ -359,6 +359,98 @@ class Histogram(QWidget):
         painter.end()
 
 
+def _band_rgb(band: str, *, hue_shift: float = 0.0, sat: float = 0.75,
+              val: float = 0.8) -> tuple[int, int, int]:
+    import colorsys
+
+    centres = {"red": 0, "orange": 30, "yellow": 60, "green": 120,
+               "teal": 180, "blue": 230, "purple": 280, "magenta": 315}
+    hue = ((centres.get(band, 0) + hue_shift) % 360) / 360.0
+    r, g, b = colorsys.hsv_to_rgb(hue, sat, val)
+    return (int(r * 255), int(g * 255), int(b * 255))
+
+
+class HslPanel(QWidget):
+    """Eight colour bands, each with a hue, saturation and lightness move.
+
+    The engine has spoken this vocabulary from the start -- treatments
+    written by models use it -- but the page never offered it to the
+    hand. One component shown at a time, the way a person works: turn
+    the blues, then decide about their saturation.
+    """
+
+    changed = Signal(str, str, float)   # band, component, value
+
+    def __init__(self, state: dict, parent=None):
+        super().__init__(parent)
+        self._state = dict(state)
+        self._component = "saturation"
+        column = QVBoxLayout(self)
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(4)
+        switch = QHBoxLayout()
+        switch.setSpacing(6)
+        self._tabs = {}
+        for name, label in (("hue", "Hue"), ("saturation", "Saturation"),
+                            ("lightness", "Lightness")):
+            button = QPushButton(label)
+            button.setObjectName("ghost")
+            button.setProperty("slim", "true")
+            button.setCheckable(True)
+            button.setFont(theme.body(9))
+            button.setChecked(name == self._component)
+            button.clicked.connect(
+                lambda _on=False, n=name: self._switch(n))
+            self._tabs[name] = button
+            switch.addWidget(button)
+        switch.addStretch(1)
+        column.addLayout(switch)
+        self._rows = {}
+        for band in adjustments.HSL_BANDS:
+            row = GeometrySlider(band, band.title(), -100.0, 100.0, 0.0)
+            row.changed.connect(self._moved)
+            self._rows[band] = row
+            column.addWidget(row)
+        self._restyle()
+
+    def _bound(self) -> float:
+        return 45.0 if self._component == "hue" else 100.0
+
+    def _switch(self, component: str) -> None:
+        self._component = component
+        for name, button in self._tabs.items():
+            button.setChecked(name == component)
+        self._restyle()
+
+    def _restyle(self) -> None:
+        bound = self._bound()
+        for band, row in self._rows.items():
+            row.low, row.high = -bound, bound
+            held = self._state.get((band, self._component), {})
+            value = float(held.get("value", 0.0))
+            row.slider.blockSignals(True)
+            row.slider.setValue(int(
+                (value + bound) / (2 * bound) * TICKS))
+            row.slider.blockSignals(False)
+            row.reading.setText(f"{value:+.0f}")
+            if self._component == "hue":
+                ramp = [(0.0, _band_rgb(band, hue_shift=-45)),
+                        (0.5, _band_rgb(band)),
+                        (1.0, _band_rgb(band, hue_shift=45))]
+            elif self._component == "saturation":
+                ramp = [(0.0, (128, 128, 128)),
+                        (1.0, _band_rgb(band, sat=0.95))]
+            else:
+                ramp = [(0.0, _band_rgb(band, val=0.25)),
+                        (1.0, _band_rgb(band, val=0.95))]
+            row.slider.set_ramp(ramp)
+            row.slider.update()
+
+    def _moved(self, band: str, value: float) -> None:
+        self._state[(band, self._component)] = {"value": float(value)}
+        self.changed.emit(band, self._component, float(value))
+
+
 class CurvePanel(QWidget):
     """The classic RGB tone curve, drawn with the renderer's own math.
 
@@ -581,6 +673,17 @@ class FineTunePage(QWidget):
         self.caption.setFont(theme.display(8))
         head.addWidget(self.caption)
         head.addStretch(1)
+        wb = QPushButton("WB ⌖")
+        wb.setObjectName("ghost")
+        wb.setProperty("slim", "true")
+        wb.setFont(theme.body(9))
+        wb.setCursor(Qt.CursorShape.PointingHandCursor)
+        wb.setToolTip(tooltip(
+            "White balance by eye-dropper: click, then click something "
+            "that should be neutral grey -- a card, concrete, a white "
+            "shirt in shade. Temperature and tint move to make it so."))
+        wb.clicked.connect(self._start_wb_pick)
+        head.addWidget(wb)
         hint = QLabel("hold B: as shot")
         hint.setObjectName("paneHint")
         hint.setFont(theme.body(9))
@@ -1009,6 +1112,63 @@ class FineTunePage(QWidget):
         self._show_controls()
         self.render()
 
+    def _start_wb_pick(self) -> None:
+        if not self.current or not self.treatment:
+            return
+        self._picking_for = "@wb"
+        self.frame.setCursor(Qt.CursorShape.CrossCursor)
+        self._report(
+            "Click something that should be neutral grey.")
+
+    def _nudge_base_value(self, op: str, delta: float) -> None:
+        """Move one whole-frame value BY an amount, in the op's own terms.
+
+        A treatment may already hold the operation -- possibly in
+        absolute mode, a 5400 K white balance -- and the dropper's answer
+        is a correction on top of what is already there, not a
+        replacement of it. An absent operation is inserted at the delta.
+        """
+        held = next(
+            (item for item in self._pristine.get("operations", []) or []
+             if isinstance(item, dict) and item.get("op") == op
+             and isinstance(item.get("value"), (int, float))),
+            None)
+        if held is not None:
+            key = str(held.get("id") or op)
+            already = self.changes.get(key, {}).get("value")
+            base = float(already if isinstance(already, (int, float))
+                         else held["value"])
+            self.changes.setdefault(key, {})["value"] = base + float(delta)
+        else:
+            inserts = self.changes.setdefault("+insert", [])
+            entry = next((item for item in inserts
+                          if item.get("op") == op), None)
+            if entry is None:
+                inserts.append({"op": op, "value": float(delta)})
+            else:
+                entry["value"] = float(entry.get("value", 0.0)) + float(delta)
+
+    def _wb_from(self, red: float, green: float, blue: float) -> None:
+        import math
+
+        floor = 1e-4
+        red, green, blue = (max(red, floor), max(green, floor),
+                            max(blue, floor))
+        # The engine warms by multiplying red and dividing blue by one
+        # factor; a neutral click means solving that factor so the two
+        # meet, then tint so green agrees.
+        factor = math.sqrt(blue / red)
+        temperature = max(-2000.0, min(2000.0, (factor - 1.0) * 5000.0))
+        tint = max(-100.0, min(
+            100.0, 200.0 * (1.0 - red * factor / green)))
+        self._remember("white balance")
+        self._nudge_base_value("color.temperature", round(temperature))
+        self._nudge_base_value("color.tint", round(tint))
+        self._rebuild_mirror()
+        self._report(
+            f"Neutralised: temperature {temperature:+.0f} K, "
+            f"tint {tint:+.0f}.", "ok")
+
     def _start_pick(self, mask_id: str) -> None:
         self._picking_for = mask_id
         self.frame.setCursor(Qt.CursorShape.CrossCursor)
@@ -1049,6 +1209,15 @@ class FineTunePage(QWidget):
         image = shown.toImage()
         colour = image.pixelColor(int(x * ratio), int(y * ratio))
         red, green, blue = colour.redF(), colour.greenF(), colour.blueF()
+        if self._picking_for == "@wb":
+            self._end_pick()
+            if max(red, green, blue) < 0.04 or min(red, green, blue) > 0.97:
+                self._report(
+                    "That spot is clipped -- black or blown -- and says "
+                    "nothing about the light. Click a mid grey.", "alarm")
+                return
+            self._wb_from(red, green, blue)
+            return
         brightest = max(red, green, blue)
         delta = brightest - min(red, green, blue)
         saturation = delta / brightest if brightest > 1e-6 else 0.0
@@ -1362,6 +1531,15 @@ class FineTunePage(QWidget):
                 widget.wanted.connect(self._control_wanted)
                 self.controls.append(widget)
                 self.body.addWidget(widget)
+        if not on_mask:
+            self.body.addWidget(self._heading("Colour bands", ""))
+            bands = HslPanel(adjustments.hsl_state(self.recipe))
+            bands.setToolTip(tooltip(
+                "Each band of colour, turned, saturated or lightened on "
+                "its own. The same vocabulary the treatments write; here "
+                "it answers to the hand."))
+            bands.changed.connect(self._hsl_changed)
+            self.body.addWidget(bands)
         for text in adjustments.guardrails(self.recipe):
             rail = QLabel(f"◆ {text}")
             rail.setObjectName("guardrail")
@@ -1420,6 +1598,22 @@ class FineTunePage(QWidget):
             self.render()
             return
         self.changes.setdefault(key, {}).update(change)
+        self.render()
+
+    def _hsl_changed(self, band: str, component: str, value: float) -> None:
+        self._remember(f"hsl {band} {component}")
+        held = self.changes.setdefault("+hsl", [])
+        entry = next((item for item in held
+                      if item.get("channel") == band
+                      and item.get("component") == component), None)
+        if entry is None:
+            held.append({"channel": band, "component": component,
+                         "value": float(value)})
+        else:
+            entry["value"] = float(value)
+        self.recipe = adjustments.apply(self.recipe, {"+hsl": [
+            {"channel": band, "component": component,
+             "value": float(value)}]})
         self.render()
 
     def _curve_changed(self, points: list) -> None:

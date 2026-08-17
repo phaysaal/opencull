@@ -211,6 +211,52 @@ class FineTunePageTests(unittest.TestCase):
         after = [item.control["op"] for item in page.controls]
         self.assertEqual(before, after)
 
+    def test_the_colour_bands_answer_to_the_hand(self):
+        from opencull_qt.finetune import HslPanel
+
+        page = self.page()
+        panel = next(w for w in page.findChildren(HslPanel))
+        panel._switch("saturation")
+        row = panel._rows["blue"]
+        row.slider.setValue(row.slider.maximum())   # +100 saturation
+        state = adjustments.hsl_state(page.recipe)
+        self.assertEqual(state[("blue", "saturation")]["value"], 100.0)
+        # And undo takes the whole move back.
+        page._remember_key = ""
+        page.undo()
+        self.assertNotIn("+hsl", page.changes)
+
+    def test_the_wb_dropper_neutralises_the_clicked_colour(self):
+        page = self.page()
+        # A warm cast: red high, blue low -- the dropper should cool it.
+        page._wb_from(0.6, 0.5, 0.4)
+        applied = adjustments.apply(page._pristine, page.changes)
+        held = {op["op"]: op for op in applied["operations"]
+                if isinstance(op, dict)}
+        # The pristine treatment holds an absolute 5400 K; a warm click
+        # nudges it cooler in its own terms rather than replacing it.
+        import math
+        factor = math.sqrt(0.4 / 0.6)
+        self.assertAlmostEqual(
+            held["color.temperature"]["value"],
+            5400 + round((factor - 1) * 5000), delta=1)
+        self.assertLess(held["color.temperature"]["value"], 5400)
+
+    def test_a_clipped_wb_click_refuses(self):
+        page = self.page()
+        page._picking_for = "@wb"
+        from PySide6.QtGui import QColor, QImage, QPixmap
+        from PySide6.QtCore import QPointF
+
+        image = QImage(64, 48, QImage.Format.Format_RGB888)
+        image.fill(QColor(255, 255, 255))
+        page.frame.resize(200, 150)
+        page.frame.setPixmap(QPixmap.fromImage(image))
+        page._pick_at(QPointF(page.frame.width() / 2,
+                              page.frame.height() / 2))
+        self.assertIn("clipped", page.status.text())
+        self.assertNotIn("color.temperature", page.changes)
+
     def test_the_histogram_reads_the_arriving_render(self):
         from PySide6.QtGui import QColor, QImage, QPixmap
 
@@ -802,7 +848,11 @@ class LayerTests(FineTunePageTests):
                 page.findChildren(GeometrySlider)]
         self.assertIn("radius", keys)
         page._chose_layer(0)
-        self.assertEqual(page.findChildren(GeometrySlider), [])
+        from opencull_qt.finetune import HslPanel
+
+        loose = [slider for slider in page.findChildren(GeometrySlider)
+                 if not isinstance(slider.parent(), HslPanel)]
+        self.assertEqual(loose, [])
 
     def test_base_layer_resets_do_not_touch_the_masks_moves(self):
         page = self.masked_page()

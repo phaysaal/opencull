@@ -293,6 +293,32 @@ def _build_anchor(shape: str, geometry: dict[str, Any]) -> str:
     return ", ".join(parts)
 
 
+HSL_BANDS = ("red", "orange", "yellow", "green",
+             "teal", "blue", "purple", "magenta")
+HSL_COMPONENTS = ("hue", "saturation", "lightness")
+
+
+def hsl_state(recipe: dict[str, Any]) -> dict[tuple, dict[str, float]]:
+    """Every colour-band move the recipe holds, keyed (band, component)."""
+    held: dict[tuple, dict[str, float]] = {}
+    for op in recipe.get("operations", []) or []:
+        if not isinstance(op, dict) or op.get("op") != "color.hsl_range":
+            continue
+        channel = str(op.get("channel", "")).casefold()
+        component = str(op.get("component", "")).casefold()
+        if channel not in HSL_BANDS or component not in HSL_COMPONENTS:
+            continue
+        value = op.get("value")
+        if not isinstance(value, (int, float)):
+            continue
+        asked = op.get("asked_value")
+        held[(channel, component)] = {
+            "value": float(value),
+            "asked": float(asked if isinstance(asked, (int, float))
+                           else value)}
+    return held
+
+
 def masks(recipe: dict[str, Any]) -> list[dict[str, Any]]:
     """Every mask in one recipe, its geometry parsed and its effects bounded.
 
@@ -487,6 +513,50 @@ def apply(recipe: dict[str, Any], changes: dict[str, Any]) -> dict[str, Any]:
         recorded.append({"id": "tone.curve", "op": "tone.curve",
                          "asked": 0.0, "set": 0.0, "enabled": True,
                          "unit": "curve", "inserted": True})
+
+    # The colour bands: eight hues, each with a hue shift, a saturation
+    # move and a lightness move. One op per (band, component), updated in
+    # place where the treatment already has it -- what the model asked is
+    # kept beside what was set -- and inserted before the masks where it
+    # has not.
+    for item in changes.get("+hsl", []) or []:
+        if not isinstance(item, dict):
+            continue
+        channel = str(item.get("channel", "")).casefold()
+        component = str(item.get("component", "")).casefold()
+        if channel not in HSL_BANDS or component not in HSL_COMPONENTS:
+            continue
+        bound = 45.0 if component == "hue" else 100.0
+        value = max(-bound, min(bound, float(item.get("value", 0.0))))
+        existing = next(
+            (op for op in result.get("operations", []) or []
+             if isinstance(op, dict) and op.get("op") == "color.hsl_range"
+             and str(op.get("channel", "")).casefold() == channel
+             and str(op.get("component", "")).casefold() == component),
+            None)
+        if existing is not None:
+            existing.setdefault(
+                "asked_value", float(existing.get("value", 0.0)))
+            existing["value"] = value
+            existing["enabled"] = value != 0.0 or bool(
+                existing.get("asked_value"))
+        elif value != 0.0:
+            operations = result.setdefault("operations", [])
+            at = next(
+                (index for index, op in enumerate(operations)
+                 if isinstance(op, dict)
+                 and str(op.get("op", "")).startswith("mask.")),
+                len(operations))
+            operations.insert(at, {
+                "op": "color.hsl_range", "channel": channel,
+                "component": component, "value": value,
+                "unit": "percent", "mode": "delta",
+                "source": "colour band moved by hand",
+                "asked_value": 0.0, "enabled": True})
+        recorded.append({"id": f"hsl:{channel}/{component}",
+                         "op": "color.hsl_range", "asked": 0.0,
+                         "set": value, "enabled": True, "unit": "percent",
+                         "inserted": existing is None})
 
     # New masks, appended after everything, which is where the engine
     # blends them anyway.

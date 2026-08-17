@@ -308,3 +308,39 @@ class MaskStructureTests(unittest.TestCase):
         self.assertIn("up to 25", linear["value"]["anchor"])
         self.assertEqual(
             adjustments.mask_surface(out, 2)[0]["id"], "mask:2/tone.exposure")
+
+
+class HslFoldTests(unittest.TestCase):
+    """The colour bands fold in like everything else: asked kept, bounded."""
+
+    def test_a_band_move_updates_the_models_own_operation(self):
+        base = recipe()
+        base["operations"].append({
+            "op": "color.hsl_range", "channel": "blue",
+            "component": "saturation", "value": 20.0,
+            "unit": "percent", "mode": "delta", "enabled": True})
+        out = adjustments.apply(base, {"+hsl": [
+            {"channel": "blue", "component": "saturation", "value": -30}]})
+        told = adjustments.hsl_state(out)[("blue", "saturation")]
+        self.assertEqual(told["value"], -30.0)
+        self.assertEqual(told["asked"], 20.0)   # what the model asked, kept
+
+    def test_a_new_band_move_is_inserted_before_the_masks(self):
+        base = recipe()
+        base["operations"].append({
+            "op": "mask.radial", "unit": "mask", "mode": "absolute",
+            "value": {"anchor": "radial gradient at 50%, 50% radius 30%",
+                      "effects": []}})
+        out = adjustments.apply(base, {"+hsl": [
+            {"channel": "orange", "component": "lightness", "value": 15}]})
+        ops = [item["op"] for item in out["operations"]]
+        self.assertLess(ops.index("color.hsl_range"),
+                        ops.index("mask.radial"))
+
+    def test_a_hue_turn_is_bounded_tighter_than_the_rest(self):
+        out = adjustments.apply(recipe(), {"+hsl": [
+            {"channel": "red", "component": "hue", "value": 300},
+            {"channel": "red", "component": "saturation", "value": 300}]})
+        state = adjustments.hsl_state(out)
+        self.assertEqual(state[("red", "hue")]["value"], 45.0)
+        self.assertEqual(state[("red", "saturation")]["value"], 100.0)
