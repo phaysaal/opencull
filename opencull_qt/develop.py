@@ -604,6 +604,13 @@ class PhotoLabel(QLabel):
         self._sweep: QVariantAnimation | None = None
         self._before: QPixmap | None = None
         self._after: QPixmap | None = None
+        # The magnifier. Zero means fit-to-pane, the lifetime default;
+        # the wheel zooms around the cursor, a drag pans, a double click
+        # comes home. The zoom survives a new proof arriving, so a
+        # slider move can be judged at the crop being inspected.
+        self._zoom = 0.0
+        self._centre = [0.5, 0.5]
+        self._pan_from = None
 
     def set_source(self, pixmap: QPixmap | None) -> None:
         self._source = pixmap
@@ -680,11 +687,89 @@ class PhotoLabel(QLabel):
     def source(self) -> QPixmap | None:
         return self._source
 
+    def _fit_scale(self) -> float:
+        if self._source is None or self._source.width() == 0:
+            return 1.0
+        return min(max(self.width(), 1) / self._source.width(),
+                   max(self.height(), 1) / self._source.height())
+
     def _redraw(self) -> None:
         if self._source is None:
             return
+        if self._zoom <= 0.0:
+            self.setPixmap(scaled(
+                self._source, max(self.width(), 1), max(self.height(), 1)))
+            return
+        source_w = self._source.width()
+        source_h = self._source.height()
+        view_w = min(source_w, max(self.width(), 1) / self._zoom)
+        view_h = min(source_h, max(self.height(), 1) / self._zoom)
+        self._centre[0] = min(max(self._centre[0],
+                                  view_w / 2 / source_w),
+                              1 - view_w / 2 / source_w)
+        self._centre[1] = min(max(self._centre[1],
+                                  view_h / 2 / source_h),
+                              1 - view_h / 2 / source_h)
+        from PySide6.QtCore import QRect
+
+        left = int(self._centre[0] * source_w - view_w / 2)
+        top = int(self._centre[1] * source_h - view_h / 2)
+        piece = self._source.copy(QRect(left, top,
+                                        int(view_w), int(view_h)))
         self.setPixmap(scaled(
-            self._source, max(self.width(), 1), max(self.height(), 1)))
+            piece, max(self.width(), 1), max(self.height(), 1)))
+
+    def wheelEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        if self._source is None:
+            return
+        fit = self._fit_scale()
+        current = self._zoom if self._zoom > 0 else fit
+        factor = 1.25 if event.angleDelta().y() > 0 else 0.8
+        asked = current * factor
+        if asked <= fit * 1.02:
+            self._zoom = 0.0
+            self._centre = [0.5, 0.5]
+        else:
+            self._zoom = min(asked, fit * 8)
+            # Keep the pixel under the cursor under the cursor.
+            pos = event.position()
+            shown = self.pixmap()
+            if shown is not None and not shown.isNull():
+                ratio = float(shown.devicePixelRatio() or 1.0)
+                width = shown.width() / ratio
+                height = shown.height() / ratio
+                dx = (pos.x() - (self.width() - width) / 2) / max(width, 1)
+                dy = (pos.y() - (self.height() - height) / 2) / max(
+                    height, 1)
+                if 0 <= dx <= 1 and 0 <= dy <= 1:
+                    lean = 1 - current / self._zoom
+                    self._centre[0] += (dx - 0.5) * lean
+                    self._centre[1] += (dy - 0.5) * lean
+        self._redraw()
+
+    def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802
+        self._zoom = 0.0
+        self._centre = [0.5, 0.5]
+        self._redraw()
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        if self._zoom > 0:
+            self._pan_from = event.position()
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        if self._pan_from is not None and self._zoom > 0 \
+                and self._source is not None:
+            moved = event.position() - self._pan_from
+            self._pan_from = event.position()
+            self._centre[0] -= moved.x() / self._zoom / self._source.width()
+            self._centre[1] -= moved.y() / self._zoom / self._source.height()
+            self._redraw()
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        self._pan_from = None
+        super().mouseReleaseEvent(event)
 
     def resizeEvent(self, event) -> None:  # noqa: N802 - Qt naming
         super().resizeEvent(event)

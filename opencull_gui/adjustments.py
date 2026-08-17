@@ -311,6 +311,11 @@ def masks(recipe: dict[str, Any]) -> list[dict[str, Any]]:
         if not isinstance(value, dict):
             continue
         ordinal += 1
+        if operation.get("erased"):
+            # Erased, not removed: the operation stays in the recipe as a
+            # disabled record -- nothing here is destroyed -- and it keeps
+            # its ordinal so every other layer's edits stay addressed.
+            continue
         shape = name[5:]
         geometry = _parse_anchor(shape, str(value.get("anchor") or ""))
         geometry["feather"] = round(
@@ -342,6 +347,7 @@ def masks(recipe: dict[str, Any]) -> list[dict[str, Any]]:
             })
         found.append({
             "id": f"mask:{ordinal}",
+            "ordinal": ordinal,
             "shape": shape,
             "label": str(operation.get("source") or f"mask {ordinal}"),
             "geometry": geometry,
@@ -363,9 +369,10 @@ def mask_surface(recipe: dict[str, Any], ordinal: int) -> list[dict[str, Any]]:
     serves both layers without knowing which one it is on.
     """
     placed = masks(recipe)
-    if not 1 <= int(ordinal) <= len(placed):
+    mask = next((item for item in placed
+                 if item["ordinal"] == int(ordinal)), None)
+    if mask is None:
         return []
-    mask = placed[int(ordinal) - 1]
     have = {item["op"]: item for item in mask["effects"]}
     surface = []
     for name, (low, high, unit) in RANGES.items():
@@ -493,6 +500,8 @@ def apply(recipe: dict[str, Any], changes: dict[str, Any]) -> dict[str, Any]:
         result.setdefault("operations", []).append({
             "op": f"mask.{shape}", "unit": "mask", "mode": "absolute",
             "source": str(item.get("label") or "added by hand"),
+            **({"erased": True, "enabled": False}
+               if item.get("erased") else {}),
             "value": {
                 "anchor": _build_anchor(shape, geometry),
                 "opacity": float(geometry.get("opacity", 100)) / 100.0,
@@ -538,6 +547,11 @@ def apply(recipe: dict[str, Any], changes: dict[str, Any]) -> dict[str, Any]:
         value = operation["value"]
         shape = str(operation["op"])[5:]
         if not effect_op:
+            if "label" in change:
+                operation["source"] = str(change["label"])[:80]
+            if change.get("deleted") is True:
+                operation["enabled"] = False
+                operation["erased"] = True
             for item in change.get("add_effects", []) or []:
                 if not isinstance(item, dict):
                     continue

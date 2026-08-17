@@ -523,6 +523,14 @@ class FineTunePage(QWidget):
         self._overlay_for = ""
         # Which colour layer is waiting for a click on the picture.
         self._picking_for = ""
+        # The page's memory: every gesture pushes the state it is about
+        # to change, so undo walks back through real states rather than
+        # inverting operations. A slider drag is one gesture, not forty:
+        # pushes with the same label inside a beat are coalesced.
+        self._undo: list = []
+        self._redo: list = []
+        self._remember_key = ""
+        self._remember_at = 0.0
         self._plain_pixmap = None
         # The frame as shot, for the press-and-hold comparison, and
         # whether the hold is down right now.
@@ -581,6 +589,22 @@ class FineTunePage(QWidget):
         self.frame = PhotoLabel()
         self.frame.setObjectName("paneImage")
         self.frame.installEventFilter(self)
+        # Says a render is on its way -- but only once it has taken long
+        # enough to wonder. A fast render never shows it at all.
+        from PySide6.QtCore import QTimer
+
+        self._preparing = QLabel("developing…", self.frame)
+        self._preparing.setObjectName("hint")
+        self._preparing.setFont(theme.body(9))
+        self._preparing.setStyleSheet(
+            "background: rgba(19, 18, 17, 0.8); border-radius: 8px; "
+            "padding: 4px 10px;")
+        self._preparing.hide()
+        self._render_pending = False
+        self._prepare_timer = QTimer(self)
+        self._prepare_timer.setSingleShot(True)
+        self._prepare_timer.setInterval(350)
+        self._prepare_timer.timeout.connect(self._still_preparing)
         column.addWidget(self.frame, 1)
 
         # The treatments, horizontal under the picture -- a filmstrip of
@@ -683,6 +707,9 @@ class FineTunePage(QWidget):
             "layer's visibility."))
         self.layers.currentRowChanged.connect(self._chose_layer)
         self.layers.itemChanged.connect(self._layer_visibility)
+        self.layers.setContextMenuPolicy(
+            Qt.ContextMenuPolicy.CustomContextMenu)
+        self.layers.customContextMenuRequested.connect(self._layer_menu)
         layout.addWidget(self.layers)
 
         scroll = QScrollArea()
@@ -709,8 +736,26 @@ class FineTunePage(QWidget):
         # syllable ("s sho", "pe fi"); a label nobody can read is not a
         # button, and these five actions are too abstract for icons to
         # say alone.
+        from PySide6.QtGui import QKeySequence, QShortcut
+
+        QShortcut(QKeySequence.StandardKey.Undo, self, self.undo)
+        QShortcut(QKeySequence.StandardKey.Redo, self, self.redo)
         actions = QHBoxLayout()
         actions.setSpacing(8)
+        self.undo_button = QPushButton("↶")
+        self.undo_button.setObjectName("ghost")
+        self.undo_button.setProperty("slim", "true")
+        self.undo_button.setFixedWidth(34)
+        self.undo_button.setToolTip(tooltip("Undo (Ctrl+Z)"))
+        self.undo_button.clicked.connect(self.undo)
+        actions.addWidget(self.undo_button)
+        self.redo_button = QPushButton("↷")
+        self.redo_button.setObjectName("ghost")
+        self.redo_button.setProperty("slim", "true")
+        self.redo_button.setFixedWidth(34)
+        self.redo_button.setToolTip(tooltip("Redo (Ctrl+Shift+Z)"))
+        self.redo_button.clicked.connect(self.redo)
+        actions.addWidget(self.redo_button)
         self.shot_button = QPushButton("As shot")
         self.shot_button.setObjectName("ghost")
         self.shot_button.setFont(theme.body(10))
@@ -890,6 +935,9 @@ class FineTunePage(QWidget):
         self.treatment = treatment
         self.changes = {}
         self.layer = 0
+        self._undo.clear()
+        self._redo.clear()
+        self._remember_key = ""
         try:
             self.recipe = self.workspace.compiled_recipe(
                 self.current, treatment, self.engine())
@@ -907,6 +955,46 @@ class FineTunePage(QWidget):
         self._pristine = json.loads(json.dumps(self.recipe))
         self._show_controls()
         self.render()
+
+    def _remember(self, label: str) -> None:
+        import json as json_module
+        import time as time_module
+
+        now = time_module.monotonic()
+        if label == self._remember_key and now - self._remember_at < 1.2:
+            self._remember_at = now
+            return
+        self._undo.append((json_module.dumps(self.changes), self.layer))
+        del self._undo[:-50]
+        self._redo.clear()
+        self._remember_key = label
+        self._remember_at = now
+
+    def undo(self) -> None:
+        import json as json_module
+
+        if not self._undo:
+            self._report("Nothing to undo.")
+            return
+        self._redo.append((json_module.dumps(self.changes), self.layer))
+        held, layer = self._undo.pop()
+        self.changes = json_module.loads(held)
+        self.layer = layer
+        self._remember_key = ""
+        self._rebuild_mirror()
+
+    def redo(self) -> None:
+        import json as json_module
+
+        if not self._redo:
+            self._report("Nothing to redo.")
+            return
+        self._undo.append((json_module.dumps(self.changes), self.layer))
+        held, layer = self._redo.pop()
+        self.changes = json_module.loads(held)
+        self.layer = layer
+        self._remember_key = ""
+        self._rebuild_mirror()
 
     def _rebuild_mirror(self) -> None:
         """The page's recipe, recomputed as pristine plus what remains.
@@ -985,6 +1073,7 @@ class FineTunePage(QWidget):
             "ok")
 
     def _mask_changed(self, key: str, change: dict) -> None:
+        self._remember(f"{key} shape")
         held = self.changes.setdefault(key, {})
         if "geometry" in change:
             held.setdefault("geometry", {}).update(change["geometry"])
@@ -996,6 +1085,59 @@ class FineTunePage(QWidget):
         if self._overlay_for == key:
             self._paint_overlay()
         self.render()
+
+    def _layer_menu(self, where) -> None:
+        from PySide6.QtWidgets import QMenu
+
+        item = self.layers.itemAt(where)
+        ordinal = self._layer_of_row(self.layers.row(item)) if item else 0
+        if ordinal < 1:
+            return
+        menu = QMenu(self)
+        menu.setFont(theme.body(10))
+        rename = menu.addAction("Rename…")
+        erase = menu.addAction("Erase this mask")
+        chosen = menu.exec(self.layers.mapToGlobal(where))
+        if chosen is rename:
+            placed = {m["ordinal"]: m for m in adjustments.masks(self.recipe)}
+            current = str(placed.get(ordinal, {}).get("label") or "")
+            name, agreed = QInputDialog.getText(
+                self, "Rename this mask", "Call it:", text=current)
+            if agreed and name.strip():
+                self._remember("rename mask")
+                self._mask_structure(ordinal, {"label": name.strip()})
+        elif chosen is erase:
+            self._remember("erase mask")
+            self._mask_structure(ordinal, {"deleted": True})
+            if self.layer == ordinal:
+                self.layer = 0
+            self._rebuild_mirror()
+
+    def _mask_structure(self, ordinal: int, change: dict) -> None:
+        """A rename or an erasure, routed to where the mask lives.
+
+        A mask the model wrote is addressed by its ordinal; a mask the
+        photographer added still lives in the +mask list, and the change
+        must land there or the next re-fold would resurrect it.
+        """
+        pristine_masks = sum(
+            1 for item in self._pristine.get("operations", []) or []
+            if isinstance(item, dict)
+            and str(item.get("op", "")).startswith("mask.")
+            and str(item.get("op", "")) != "mask.vignette"
+            and isinstance(item.get("value"), dict))
+        if ordinal <= pristine_masks:
+            held = self.changes.setdefault(f"mask:{ordinal}", {})
+            held.update(change)
+        else:
+            added = self.changes.get("+mask", [])
+            index = ordinal - pristine_masks - 1
+            if 0 <= index < len(added):
+                if change.get("deleted"):
+                    added[index]["erased"] = True
+                if "label" in change:
+                    added[index]["label"] = change["label"]
+        self._rebuild_mirror()
 
     def _add_mask(self) -> None:
         from PySide6.QtGui import QCursor
@@ -1015,6 +1157,7 @@ class FineTunePage(QWidget):
         self._create_mask(str(chosen.data()))
 
     def _create_mask(self, shape: str) -> None:
+        self._remember("add mask")
         geometry = {"centre_x": 50.0, "centre_y": 50.0,
                     "radius": 30.0, "feather": 100, "reach": 40.0}
         if shape == "color":
@@ -1101,6 +1244,9 @@ class FineTunePage(QWidget):
             row = QListWidgetItem(
                 f"  Mask · {mask['shape']} — {mask['label'][:44]}")
             row.setFont(theme.body(9))
+            # The row remembers its mask's true ordinal: an erased layer
+            # keeps its number forever, so rows and ordinals part ways.
+            row.setData(Qt.ItemDataRole.UserRole, mask["ordinal"])
             row.setFlags(Qt.ItemFlag.ItemIsEnabled
                          | Qt.ItemFlag.ItemIsSelectable
                          | Qt.ItemFlag.ItemIsUserCheckable)
@@ -1108,21 +1254,36 @@ class FineTunePage(QWidget):
                               else Qt.CheckState.Unchecked)
             row.setToolTip(tooltip(
                 f"{mask['label']}\nUntick to switch this mask off "
-                "entirely; everything inside it stops."))
+                "entirely; everything inside it stops. Right-click to "
+                "rename or erase it."))
             self.layers.addItem(row)
-        self.layers.setCurrentRow(self.layer)
+        self.layers.setCurrentRow(self._row_of_layer(self.layer))
         self.layers.blockSignals(False)
         rows = self.layers.count()
         self.layers.setFixedHeight(rows * 26 + 10)
 
+    def _row_of_layer(self, ordinal: int) -> int:
+        for row in range(1, self.layers.count()):
+            if self.layers.item(row).data(
+                    Qt.ItemDataRole.UserRole) == ordinal:
+                return row
+        return 0
+
+    def _layer_of_row(self, row: int) -> int:
+        if row <= 0:
+            return 0
+        item = self.layers.item(row)
+        return int(item.data(Qt.ItemDataRole.UserRole) or 0) if item else 0
+
     def _chose_layer(self, row: int) -> None:
-        if row < 0 or row == self.layer:
+        ordinal = self._layer_of_row(row)
+        if row < 0 or ordinal == self.layer:
             return
-        self.layer = row
+        self.layer = ordinal
         self._show_controls()
 
     def _layer_visibility(self, item: QListWidgetItem) -> None:
-        ordinal = self.layers.row(item)
+        ordinal = self._layer_of_row(self.layers.row(item))
         if ordinal < 1:
             return
         on = item.checkState() == Qt.CheckState.Checked
@@ -1189,11 +1350,13 @@ class FineTunePage(QWidget):
         touched = self._touched_sections()
         for section, members in by_section.items():
             present = [item for item in members if not item.get("absent")]
-            absent = [item for item in members if item.get("absent")]
             self.body.addWidget(self._heading(
                 section.upper() + (f"  ·  {len(present)}" if present else ""),
                 section if section in touched else ""))
-            for control in present + absent:
+            # Canonical order, whether a control is in the recipe or not:
+            # ticking one in used to promote it to the top of its section,
+            # which moved it out from under the hand that ticked it.
+            for control in members:
                 widget = Control(control, advice.get(control["op"]))
                 widget.changed.connect(self._control_changed)
                 widget.wanted.connect(self._control_wanted)
@@ -1229,6 +1392,7 @@ class FineTunePage(QWidget):
     # --- moving them ------------------------------------------------------
 
     def _control_changed(self, key: str, change: dict) -> None:
+        self._remember(str(key))
         if str(key).startswith("mask:") and "/" in str(key):
             head, _, op = str(key).partition("/")
             added = next(
@@ -1259,6 +1423,7 @@ class FineTunePage(QWidget):
         self.render()
 
     def _curve_changed(self, points: list) -> None:
+        self._remember("curve")
         identity = points == [[0.0, 0.0], [255.0, 255.0]]
         if identity:
             self.changes.pop("curve", None)
@@ -1277,7 +1442,10 @@ class FineTunePage(QWidget):
     def _show_geometry(self, ordinal: int) -> None:
         """Where this layer's mask lands: its shape, movable, and shown."""
         placed = adjustments.masks(self.recipe)
-        mask = placed[ordinal - 1]
+        mask = next((item for item in placed
+                     if item["ordinal"] == int(ordinal)), None)
+        if mask is None:
+            return
         geometry = dict(mask["geometry"])
         row = QHBoxLayout()
         row.setSpacing(8)
@@ -1461,6 +1629,7 @@ class FineTunePage(QWidget):
         is a whole-frame insert; on a mask layer it becomes one of that
         mask's effects.
         """
+        self._remember(f"want {op}")
         if self.layer > 0:
             key = f"mask:{self.layer}"
             added = self.changes.setdefault(key, {}).setdefault(
@@ -1544,6 +1713,7 @@ class FineTunePage(QWidget):
         change like any other, and "as suggested" that kept them would
         be a third state with nobody's name on it.
         """
+        self._remember("as suggested")
         self.changes = {}
         self._rebuild_mirror()
         self._report("Back to the treatment as it was suggested.")
@@ -1557,6 +1727,7 @@ class FineTunePage(QWidget):
         on the page to be turned back on one by one, and As suggested
         is still one click away.
         """
+        self._remember("as shot")
         turned_off: dict[str, Any] = {
             item["id"]: {"enabled": False}
             for item in adjustments.controls(self._pristine)}
@@ -1571,6 +1742,7 @@ class FineTunePage(QWidget):
 
     def reset_section(self, section: str) -> None:
         """Put one section of the ACTIVE layer back, the rest standing."""
+        self._remember("reset section")
         kept: dict[str, Any] = {}
         if self.layer > 0:
             head = f"mask:{self.layer}"
@@ -1646,6 +1818,8 @@ class FineTunePage(QWidget):
         self.renderer.render(
             self.current, self.treatment, self.engine(), self._demosaic(),
             adjustments=self.changes or None, maximum=self.proof_edge())
+        self._render_pending = True
+        self._prepare_timer.start()
 
     def _demosaic(self) -> str:
         return str(self.workspace.payload().get("rendering", {}).get(
@@ -1662,9 +1836,20 @@ class FineTunePage(QWidget):
                     entry.setIcon(plain_icon(pixmap))
                 break
 
+    def _still_preparing(self) -> None:
+        if self._render_pending:
+            self._preparing.adjustSize()
+            self._preparing.move(
+                self.frame.width() - self._preparing.width() - 12,
+                self.frame.height() - self._preparing.height() - 12)
+            self._preparing.raise_()
+            self._preparing.show()
+
     def _rendered(self, photo: str, treatment: str, pixmap) -> None:
         if photo != self.current or treatment != self.treatment:
             return
+        self._render_pending = False
+        self._preparing.hide()
         self._plain_pixmap = pixmap
         if self._as_shot_pixmap is None:
             try:
@@ -1708,6 +1893,8 @@ class FineTunePage(QWidget):
                 self._paint_overlay()
 
     def _render_failed(self, photo: str, reason: str) -> None:
+        self._render_pending = False
+        self._preparing.hide()
         self._report(f"{photo} could not be rendered: {reason}", "alarm")
 
     def keep(self) -> None:

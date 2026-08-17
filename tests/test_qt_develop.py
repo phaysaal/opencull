@@ -2073,6 +2073,53 @@ class DevelopPageTests(unittest.TestCase):
         self.assertEqual(page.status.property("tone"), "alarm")
 
 
+class PhotoZoomTests(unittest.TestCase):
+    """The magnifier on the pane: wheel in, drag around, come home."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.application = QApplication.instance() or QApplication([])
+
+    def label(self):
+        from PySide6.QtGui import QColor, QImage, QPixmap
+
+        from opencull_qt.develop import PhotoLabel
+
+        made = PhotoLabel()
+        made.resize(400, 300)
+        image = QImage(1600, 1200, QImage.Format.Format_RGB888)
+        image.fill(QColor(80, 60, 40))
+        made.set_source(QPixmap.fromImage(image))
+        return made
+
+    def test_fit_is_the_default_and_double_click_returns_to_it(self):
+        label = self.label()
+        self.assertEqual(label._zoom, 0.0)
+        label._zoom = label._fit_scale() * 3
+        label._redraw()
+        label.mouseDoubleClickEvent(None)
+        self.assertEqual(label._zoom, 0.0)
+        self.assertEqual(label._centre, [0.5, 0.5])
+
+    def test_the_view_is_clamped_inside_the_photograph(self):
+        label = self.label()
+        label._zoom = label._fit_scale() * 4
+        label._centre = [2.0, -1.0]       # dragged far out of the frame
+        label._redraw()
+        self.assertLessEqual(label._centre[0], 1.0)
+        self.assertGreaterEqual(label._centre[1], 0.0)
+
+    def test_a_new_proof_keeps_the_zoom(self):
+        from PySide6.QtGui import QColor, QImage, QPixmap
+
+        label = self.label()
+        label._zoom = label._fit_scale() * 2
+        image = QImage(1600, 1200, QImage.Format.Format_RGB888)
+        image.fill(QColor(10, 90, 40))
+        label.set_source(QPixmap.fromImage(image))
+        self.assertGreater(label._zoom, 0.0)
+
+
 class RendererCoalescingTests(unittest.TestCase):
     """A slider drag is many requests but must not be many renders.
 

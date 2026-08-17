@@ -156,6 +156,61 @@ class FineTunePageTests(unittest.TestCase):
         self.assertEqual(page._picking_for, "mask:1")   # still waiting
         self.assertIn("grey", page.status.text())
 
+    def test_undo_walks_back_and_redo_walks_forward(self):
+        page = self.page()
+        exposure = self.control(page, "tone.exposure")
+        exposure.slider.setValue(exposure._tick(0.30))
+        page._remember_key = ""              # end the coalescing beat
+        shadow = self.control(page, "tone.shadow")
+        shadow.enabled.setChecked(False)
+        self.assertIn(shadow.control["id"], page.changes)
+        page.undo()
+        self.assertNotIn(shadow.control["id"], page.changes)
+        self.assertIn(exposure.control["id"], page.changes)
+        page.undo()
+        self.assertEqual(page.changes, {})
+        page.redo()
+        self.assertIn(exposure.control["id"], page.changes)
+
+    def test_a_slider_drag_is_one_undo_step_not_forty(self):
+        page = self.page()
+        exposure = self.control(page, "tone.exposure")
+        for tick in range(5):
+            exposure.slider.setValue(exposure._tick(0.10 + tick * 0.05))
+        page.undo()
+        self.assertEqual(page.changes, {})
+
+    def test_erasing_a_layer_hides_it_and_keeps_the_others_addressed(self):
+        page = self.page()
+        page._create_mask("radial")
+        page._create_mask("linear")
+        placed = adjustments.masks(page.recipe)
+        first = placed[0]["ordinal"]
+        page._mask_structure(first, {"deleted": True})
+        remaining = adjustments.masks(page.recipe)
+        self.assertEqual(len(remaining), 1)
+        self.assertEqual(remaining[0]["shape"], "linear")
+        # And its ordinal survives for future edits.
+        self.assertGreater(remaining[0]["ordinal"], first)
+
+    def test_renaming_a_layer_says_the_new_name(self):
+        page = self.page()
+        page._create_mask("radial")
+        ordinal = adjustments.masks(page.recipe)[0]["ordinal"]
+        page._mask_structure(ordinal, {"label": "the crescent"})
+        self.assertEqual(
+            adjustments.masks(page.recipe)[0]["label"], "the crescent")
+
+    def test_controls_stay_in_place_when_ticked_in(self):
+        page = self.page()
+        before = [item.control["op"] for item in page.controls]
+        target = self.control(page, "detail.clarity")
+        self.assertTrue(target.absent)
+        target.slider.setValue(target._tick(10.0))
+        page._show_controls()
+        after = [item.control["op"] for item in page.controls]
+        self.assertEqual(before, after)
+
     def test_the_histogram_reads_the_arriving_render(self):
         from PySide6.QtGui import QColor, QImage, QPixmap
 

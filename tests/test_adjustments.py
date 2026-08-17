@@ -266,3 +266,45 @@ class ColourMaskTests(unittest.TestCase):
         out = adjustments.apply(recipe(), {"+mask": [{
             "shape": "swirl", "geometry": {}, "effects": []}]})
         self.assertEqual(adjustments.masks(out)[-1]["shape"], "radial")
+
+
+class MaskStructureTests(unittest.TestCase):
+    """Renamed by hand, erased but never destroyed."""
+
+    def masked(self):
+        base = recipe()
+        base["operations"].append({
+            "op": "mask.radial", "unit": "mask", "mode": "absolute",
+            "source": "sky", "enabled": True,
+            "value": {"anchor": "radial gradient at 50%, 50% radius 30%",
+                      "effects": []}})
+        base["operations"].append({
+            "op": "mask.linear", "unit": "mask", "mode": "absolute",
+            "source": "ground", "enabled": True,
+            "value": {"anchor": "linear gradient, from the bottom",
+                      "effects": []}})
+        return base
+
+    def test_a_mask_can_be_renamed(self):
+        out = adjustments.apply(self.masked(),
+                                {"mask:2": {"label": "the horizon"}})
+        self.assertEqual(adjustments.masks(out)[1]["label"], "the horizon")
+
+    def test_erasure_disables_and_hides_but_never_removes(self):
+        out = adjustments.apply(self.masked(), {"mask:1": {"deleted": True}})
+        shown = adjustments.masks(out)
+        self.assertEqual([m["id"] for m in shown], ["mask:2"])
+        held = [op for op in out["operations"]
+                if str(op.get("op", "")).startswith("mask.")]
+        self.assertEqual(len(held), 2)          # still in the recipe
+        self.assertTrue(held[0]["erased"])
+        self.assertIs(held[0]["enabled"], False)
+
+    def test_ordinals_survive_an_erasure(self):
+        out = adjustments.apply(self.masked(), {"mask:1": {"deleted": True}})
+        out = adjustments.apply(out, {"mask:2": {"geometry": {"reach": 25}}})
+        linear = [op for op in out["operations"]
+                  if op.get("op") == "mask.linear"][0]
+        self.assertIn("up to 25", linear["value"]["anchor"])
+        self.assertEqual(
+            adjustments.mask_surface(out, 2)[0]["id"], "mask:2/tone.exposure")
