@@ -401,12 +401,14 @@ TRACK_CONFIDENCE = 0.45
 
 
 def track_survey(photos: str, pattern: str, subject_box: str,
+                 subject_frame: str = "",
                  detect_edge: float = 1200) -> str:
-    """Follow one subject named by a single box in the first frame.
+    """Follow one subject named by a single box on one frame.
 
     The free tier of subject-locked stabilization: the photographer
-    marks the principal subject once -- [x0, y0, x1, y1] on the first
-    frame, full-resolution coordinates -- and normalized correlation
+    marks the principal subject once -- [x0, y0, x1, y1] on the frame
+    named by ``subject_frame`` (the first, when unnamed) -- and
+    normalized correlation
     finds the same patch in every later frame, searching a window
     around where it last stood, because subjects move but do not
     teleport. The template is cut once and never updated: a template
@@ -428,9 +430,27 @@ def track_survey(photos: str, pattern: str, subject_box: str,
     seed = [float(v) for v in str(subject_box).split(",")]
     if len(seed) != 4 or seed[2] <= seed[0] or seed[3] <= seed[1]:
         raise ValueError(
-            "subject_box is x0,y0,x1,y1 on the first frame, and the "
+            "subject_box is x0,y0,x1,y1 on the marked frame, and the "
             "box must have area")
     frames: list[dict[str, Any]] = []
+    anchor = str(subject_frame).strip()
+    if anchor:
+        # The box belongs to the frame it was drawn on. A sequence often
+        # starts with shots the subject is not in yet -- test frames,
+        # framing frames -- and cutting the template from one of those
+        # would track background with a straight face. Everything before
+        # the marked frame is set aside by name; the track starts where
+        # the mark was made.
+        names = [item["name"] for item in listed]
+        if anchor not in names:
+            raise ValueError(
+                f"subject_frame {anchor!r} is not among the frames")
+        at = names.index(anchor)
+        for item in listed[:at]:
+            frames.append({**item, "excluded": (
+                f"before the marked frame {anchor}; the subject was "
+                "marked there and tracking starts there")})
+        listed = listed[at:]
     template = None
     template_size = (0, 0)
     last: tuple[float, float] | None = None

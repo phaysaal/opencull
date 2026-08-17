@@ -693,9 +693,10 @@ class TimelapseDoorTests(FinetuneDoorTests):
         picked = []
 
         class Picker:
-            def __init__(self, frame_path, parent=None):
-                picked.append(Path(frame_path).name)
+            def __init__(self, frame_paths, parent=None):
+                picked.append([Path(item).name for item in frame_paths])
                 self.box = (120, 80, 360, 320)
+                self.frame = "B.JPG"        # marked on the second frame
 
             def exec(self):
                 return BoxPicker.DialogCode.Accepted
@@ -703,12 +704,18 @@ class TimelapseDoorTests(FinetuneDoorTests):
         with unittest.mock.patch(
                 "opencull_qt.timelapse.BoxPicker", Picker):
             dialog._mark_box()
-        # The FIRST frame by capture order, and the four numbers landed.
-        self.assertEqual(picked, ["A.JPG"])
+        # Every frame is offered to walk, the numbers landed, and the run
+        # is told WHICH frame the box belongs to.
+        self.assertEqual(picked[0][0], "A.JPG")
         self.assertEqual(dialog.box_field.text(), "120, 80, 360, 320")
         request = dialog.run_request()
         self.assertEqual(request["parameters"]["subject_box"],
                          "120,80,360,320")
+        self.assertEqual(request["parameters"]["subject_frame"], "B.JPG")
+        # Typing over the numbers by hand orphans the frame association.
+        dialog.box_field.textEdited.emit("1,2,3,4")
+        self.assertEqual(
+            dialog.run_request()["parameters"]["subject_frame"], "")
 
     def test_the_button_emits_the_program_and_its_parameters(self):
         page = self.page()

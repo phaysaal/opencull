@@ -71,7 +71,7 @@ class TimelapseDialog(QDialog):
         self.sun.setFont(theme.body(10))
         column.addWidget(self.sun)
         self.marked = QRadioButton(
-            "Something I mark with a box on the first frame — free")
+            "Something I mark with a box on a frame — free")
         self.marked.setFont(theme.body(10))
         column.addWidget(self.marked)
         self.named = QRadioButton(
@@ -82,11 +82,17 @@ class TimelapseDialog(QDialog):
 
         asks = QFormLayout()
         self.box_field = QLineEdit()
-        self.box_field.setPlaceholderText("x0, y0, x1, y1 on the first frame")
+        self.box_field.setPlaceholderText("x0, y0, x1, y1 — or Mark it…")
         self.box_field.setFont(theme.mono(9))
         self.box_field.setToolTip(tooltip(
-            "The subject's box in pixels of the first frame, origin "
-            "top-left. Mark it on the picture rather than typing it."))
+            "The subject's box in pixels of the frame it was marked "
+            "on, origin top-left. Mark it on the picture rather than "
+            "typing it."))
+        # Which frame the box was drawn on; empty means the first. Typing
+        # over the numbers by hand orphans the association, so it clears.
+        self._subject_frame = ""
+        self.box_field.textEdited.connect(
+            lambda _text: setattr(self, "_subject_frame", ""))
         box_row = QHBoxLayout()
         box_row.setSpacing(8)
         box_row.addWidget(self.box_field, 1)
@@ -94,8 +100,9 @@ class TimelapseDialog(QDialog):
         self.mark_button.setObjectName("ghost")
         self.mark_button.setFont(theme.body(9))
         self.mark_button.setToolTip(tooltip(
-            "Open the first frame and drag a box over the subject; the "
-            "numbers fill themselves in, in the frame's own pixels."))
+            "Walk the frames, then drag a box over the subject; the "
+            "numbers fill themselves in, in the frame's own pixels, and "
+            "tracking starts at the frame you marked."))
         self.mark_button.clicked.connect(self._mark_box)
         box_row.addWidget(self.mark_button)
         asks.addRow("Subject box", box_row)
@@ -232,7 +239,13 @@ class TimelapseDialog(QDialog):
             f"{self._frame_count} frames.")
 
     def _mark_box(self) -> None:
-        """Open the first frame; a dragged rectangle fills the field."""
+        """Open the frames; a dragged rectangle fills the field.
+
+        The sequence often starts with shots the subject is not in yet,
+        so the picker walks the frames -- the mark is made wherever the
+        subject shows clearly, and the run is told which frame that was
+        so tracking starts there and the earlier shots are set aside.
+        """
         from timelapse_kernel import list_frames
 
         try:
@@ -244,11 +257,15 @@ class TimelapseDialog(QDialog):
             self.status.setText(
                 f"No {self.pattern} frames were found in the folder.")
             return
-        first = Path(self.photos) / frames[0]["name"]
-        picker = BoxPicker(first, self)
+        paths = [Path(self.photos) / item["name"] for item in frames]
+        picker = BoxPicker(paths, self)
         if picker.exec() == QDialog.DialogCode.Accepted and picker.box:
             self.box_field.setText(", ".join(
                 str(value) for value in picker.box))
+            self._subject_frame = picker.frame
+            self.status.setText(
+                f"Box marked on {picker.frame}. Tracking starts there; "
+                "earlier frames are set aside.")
 
     def _chose_look(self) -> None:
         if self.look.currentData() != "…browse…":
@@ -300,6 +317,7 @@ class TimelapseDialog(QDialog):
                     "the first frame.")
                 return None
             parameters["subject_box"] = box
+            parameters["subject_frame"] = self._subject_frame
             return {"program": "subject_timelapse.kim",
                     "parameters": parameters}
         subject = self.name_field.text().strip()
@@ -386,14 +404,63 @@ class BoxPicker(QDialog):
 
     FIT = (980, 660)
 
-    def __init__(self, frame_path: Path, parent: QWidget | None = None):
+    def __init__(self, frame_paths: list[Path] | Path,
+                 parent: QWidget | None = None):
         super().__init__(parent)
         self.setWindowTitle("Mark the subject")
         self.box: tuple[int, int, int, int] | None = None
+        self.frame = ""
+        self._paths = ([Path(frame_paths)] if isinstance(frame_paths, Path)
+                       else [Path(item) for item in frame_paths])
+        self._at = 0
+        self._full = (1, 1)
+        self._shown = (1, 1)
 
+        column = QVBoxLayout(self)
+        lead = QLabel(
+            "Walk to a frame where the subject shows clearly -- the first "
+            "shots of a sequence often are not it yet -- then drag a box "
+            "over it. Tracking starts at the marked frame; everything "
+            "before is set aside.")
+        lead.setObjectName("hint")
+        lead.setWordWrap(True)
+        lead.setFont(theme.body(9))
+        column.addWidget(lead)
+        self.canvas = _FrameCanvas()
+        column.addWidget(self.canvas)
+
+        walk = QHBoxLayout()
+        walk.setSpacing(8)
+        for label, step in (("◀◀", -10), ("◀", -1), ("▶", 1), ("▶▶", 10)):
+            button = QPushButton(label)
+            button.setObjectName("ghost")
+            button.setFont(theme.body(9))
+            button.clicked.connect(
+                lambda _checked=False, s=step: self._walk(s))
+            walk.addWidget(button)
+        self.which = QLabel("")
+        self.which.setObjectName("hint")
+        self.which.setFont(theme.mono(9))
+        walk.addWidget(self.which, 1)
+        cancel = QPushButton("Cancel")
+        cancel.clicked.connect(self.reject)
+        walk.addWidget(cancel)
+        use = QPushButton("Use this box")
+        use.setObjectName("primary")
+        use.clicked.connect(self._use)
+        walk.addWidget(use)
+        column.addLayout(walk)
+
+        self._show(0)
+
+    def _walk(self, step: int) -> None:
+        self._show(self._at + step)
+
+    def _show(self, index: int) -> None:
         from timelapse_kernel import _preview
 
-        image = _preview(Path(frame_path))
+        self._at = max(0, min(int(index), len(self._paths) - 1))
+        image = _preview(self._paths[self._at])
         self._full = image.size
         shown = image.copy()
         shown.thumbnail(self.FIT)
@@ -402,30 +469,14 @@ class BoxPicker(QDialog):
         pixmap = QPixmap.fromImage(QImage(
             data, shown.width, shown.height,
             shown.width * 3, QImage.Format.Format_RGB888).copy())
-
-        column = QVBoxLayout(self)
-        lead = QLabel(
-            "Drag a box over the subject. The tracker follows whatever "
-            "you mark, so include the whole of it and little else.")
-        lead.setObjectName("hint")
-        lead.setWordWrap(True)
-        lead.setFont(theme.body(9))
-        column.addWidget(lead)
-        self.canvas = _FrameCanvas()
         self.canvas.setPixmap(pixmap)
         self.canvas.setFixedSize(pixmap.size())
-        column.addWidget(self.canvas)
-
-        buttons = QHBoxLayout()
-        buttons.addStretch(1)
-        cancel = QPushButton("Cancel")
-        cancel.clicked.connect(self.reject)
-        buttons.addWidget(cancel)
-        use = QPushButton("Use this box")
-        use.setObjectName("primary")
-        use.clicked.connect(self._use)
-        buttons.addWidget(use)
-        column.addLayout(buttons)
+        # A box drawn on another frame means nothing on this one.
+        self.canvas.drag = None
+        self.canvas.update()
+        self.which.setText(
+            f"frame {self._at + 1} of {len(self._paths)} · "
+            f"{self._paths[self._at].name}")
 
     def _use(self) -> None:
         drag = self.canvas.drag.normalized() if self.canvas.drag else None
@@ -434,4 +485,5 @@ class BoxPicker(QDialog):
         self.box = full_box(
             drag, self._shown[0], self._shown[1],
             self._full[0], self._full[1])
+        self.frame = self._paths[self._at].name
         self.accept()

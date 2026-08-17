@@ -570,6 +570,38 @@ class TrackTests(unittest.TestCase):
         first_x, first_y = positions[0]
         return f"{first_x},{first_y},{first_x + 48},{first_y + 48}"
 
+    def test_tracking_starts_at_the_marked_frame_not_the_first(self):
+        """The first shots of a sequence often are not the subject yet.
+        The box belongs to the frame it was drawn on: everything before
+        is set aside by name, and the template is cut where the mark
+        was made rather than from background."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            # Frames 0-1 have no subject at all; it appears at frame 2.
+            positions = [(0, 0), (0, 0), (200, 150), (240, 160), (270, 180)]
+            self.sequence(root, positions, missing={0, 1})
+            told = json.loads(timelapse.track_survey(
+                str(root), "frame-*.jpg", "200,150,248,198",
+                subject_frame="frame-002.jpg"))
+            excluded = {item["name"]: item["why"]
+                        for item in told["excluded"]}
+            self.assertIn("frame-000.jpg", excluded)
+            self.assertIn("frame-001.jpg", excluded)
+            self.assertIn("before the marked frame", excluded["frame-000.jpg"])
+            self.assertEqual(told["kept"], 3)
+            kept = [f for f in told["frames"] if "excluded" not in f]
+            self.assertEqual(kept[0]["name"], "frame-002.jpg")
+            self.assertAlmostEqual(kept[-1]["box"][0], 270, delta=3)
+
+    def test_an_unknown_marked_frame_refuses_rather_than_guessing(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.sequence(root, [(100, 100), (130, 100)])
+            with self.assertRaisesRegex(ValueError, "not among the frames"):
+                timelapse.track_survey(
+                    str(root), "frame-*.jpg", "100,100,148,148",
+                    subject_frame="frame-099.jpg")
+
     def test_the_tracker_follows_the_subject_within_pixels(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

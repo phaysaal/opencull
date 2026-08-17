@@ -14,6 +14,7 @@
 param photos: text = "."
 param pattern: text = "*.RAF"
 param subject_box: text = ""
+param subject_frame: text = ""
 param frames_dir: text = ""
 param recipe: text = ""
 param detect_edge: num = 1200
@@ -23,7 +24,7 @@ param demosaic: bool = false
 
 use python "timelapse_kernel.py"
 
-measured := track_survey(photos, pattern, subject_box, detect_edge)
+measured := track_survey(photos, pattern, subject_box, subject_frame, detect_edge)
 plan := crop_plan(measured)
 check plan_valid(plan)
 print(plan_note(plan))
