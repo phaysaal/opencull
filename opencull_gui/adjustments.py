@@ -514,6 +514,50 @@ def apply(recipe: dict[str, Any], changes: dict[str, Any]) -> dict[str, Any]:
                          "asked": 0.0, "set": 0.0, "enabled": True,
                          "unit": "curve", "inserted": True})
 
+    # The photographer's frame: a crop rectangle in fractions of the
+    # straightened picture, and the straightening itself. Update the
+    # operations the treatment already has, insert them where it does
+    # not; a full-frame, level ask removes what the hand added earlier
+    # rather than recording a crop of everything.
+    framing = changes.get("crop")
+    if isinstance(framing, dict):
+        left = min(max(float(framing.get("left", 0.0)), 0.0), 0.95)
+        top = min(max(float(framing.get("top", 0.0)), 0.0), 0.95)
+        wide = min(max(float(framing.get("width", 1.0)), 0.05), 1.0 - left)
+        tall = min(max(float(framing.get("height", 1.0)), 0.05), 1.0 - top)
+        angle = max(-15.0, min(15.0, float(framing.get("angle", 0.0))))
+        operations = result.setdefault("operations", [])
+        whole = (left <= 0.001 and top <= 0.001
+                 and wide >= 0.998 - left and tall >= 0.998 - top)
+
+        def settle(op_name: str, value, meaningless: bool) -> None:
+            existing = next(
+                (op for op in operations
+                 if isinstance(op, dict) and op.get("op") == op_name), None)
+            if existing is not None:
+                if meaningless and existing.get(
+                        "source") == "framed by hand":
+                    operations.remove(existing)
+                else:
+                    existing["value"] = value
+                    existing["enabled"] = not meaningless or bool(
+                        existing.get("source") != "framed by hand")
+            elif not meaningless:
+                operations.append({
+                    "op": op_name, "value": value,
+                    "unit": "crop" if op_name == "geometry.crop" else
+                    "degrees", "mode": "absolute",
+                    "source": "framed by hand", "enabled": True})
+
+        settle("geometry.crop",
+               {"left": round(left, 4), "top": round(top, 4),
+                "width": round(wide, 4), "height": round(tall, 4)},
+               whole)
+        settle("geometry.rotation", round(angle, 2), abs(angle) < 0.01)
+        recorded.append({"id": "crop", "op": "geometry.crop",
+                         "asked": 0.0, "set": 0.0, "enabled": True,
+                         "unit": "crop", "inserted": True})
+
     # The colour bands: eight hues, each with a hue shift, a saturation
     # move and a lightness move. One op per (band, component), updated in
     # place where the treatment already has it -- what the model asked is

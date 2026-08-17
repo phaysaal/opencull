@@ -370,6 +370,167 @@ def _band_rgb(band: str, *, hue_shift: float = 0.0, sat: float = 0.75,
     return (int(r * 255), int(g * 255), int(b * 255))
 
 
+class CropOverlay(QWidget):
+    """The photographer's frame, drawn over the picture and draggable.
+
+    A rectangle in fractions of the shown photograph: corners and edges
+    resize it, the inside moves it, the outside world is dimmed and a
+    thirds grid sits where composition is judged. The overlay only
+    gathers the ask; the crop itself is an operation like any other.
+    """
+
+    GRAB = 14.0
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.rect_f = [0.0, 0.0, 1.0, 1.0]   # left, top, width, height
+        self.aspect: float | None = None      # None = free
+        self._mode = ""
+        self._from = None
+        self._begin = None
+        self.setMouseTracking(False)
+
+    # --- geometry between widget and photograph ---------------------------
+
+    def _shown(self):
+        from PySide6.QtCore import QRectF
+
+        label = self.parent()
+        pixmap = label.pixmap() if label is not None else None
+        if pixmap is None or pixmap.isNull():
+            return QRectF(0, 0, max(self.width(), 1), max(self.height(), 1))
+        ratio = float(pixmap.devicePixelRatio() or 1.0)
+        width, height = pixmap.width() / ratio, pixmap.height() / ratio
+        return QRectF((self.width() - width) / 2,
+                      (self.height() - height) / 2, width, height)
+
+    def _frame_rect(self):
+        from PySide6.QtCore import QRectF
+
+        shown = self._shown()
+        left, top, wide, tall = self.rect_f
+        return QRectF(shown.left() + left * shown.width(),
+                      shown.top() + top * shown.height(),
+                      wide * shown.width(), tall * shown.height())
+
+    # --- the hand ----------------------------------------------------------
+
+    def _hit(self, pos) -> str:
+        frame = self._frame_rect()
+        near = self.GRAB
+        left = abs(pos.x() - frame.left()) <= near
+        right = abs(pos.x() - frame.right()) <= near
+        top = abs(pos.y() - frame.top()) <= near
+        bottom = abs(pos.y() - frame.bottom()) <= near
+        inside_x = frame.left() - near <= pos.x() <= frame.right() + near
+        inside_y = frame.top() - near <= pos.y() <= frame.bottom() + near
+        if top and left:
+            return "tl"
+        if top and right:
+            return "tr"
+        if bottom and left:
+            return "bl"
+        if bottom and right:
+            return "br"
+        if top and inside_x:
+            return "t"
+        if bottom and inside_x:
+            return "b"
+        if left and inside_y:
+            return "l"
+        if right and inside_y:
+            return "r"
+        if frame.contains(pos):
+            return "move"
+        return ""
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        self._mode = self._hit(event.position())
+        self._from = event.position()
+        self._begin = list(self.rect_f)
+
+    def mouseMoveEvent(self, event) -> None:   # noqa: N802 - Qt naming
+        if not self._mode or self._from is None:
+            return
+        shown = self._shown()
+        dx = (event.position().x() - self._from.x()) / max(shown.width(), 1)
+        dy = (event.position().y() - self._from.y()) / max(shown.height(), 1)
+        left, top, wide, tall = self._begin
+        least = 0.05
+        mode = self._mode
+        if mode == "move":
+            left = min(max(left + dx, 0.0), 1.0 - wide)
+            top = min(max(top + dy, 0.0), 1.0 - tall)
+        else:
+            right, bottom = left + wide, top + tall
+            if "l" in mode:
+                left = min(max(left + dx, 0.0), right - least)
+            if "r" in mode:
+                right = min(max(right + dx, left + least), 1.0)
+            if "t" in mode:
+                top = min(max(top + dy, 0.0), bottom - least)
+            if "b" in mode:
+                bottom = min(max(bottom + dy, top + least), 1.0)
+            wide, tall = right - left, bottom - top
+            if self.aspect:
+                # The photograph's own pixels are the aspect's units.
+                ratio = shown.width() / max(shown.height(), 1)
+                want_tall = wide * ratio / self.aspect
+                if mode in ("l", "r"):
+                    middle = top + tall / 2
+                    tall = min(want_tall, 1.0)
+                    top = min(max(middle - tall / 2, 0.0), 1.0 - tall)
+                else:
+                    tall = min(want_tall, 1.0 - top)
+                    wide = tall * self.aspect / ratio
+                    if "l" in mode:
+                        left = right - wide
+        self.rect_f = [left, top, wide, tall]
+        self.update()
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        self._mode = ""
+        self._from = None
+
+    # --- the paint ---------------------------------------------------------
+
+    def paintEvent(self, event) -> None:       # noqa: N802 - Qt naming
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QPainter, QPen
+
+        painter = QPainter(self)
+        shown = self._shown()
+        frame = self._frame_rect()
+        scrim = QColor(10, 9, 9, 150)
+        painter.fillRect(QRectF(shown.left(), shown.top(),
+                                shown.width(), frame.top() - shown.top()),
+                         scrim)
+        painter.fillRect(QRectF(shown.left(), frame.bottom(), shown.width(),
+                                shown.bottom() - frame.bottom()), scrim)
+        painter.fillRect(QRectF(shown.left(), frame.top(),
+                                frame.left() - shown.left(),
+                                frame.height()), scrim)
+        painter.fillRect(QRectF(frame.right(), frame.top(),
+                                shown.right() - frame.right(),
+                                frame.height()), scrim)
+        painter.setPen(QPen(QColor(theme.PAPER), 1.4))
+        painter.drawRect(frame)
+        painter.setPen(QPen(QColor(237, 231, 222, 90), 1))
+        for third in (1 / 3, 2 / 3):
+            x = frame.left() + frame.width() * third
+            y = frame.top() + frame.height() * third
+            painter.drawLine(int(x), int(frame.top()),
+                             int(x), int(frame.bottom()))
+            painter.drawLine(int(frame.left()), int(y),
+                             int(frame.right()), int(y))
+        painter.setPen(QPen(QColor(theme.SAFELIGHT), 2))
+        for cx in (frame.left(), frame.right()):
+            for cy in (frame.top(), frame.bottom()):
+                painter.drawLine(int(cx - 8), int(cy), int(cx + 8), int(cy))
+                painter.drawLine(int(cx), int(cy - 8), int(cx), int(cy + 8))
+        painter.end()
+
+
 class HslPanel(QWidget):
     """Eight colour bands, each with a hue, saturation and lightness move.
 
@@ -673,6 +834,19 @@ class FineTunePage(QWidget):
         self.caption.setFont(theme.display(8))
         head.addWidget(self.caption)
         head.addStretch(1)
+        self.crop_button = QPushButton("Crop ⛶")
+        self.crop_button.setObjectName("ghost")
+        self.crop_button.setProperty("slim", "true")
+        self.crop_button.setFont(theme.body(9))
+        self.crop_button.setCheckable(True)
+        self.crop_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.crop_button.setToolTip(tooltip(
+            "Frame the photograph: drag the rectangle's corners and "
+            "edges, move it from inside, straighten below it. The crop "
+            "is an operation like any other -- undoable, exported with "
+            "the recipe, applied at full size."))
+        self.crop_button.toggled.connect(self._crop_mode_toggled)
+        head.addWidget(self.crop_button)
         wb = QPushButton("WB ⌖")
         wb.setObjectName("ghost")
         wb.setProperty("slim", "true")
@@ -695,6 +869,39 @@ class FineTunePage(QWidget):
         # Says a render is on its way -- but only once it has taken long
         # enough to wonder. A fast render never shows it at all.
         from PySide6.QtCore import QTimer
+
+        self._crop_overlay = CropOverlay(self.frame)
+        self._crop_overlay.hide()
+        self._crop_base = None
+        crop_bar = QHBoxLayout()
+        crop_bar.setSpacing(8)
+        self._crop_aspect = QComboBox()
+        self._crop_aspect.setFont(theme.body(9))
+        for label, value in (("Free", 0.0), ("Original", -1.0),
+                             ("1:1", 1.0), ("3:2", 1.5), ("2:3", 2 / 3),
+                             ("4:3", 4 / 3), ("16:9", 16 / 9)):
+            self._crop_aspect.addItem(label, value)
+        self._crop_aspect.currentIndexChanged.connect(self._crop_aspected)
+        crop_bar.addWidget(self._crop_aspect)
+        self._crop_angle = GeometrySlider(
+            "angle", "Straighten", -15.0, 15.0, 0.0, unit="°")
+        self._crop_angle.changed.connect(self._crop_angled)
+        crop_bar.addWidget(self._crop_angle, 1)
+        crop_apply = QPushButton("Apply")
+        crop_apply.setObjectName("primary")
+        crop_apply.setFont(theme.body(9))
+        crop_apply.clicked.connect(self._crop_apply)
+        crop_bar.addWidget(crop_apply)
+        crop_cancel = QPushButton("Cancel")
+        crop_cancel.setFont(theme.body(9))
+        crop_cancel.clicked.connect(
+            lambda: self.crop_button.setChecked(False))
+        crop_bar.addWidget(crop_cancel)
+        self._crop_bar = QWidget()
+        self._crop_bar.setLayout(crop_bar)
+        self._crop_bar.layout().setContentsMargins(0, 0, 0, 0)
+        self._crop_bar.hide()
+        column.addWidget(self._crop_bar)
 
         self._preparing = QLabel("developing…", self.frame)
         self._preparing.setObjectName("hint")
@@ -1112,6 +1319,68 @@ class FineTunePage(QWidget):
         self._show_controls()
         self.render()
 
+    def _crop_mode_toggled(self, on: bool) -> None:
+        self._crop_bar.setVisible(on)
+        if on:
+            held = self.changes.get("crop") or {}
+            self._crop_overlay.rect_f = [
+                float(held.get("left", 0.0)), float(held.get("top", 0.0)),
+                float(held.get("width", 1.0)),
+                float(held.get("height", 1.0))]
+            self._crop_angle.slider.blockSignals(True)
+            angle = float(held.get("angle", 0.0))
+            self._crop_angle.slider.setValue(
+                int((angle + 15) / 30 * TICKS))
+            self._crop_angle.slider.blockSignals(False)
+            self._crop_angle.reading.setText(f"{angle:.0f}°")
+            self._crop_overlay.setGeometry(self.frame.rect())
+            self._crop_overlay.show()
+            self._crop_overlay.raise_()
+            self.render()          # the un-cropped proof, to frame within
+        else:
+            self._crop_overlay.hide()
+            self._crop_base = None
+            self.render()
+
+    def _crop_angled(self, _key: str, angle: float) -> None:
+        # Straightening is judged live: the shown proof turns under the
+        # fixed rectangle, cheap at proof size.
+        if self._crop_base is not None:
+            from PySide6.QtGui import QTransform
+
+            turned = self._crop_base.transformed(
+                QTransform().rotate(-angle),
+                Qt.TransformationMode.SmoothTransformation)
+            self.frame.set_source(turned)
+            self._crop_overlay.update()
+
+    def _crop_aspected(self) -> None:
+        value = float(self._crop_aspect.currentData() or 0.0)
+        if value == 0.0:
+            self._crop_overlay.aspect = None
+        elif value < 0.0:
+            source = self.frame._source
+            self._crop_overlay.aspect = (
+                source.width() / max(source.height(), 1)
+                if source is not None else None)
+        else:
+            self._crop_overlay.aspect = value
+        self._crop_overlay.update()
+
+    def _crop_angle_value(self) -> float:
+        tick = self._crop_angle.slider.value()
+        return -15.0 + 30.0 * tick / TICKS
+
+    def _crop_apply(self) -> None:
+        left, top, wide, tall = self._crop_overlay.rect_f
+        self._remember("crop")
+        self.changes["crop"] = {
+            "left": round(left, 4), "top": round(top, 4),
+            "width": round(wide, 4), "height": round(tall, 4),
+            "angle": round(self._crop_angle_value(), 2)}
+        self.crop_button.setChecked(False)
+        self._rebuild_mirror()
+
     def _start_wb_pick(self) -> None:
         if not self.current or not self.treatment:
             return
@@ -1182,6 +1451,9 @@ class FineTunePage(QWidget):
     def eventFilter(self, watched, event) -> bool:  # noqa: N802 - Qt naming
         from PySide6.QtCore import QEvent
 
+        if watched is self.frame and event.type() == QEvent.Type.Resize:
+            if self._crop_overlay.isVisible():
+                self._crop_overlay.setGeometry(self.frame.rect())
         if (watched is self.frame and self._picking_for
                 and event.type() == QEvent.Type.MouseButtonPress):
             self._pick_at(event.position())
@@ -2009,9 +2281,15 @@ class FineTunePage(QWidget):
         # The caption follows the pixels, not the request: it is set by
         # _rendered when the picture actually changes. Until then the
         # pane honestly shows the frame as shot, and says so.
+        asked = self.changes
+        if self.crop_button.isChecked():
+            # Framing happens on the whole photograph: the proof under
+            # the rectangle is rendered without the crop being framed.
+            asked = {key: value for key, value in self.changes.items()
+                     if key != "crop"}
         self.renderer.render(
             self.current, self.treatment, self.engine(), self._demosaic(),
-            adjustments=self.changes or None, maximum=self.proof_edge())
+            adjustments=asked or None, maximum=self.proof_edge())
         self._render_pending = True
         self._prepare_timer.start()
 
@@ -2044,6 +2322,11 @@ class FineTunePage(QWidget):
             return
         self._render_pending = False
         self._preparing.hide()
+        if self.crop_button.isChecked():
+            self._crop_base = pixmap
+            self._crop_overlay.setGeometry(self.frame.rect())
+            self._crop_overlay.raise_()
+            self._crop_overlay.update()
         self._plain_pixmap = pixmap
         if self._as_shot_pixmap is None:
             try:

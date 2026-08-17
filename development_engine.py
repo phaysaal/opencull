@@ -848,6 +848,25 @@ def _geometry(image: Image.Image, operations: list[dict[str, Any]]) -> Image.Ima
         if item.get("op") == "geometry.rotation":
             result = _straighten(result, float(item["value"]))
     for item in operations:
+        if item.get("op") == "geometry.crop" and isinstance(
+                item.get("value"), dict):
+            # The photographer's own frame: a rectangle in fractions of
+            # the straightened picture, so the same crop lands on a proof
+            # and on the full-size render alike. Bounded so a degenerate
+            # drag can never ask for an empty photograph.
+            value = item["value"]
+            width, height = result.size
+            left = min(max(float(value.get("left", 0.0)), 0.0), 0.95)
+            top = min(max(float(value.get("top", 0.0)), 0.0), 0.95)
+            wide = min(max(float(value.get("width", 1.0)), 0.05),
+                       1.0 - left)
+            tall = min(max(float(value.get("height", 1.0)), 0.05),
+                       1.0 - top)
+            result = result.crop((
+                int(left * width), int(top * height),
+                max(int((left + wide) * width), int(left * width) + 8),
+                max(int((top + tall) * height), int(top * height) + 8)))
+    for item in operations:
         if item.get("op") == "geometry.crop_aspect":
             ratio = item.get("value")
             if isinstance(ratio, list) and len(ratio) == 2 and ratio[1]:

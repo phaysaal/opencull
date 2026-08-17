@@ -257,6 +257,56 @@ class FineTunePageTests(unittest.TestCase):
         self.assertIn("clipped", page.status.text())
         self.assertNotIn("color.temperature", page.changes)
 
+    def test_the_crop_overlay_moves_and_resizes_in_fractions(self):
+        from PySide6.QtCore import QPointF
+        from PySide6.QtGui import QColor, QImage, QPixmap
+
+        from opencull_qt.develop import PhotoLabel
+        from opencull_qt.finetune import CropOverlay
+
+        frame = PhotoLabel()
+        frame.resize(400, 300)
+        image = QImage(1200, 900, QImage.Format.Format_RGB888)
+        image.fill(QColor(60, 50, 40))
+        frame.set_source(QPixmap.fromImage(image))
+        overlay = CropOverlay(frame)
+        overlay.setGeometry(frame.rect())
+        overlay.rect_f = [0.2, 0.2, 0.5, 0.5]
+
+        class Event:
+            def __init__(self, x, y):
+                self._at = QPointF(x, y)
+
+            def position(self):
+                return self._at
+
+        centre = overlay._frame_rect().center()
+        overlay.mousePressEvent(Event(centre.x(), centre.y()))
+        overlay.mouseMoveEvent(Event(centre.x() + 40, centre.y()))
+        overlay.mouseReleaseEvent(Event(0, 0))
+        self.assertGreater(overlay.rect_f[0], 0.2)
+        self.assertAlmostEqual(overlay.rect_f[2], 0.5, places=3)
+        # A corner drag resizes; the rectangle never leaves the frame.
+        corner = overlay._frame_rect().bottomRight()
+        overlay.mousePressEvent(Event(corner.x(), corner.y()))
+        overlay.mouseMoveEvent(Event(corner.x() + 4000, corner.y() + 4000))
+        overlay.mouseReleaseEvent(Event(0, 0))
+        self.assertLessEqual(overlay.rect_f[0] + overlay.rect_f[2], 1.0)
+        self.assertLessEqual(overlay.rect_f[1] + overlay.rect_f[3], 1.0)
+
+    def test_applying_the_crop_folds_it_into_the_recipe(self):
+        page = self.page()
+        page.crop_button.setChecked(True)
+        page._crop_overlay.rect_f = [0.1, 0.1, 0.6, 0.6]
+        page._crop_apply()
+        self.assertFalse(page.crop_button.isChecked())
+        held = {op["op"]: op for op in page.recipe["operations"]}
+        self.assertEqual(held["geometry.crop"]["value"]["width"], 0.6)
+        # And undo takes the frame back off.
+        page._remember_key = ""
+        page.undo()
+        self.assertNotIn("crop", page.changes)
+
     def test_the_histogram_reads_the_arriving_render(self):
         from PySide6.QtGui import QColor, QImage, QPixmap
 
@@ -851,7 +901,8 @@ class LayerTests(FineTunePageTests):
         from opencull_qt.finetune import HslPanel
 
         loose = [slider for slider in page.findChildren(GeometrySlider)
-                 if not isinstance(slider.parent(), HslPanel)]
+                 if not isinstance(slider.parent(), HslPanel)
+                 and slider is not page._crop_angle]
         self.assertEqual(loose, [])
 
     def test_base_layer_resets_do_not_touch_the_masks_moves(self):

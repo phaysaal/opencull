@@ -344,3 +344,35 @@ class HslFoldTests(unittest.TestCase):
         state = adjustments.hsl_state(out)
         self.assertEqual(state[("red", "hue")]["value"], 45.0)
         self.assertEqual(state[("red", "saturation")]["value"], 100.0)
+
+
+class CropFoldTests(unittest.TestCase):
+    """The photographer's frame folds in, and folds back out."""
+
+    def test_a_frame_and_an_angle_become_operations(self):
+        out = adjustments.apply(recipe(), {"crop": {
+            "left": 0.1, "top": 0.2, "width": 0.5, "height": 0.5,
+            "angle": 1.5}})
+        held = {op["op"]: op for op in out["operations"]}
+        self.assertEqual(held["geometry.crop"]["value"]["width"], 0.5)
+        self.assertEqual(held["geometry.rotation"]["value"], 1.5)
+
+    def test_the_whole_frame_level_removes_what_the_hand_added(self):
+        framed = adjustments.apply(recipe(), {"crop": {
+            "left": 0.1, "top": 0.2, "width": 0.5, "height": 0.5,
+            "angle": 1.5}})
+        back = adjustments.apply(framed, {"crop": {
+            "left": 0, "top": 0, "width": 1, "height": 1, "angle": 0}})
+        ops = [op["op"] for op in back["operations"]]
+        self.assertNotIn("geometry.crop", ops)
+        self.assertNotIn("geometry.rotation", ops)
+
+    def test_a_degenerate_ask_is_bounded_not_believed(self):
+        out = adjustments.apply(recipe(), {"crop": {
+            "left": 0.99, "top": -1, "width": 0.001, "height": 9,
+            "angle": 80}})
+        held = {op["op"]: op for op in out["operations"]}
+        value = held["geometry.crop"]["value"]
+        self.assertGreaterEqual(value["width"], 0.05)
+        self.assertLessEqual(value["left"] + value["width"], 1.0)
+        self.assertEqual(held["geometry.rotation"]["value"], 15.0)
