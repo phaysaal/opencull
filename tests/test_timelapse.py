@@ -293,8 +293,8 @@ class ProgressMarkerTests(unittest.TestCase):
             self.assertTrue(markers)
             # Aligning sits in the first band, rendering in the second, and
             # the percentages only advance -- one bar across both phases.
-            self.assertTrue(any("aligning" in m for m in markers))
-            self.assertTrue(any("rendering" in m for m in markers))
+            self.assertTrue(any("aligned" in m for m in markers))
+            self.assertTrue(any("rendered" in m for m in markers))
             self.assertEqual(percents, sorted(percents))
             self.assertLessEqual(max(percents), 90)
 
@@ -414,6 +414,11 @@ class SequenceTests(unittest.TestCase):
         """With demosaic on, every planned frame is developed from the
         raw with the look applied in float -- and the crop stage must not
         apply the operations a second time."""
+        with mock.patch.dict(
+                "os.environ", {"DARKIMIYA_TIMELAPSE_WORKERS": "1"}):
+            self._ultimate_quality_develops_each_frame_once()
+
+    def _ultimate_quality_develops_each_frame_once(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             for index, centre in enumerate([(430, 300), (470, 300)]):
@@ -451,7 +456,9 @@ class SequenceTests(unittest.TestCase):
             self.assertGreater(float(first.mean()), 180)
 
     def test_without_the_switch_nothing_is_demosaiced(self):
-        with tempfile.TemporaryDirectory() as temporary:
+        with mock.patch.dict(
+                "os.environ", {"DARKIMIYA_TIMELAPSE_WORKERS": "1"}), \
+                tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             crescent(root / "frame-000.jpg")
             crescent(root / "frame-001.jpg", centre=(460, 310))
@@ -462,6 +469,34 @@ class SequenceTests(unittest.TestCase):
                     str(root), plan, str(root / "out")))
             developed.assert_not_called()
             self.assertEqual(report["base"], "embedded rendering")
+
+    def test_parallel_and_serial_render_the_same_film(self):
+        """The pool is a speed choice, never a picture choice."""
+        import hashlib
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for index, centre in enumerate([(430, 300), (470, 300),
+                                            (450, 320)]):
+                crescent(root / f"frame-{index:03d}.jpg", centre=centre)
+            plan = timelapse.crop_plan(
+                timelapse.survey(str(root), "frame-*.jpg"))
+            with mock.patch.dict(
+                    "os.environ", {"DARKIMIYA_TIMELAPSE_WORKERS": "1"}):
+                timelapse.render_sequence(str(root), plan,
+                                          str(root / "serial"))
+            with mock.patch.dict(
+                    "os.environ", {"DARKIMIYA_TIMELAPSE_WORKERS": "3"}):
+                timelapse.render_sequence(str(root), plan,
+                                          str(root / "pooled"))
+
+            def digest(folder: Path) -> list[tuple[str, str]]:
+                return [(p.name,
+                         hashlib.sha256(p.read_bytes()).hexdigest())
+                        for p in sorted(folder.glob("*.jpg"))]
+
+            self.assertEqual(digest(root / "serial"),
+                             digest(root / "pooled"))
 
     def test_a_previous_runs_tail_is_cleared_before_rendering(self):
         """The frames folder is reused run after run. A shorter run must

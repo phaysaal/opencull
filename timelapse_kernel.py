@@ -48,11 +48,13 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import random
 import shlex
 import shutil
 import subprocess
 import threading
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -345,6 +347,126 @@ def _smoothed(values: list[float], window: int = 5) -> list[float]:
     return out
 
 
+def _quiet_native_threads() -> None:
+    """Run once in each pool worker: one core per worker, no chorus.
+
+    The raw decoder and numpy both spread a single frame across every
+    core when allowed, so a pool of workers each doing the same would
+    oversubscribe the machine into being slower than serial. The
+    parallelism lives at the frame level; within a worker, one thread.
+    """
+    for name in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS",
+                 "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS",
+                 "VECLIB_MAXIMUM_THREADS"):
+        os.environ[name] = "1"
+
+
+def _worker_count(demosaic: bool = False) -> int:
+    """How many frames to work on at once.
+
+    Every frame of a survey and a render is independent of every other,
+    so the batch spreads across cores. Demosaic workers hold a whole
+    16-bit frame in float, so they are capped tighter than the light
+    embedded-rendering ones; both leave cores free for the interface
+    and the encoder that follows.
+    """
+    told = os.environ.get("DARKIMIYA_TIMELAPSE_WORKERS", "")
+    if told.strip():
+        try:
+            return max(1, int(told))
+        except ValueError:
+            pass
+    cores = os.cpu_count() or 2
+    return max(1, min(cores - 2, 4 if demosaic else 8))
+
+
+def _measure_frame(photos: str, item: dict, detect_edge: float) -> dict:
+    """One frame of the eclipse survey: the loop body, process-safe."""
+    root = Path(str(photos)).expanduser().resolve()
+    path = root / item["name"]
+    try:
+        image = _preview(path)
+    except Exception as exc:                         # noqa: BLE001 - named
+        return {**item, "excluded": f"unreadable: {exc}"}
+    width, height = image.size
+    scale = min(1.0, float(detect_edge) / max(width, height))
+    probe = image if scale >= 1.0 else image.resize(
+        (max(1, round(width * scale)), max(1, round(height * scale))),
+        Image.Resampling.BILINEAR)
+    grey = np.asarray(probe.convert("L"), dtype=np.float32)
+    # A disc touching the frame edge is clipped, and a clipped disc
+    # does not fail loudly -- it fits a wrong circle with a straight
+    # face. The bright mask against the border is the honest test,
+    # made before any fit is believed.
+    top = float(grey.max())
+    bright = grey >= BRIGHT_FRACTION * top if top > 0 else grey > 1e9
+    if (bright[:2].any() or bright[-2:].any()
+            or bright[:, :2].any() or bright[:, -2:].any()):
+        return {**item, "excluded": (
+            "the sun touches the frame edge; a clipped disc fits a "
+            "wrong circle rather than none")}
+    fitted = fit_limb(grey)
+    if fitted is None:
+        return {**item, "excluded": "no sun found to fit"}
+    cx, cy = fitted["cx"] / scale, fitted["cy"] / scale
+    r = fitted["r"] / scale
+    return {
+        **item, "width": width, "height": height,
+        # The contract every measurer fills: the subject's box.
+        # The circle's own numbers stay beside it as this
+        # measurer's working notes.
+        "box": [cx - r, cy - r, cx + r, cy + r],
+        "r": r, "inliers": fitted["inliers"]}
+
+
+def _render_frame(photos: str, box: dict, index: int, crop_w: int,
+                  crop_h: int, operations: list, demosaic: bool,
+                  directory: str) -> str:
+    """One frame of the film: the render loop's body, process-safe."""
+    root = Path(photos)
+    where = Path(directory)
+    applied = False
+    if demosaic:
+        # Ultimate quality: the raw demosaiced and the look applied in
+        # sixteen-bit scene-referred float BEFORE anything is quantised
+        # to eight bits. The embedded rendering has the camera's white
+        # balance and tone curve already baked into 8-bit pixels, so an
+        # extreme move -- a big kelvin swing on an infrared frame --
+        # clips and posterises there; on the demosaic it stays clean.
+        developed = _developed(root / box["name"], operations)
+        if developed is not None:
+            image, applied = developed, bool(operations)
+        else:
+            image = _preview(root / box["name"])
+    else:
+        image = _preview(root / box["name"])
+    scale = float(box.get("scale", 1.0))
+    if abs(scale - 1.0) > 1e-4:
+        # Resample to the sequence's scale so the sun is one size
+        # throughout. The crop box is already in these normalised
+        # pixels, so the crop that follows is in the same frame as
+        # every other frame's.
+        image = image.resize(
+            (max(1, round(image.width * scale)),
+             max(1, round(image.height * scale))),
+            Image.Resampling.LANCZOS)
+    crop = image.crop((
+        box["left"], box["top"],
+        box["left"] + crop_w, box["top"] + crop_h))
+    if operations and not applied:
+        # The engine's own invertible pair: display to scene-linear
+        # and back, same primaries. Its sibling decode-to-rec2020
+        # is NOT _encoded's inverse -- pairing them brightened every
+        # frame by the gamut matrix, measured before it shipped.
+        linear = _decoded(np.asarray(crop, dtype=np.float32) / 255.0)
+        linear = _apply_global(linear, operations)
+        shown = np.clip(_encoded(linear), 0.0, 1.0)
+        crop = Image.fromarray((shown * 255).astype(np.uint8))
+    name = f"{index:04d}.jpg"
+    crop.save(where / name, quality=93)
+    return name
+
+
 # --- the survey and the plan ------------------------------------------------
 
 def survey(photos: str, pattern: str = "*.RAF",
@@ -356,52 +478,40 @@ def survey(photos: str, pattern: str = "*.RAF",
     the full-resolution preview.
     """
     root = Path(str(photos)).expanduser().resolve()
-    frames = []
     items = list_frames(photos, pattern, only)
     total = max(1, len(items))
+    # Every frame's fit is independent of every other's, so they spread
+    # across cores; the results come home in whatever order they finish
+    # and are put back in shooting order, because the screening that
+    # follows reasons about neighbours.
+    measured: list[dict | None] = [None] * len(items)
+    done = 0
     said = -1
-    for order, item in enumerate(items, start=1):
-        percent = _ALIGN_BAND * order / total
+    workers = _worker_count()
+
+    def landed(index: int, record: dict) -> None:
+        nonlocal done, said
+        measured[index] = record
+        done += 1
+        percent = _ALIGN_BAND * done / total
         if round(percent) != said:
             said = round(percent)
-            _say_progress(percent, f"aligning frame {order} of {total}")
-        path = root / item["name"]
-        try:
-            image = _preview(path)
-        except Exception as exc:                     # noqa: BLE001 - named
-            frames.append({**item, "excluded": f"unreadable: {exc}"})
-            continue
-        width, height = image.size
-        scale = min(1.0, float(detect_edge) / max(width, height))
-        probe = image if scale >= 1.0 else image.resize(
-            (max(1, round(width * scale)), max(1, round(height * scale))),
-            Image.Resampling.BILINEAR)
-        grey = np.asarray(probe.convert("L"), dtype=np.float32)
-        # A disc touching the frame edge is clipped, and a clipped disc
-        # does not fail loudly -- it fits a wrong circle with a straight
-        # face. The bright mask against the border is the honest test,
-        # made before any fit is believed.
-        top = float(grey.max())
-        bright = grey >= BRIGHT_FRACTION * top if top > 0 else grey > 1e9
-        if (bright[:2].any() or bright[-2:].any()
-                or bright[:, :2].any() or bright[:, -2:].any()):
-            frames.append({**item, "excluded": (
-                "the sun touches the frame edge; a clipped disc fits a "
-                "wrong circle rather than none")})
-            continue
-        fitted = fit_limb(grey)
-        if fitted is None:
-            frames.append({**item, "excluded": "no sun found to fit"})
-            continue
-        cx, cy = fitted["cx"] / scale, fitted["cy"] / scale
-        r = fitted["r"] / scale
-        frames.append({
-            **item, "width": width, "height": height,
-            # The contract every measurer fills: the subject's box.
-            # The circle's own numbers stay beside it as this
-            # measurer's working notes.
-            "box": [cx - r, cy - r, cx + r, cy + r],
-            "r": r, "inliers": fitted["inliers"]})
+            _say_progress(percent, f"aligned {done} of {total}")
+
+    if workers == 1:
+        for index, item in enumerate(items):
+            landed(index, _measure_frame(str(root), item, detect_edge))
+    else:
+        with ProcessPoolExecutor(
+                max_workers=workers,
+                initializer=_quiet_native_threads) as pool:
+            futures = {
+                pool.submit(_measure_frame, str(root), item,
+                            detect_edge): index
+                for index, item in enumerate(items)}
+            for future in as_completed(futures):
+                landed(futures[future], future.result())
+    frames = [record for record in measured if record is not None]
     frames = _screen(frames)
     kept = [f for f in frames if "excluded" not in f]
     return json.dumps({
@@ -976,59 +1086,49 @@ def render_sequence(photos: str, plan_text: str, directory: str,
     for stale in where.glob("[0-9][0-9][0-9][0-9].jpg"):
         stale.unlink()
     operations = _shift_operations(recipe, photos)
-    written = []
     total = max(1, len(plan["boxes"]))
+    # Every frame's development is independent of every other's -- the
+    # plan already settled where each crop lands -- so they spread
+    # across cores. On the machine this was built on, an ultimate-
+    # quality run fell from hours to well under one. The report lists
+    # the frames in film order regardless of who finished first.
+    done = 0
     said = -1
-    for index, box in enumerate(plan["boxes"], start=1):
-        percent = _ALIGN_BAND + (_RENDER_BAND - _ALIGN_BAND) * index / total
+    workers = _worker_count(demosaic)
+
+    def landed() -> None:
+        nonlocal done, said
+        done += 1
+        percent = _ALIGN_BAND + (
+            _RENDER_BAND - _ALIGN_BAND) * done / total
         if round(percent) != said:
             said = round(percent)
             _say_progress(percent, (
-                f"developing frame {index} of {total}" if demosaic
-                else f"rendering frame {index} of {total}"))
-        applied = False
-        if demosaic:
-            # Ultimate quality: the raw demosaiced and the look applied in
-            # sixteen-bit scene-referred float BEFORE anything is quantised
-            # to eight bits. The embedded rendering has the camera's white
-            # balance and tone curve already baked into 8-bit pixels, so an
-            # extreme move -- a big kelvin swing on an infrared frame --
-            # clips and posterises there; on the demosaic it stays clean.
-            # Slower by design: this is minutes of decoding bought for
-            # colour headroom, and the switch says so.
-            developed = _developed(root / box["name"], operations)
-            if developed is not None:
-                image, applied = developed, bool(operations)
-            else:
-                image = _preview(root / box["name"])
-        else:
-            image = _preview(root / box["name"])
-        scale = float(box.get("scale", 1.0))
-        if abs(scale - 1.0) > 1e-4:
-            # Resample to the sequence's scale so the sun is one size
-            # throughout. The crop box is already in these normalised
-            # pixels, so the crop that follows is in the same frame as
-            # every other frame's.
-            image = image.resize(
-                (max(1, round(image.width * scale)),
-                 max(1, round(image.height * scale))),
-                Image.Resampling.LANCZOS)
-        crop = image.crop((
-            box["left"], box["top"],
-            box["left"] + plan["width"], box["top"] + plan["height"]))
-        if operations and not applied:
-            # The engine's own invertible pair: display to scene-linear
-            # and back, same primaries. Its sibling decode-to-rec2020
-            # is NOT _encoded's inverse -- pairing them brightened every
-            # frame by the gamut matrix, measured before it shipped.
-            linear = _decoded(np.asarray(crop, dtype=np.float32) / 255.0)
-            linear = _apply_global(linear, operations)
-            shown = np.clip(_encoded(linear), 0.0, 1.0)
-            crop = Image.fromarray((shown * 255).astype(np.uint8))
-        name = f"{index:04d}.jpg"
-        crop.save(where / name, quality=93)
-        written.append({"frame": name, "source": box["name"],
-                        "taken": box["taken"]})
+                f"developed {done} of {total}" if demosaic
+                else f"rendered {done} of {total}"))
+
+    if workers == 1:
+        for index, box in enumerate(plan["boxes"], start=1):
+            _render_frame(str(root), box, index, plan["width"],
+                          plan["height"], operations, demosaic, str(where))
+            landed()
+    else:
+        with ProcessPoolExecutor(
+                max_workers=workers,
+                initializer=_quiet_native_threads) as pool:
+            futures = [
+                pool.submit(
+                    _render_frame, str(root), box, index,
+                    plan["width"], plan["height"], operations,
+                    demosaic, str(where))
+                for index, box in enumerate(plan["boxes"], start=1)]
+            for future in as_completed(futures):
+                future.result()
+                landed()
+    written = [
+        {"frame": f"{index:04d}.jpg", "source": box["name"],
+         "taken": box["taken"]}
+        for index, box in enumerate(plan["boxes"], start=1)]
     report = {
         "format": "darkimiya-timelapse-v1",
         "directory": str(where),
