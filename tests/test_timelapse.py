@@ -410,6 +410,59 @@ class SequenceTests(unittest.TestCase):
                 Path(shifted["directory"]) / "0001.jpg").convert("L"))
             self.assertLess(float(after.mean()), float(before.mean()) - 5)
 
+    def test_ultimate_quality_develops_each_frame_once(self):
+        """With demosaic on, every planned frame is developed from the
+        raw with the look applied in float -- and the crop stage must not
+        apply the operations a second time."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for index, centre in enumerate([(430, 300), (470, 300)]):
+                crescent(root / f"frame-{index:03d}.jpg", centre=centre)
+            plan = timelapse.crop_plan(
+                timelapse.survey(str(root), "frame-*.jpg"))
+            ops = [{"op": "tone.exposure", "value": -1.0, "unit": "EV",
+                    "mode": "delta"}]
+            recipe = root / "shift.recipe.json"
+            recipe.write_text(json.dumps({
+                "format": "darkimiya-portable-recipe-v1",
+                "recipe": {"operations": ops}}))
+            asked = []
+
+            def fake_developed(path, operations):
+                asked.append((Path(path).name, len(operations or [])))
+                return Image.new("RGB", crescent_size(), (200, 200, 200))
+
+            def crescent_size():
+                with Image.open(root / "frame-000.jpg") as opened:
+                    return opened.size
+
+            with mock.patch.object(
+                    timelapse, "_developed", side_effect=fake_developed):
+                report = json.loads(timelapse.render_sequence(
+                    str(root), plan, str(root / "out"),
+                    recipe=str(recipe), demosaic=True))
+            self.assertEqual(len(asked), 2)          # one develop per frame
+            self.assertEqual(asked[0][1], 1)         # the look went in
+            self.assertEqual(report["base"], "demosaic")
+            # The fake returned flat grey WITH the look "already applied";
+            # if the crop stage applied it again, the frame would darken.
+            first = np.asarray(Image.open(
+                Path(report["directory"]) / "0001.jpg").convert("L"))
+            self.assertGreater(float(first.mean()), 180)
+
+    def test_without_the_switch_nothing_is_demosaiced(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            crescent(root / "frame-000.jpg")
+            crescent(root / "frame-001.jpg", centre=(460, 310))
+            plan = timelapse.crop_plan(
+                timelapse.survey(str(root), "frame-*.jpg"))
+            with mock.patch.object(timelapse, "_developed") as developed:
+                report = json.loads(timelapse.render_sequence(
+                    str(root), plan, str(root / "out")))
+            developed.assert_not_called()
+            self.assertEqual(report["base"], "embedded rendering")
+
     def test_a_missing_frame_fails_completeness(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

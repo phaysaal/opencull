@@ -19,6 +19,7 @@ param recipe: text = ""
 param detect_edge: num = 1200
 param output: text = "timelapse.json"
 param fps: num = 12
+param demosaic: bool = false
 
 use python "timelapse_kernel.py"
 
@@ -27,7 +28,7 @@ plan := crop_plan(measured)
 check plan_valid(plan)
 print(plan_note(plan))
 
-report := render_sequence(photos, plan, frames_dir, recipe)
+report := render_sequence(photos, plan, frames_dir, recipe, demosaic)
 check sequence_complete(report, plan)
 
 -- The last thing the photographer asked for: turn the frames into the

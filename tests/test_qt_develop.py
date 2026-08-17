@@ -648,6 +648,16 @@ class TimelapseDoorTests(FinetuneDoorTests):
         # The caption translates the speed into seconds of film.
         self.assertIn("seconds of video", dialog.speed_note.text())
 
+    def test_ultimate_quality_is_off_by_default_and_flows_when_asked(self):
+        from opencull_qt.timelapse import TimelapseDialog
+
+        dialog = TimelapseDialog(str(self.photos_path))
+        self.assertEqual(
+            dialog.run_request()["parameters"]["demosaic"], "false")
+        dialog.demosaic.setChecked(True)
+        self.assertEqual(
+            dialog.run_request()["parameters"]["demosaic"], "true")
+
     def test_a_dragged_box_scales_back_to_the_frames_own_pixels(self):
         # The exact arithmetic nobody should be doing off an image
         # viewer's rulers: a drag on the fit-to-window copy lands in

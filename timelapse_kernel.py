@@ -132,6 +132,37 @@ def _preview(path: Path) -> Image.Image:
     return Image.fromarray(thumb.data).convert("RGB")
 
 
+def _developed(path: Path,
+               operations: list[dict[str, Any]] | None) -> Image.Image | None:
+    """The raw demosaiced, the look applied in float, then quantised.
+
+    Camera white balance and no per-frame auto-brightening, so every
+    frame of the sequence is developed identically -- auto-bright would
+    flicker. The result is resized to the embedded rendering's own
+    dimensions, because that is the pixel space the survey measured the
+    boxes in; a demosaic that came back a different size would put every
+    crop somewhere else. None for a file that has no raw to demosaic
+    (a JPEG folder), which falls back to the file itself.
+    """
+    if path.suffix.casefold() in {".jpg", ".jpeg", ".png", ".tif", ".tiff"}:
+        return None
+    import rawpy
+
+    with rawpy.imread(str(path)) as raw:
+        pixels = raw.postprocess(
+            use_camera_wb=True, no_auto_bright=True, output_bps=16)
+    shown = pixels.astype(np.float32) / 65535.0
+    if operations:
+        linear = _decoded(shown)
+        linear = _apply_global(linear, operations)
+        shown = np.clip(_encoded(linear), 0.0, 1.0)
+    image = Image.fromarray((shown * 255.0 + 0.5).astype(np.uint8))
+    measured = _preview(path).size
+    if image.size != measured:
+        image = image.resize(measured, Image.Resampling.LANCZOS)
+    return image
+
+
 def _taken_at(path: Path) -> str:
     """Capture time, because file names wrap: DSCF9999 precedes DSCF1001."""
     try:
@@ -851,7 +882,7 @@ def _shift_operations(recipe: str, photos: str = ".") -> list[dict[str, Any]]:
 
 
 def render_sequence(photos: str, plan_text: str, directory: str,
-                    recipe: str = "") -> str:
+                    recipe: str = "", demosaic: bool = False) -> str:
     """Crop every planned frame, shift its colour, and file the sequence.
 
     Frames are numbered in capture order, so the directory is the
@@ -870,8 +901,26 @@ def render_sequence(photos: str, plan_text: str, directory: str,
         percent = _ALIGN_BAND + (_RENDER_BAND - _ALIGN_BAND) * index / total
         if round(percent) != said:
             said = round(percent)
-            _say_progress(percent, f"rendering frame {index} of {total}")
-        image = _preview(root / box["name"])
+            _say_progress(percent, (
+                f"developing frame {index} of {total}" if demosaic
+                else f"rendering frame {index} of {total}"))
+        applied = False
+        if demosaic:
+            # Ultimate quality: the raw demosaiced and the look applied in
+            # sixteen-bit scene-referred float BEFORE anything is quantised
+            # to eight bits. The embedded rendering has the camera's white
+            # balance and tone curve already baked into 8-bit pixels, so an
+            # extreme move -- a big kelvin swing on an infrared frame --
+            # clips and posterises there; on the demosaic it stays clean.
+            # Slower by design: this is minutes of decoding bought for
+            # colour headroom, and the switch says so.
+            developed = _developed(root / box["name"], operations)
+            if developed is not None:
+                image, applied = developed, bool(operations)
+            else:
+                image = _preview(root / box["name"])
+        else:
+            image = _preview(root / box["name"])
         scale = float(box.get("scale", 1.0))
         if abs(scale - 1.0) > 1e-4:
             # Resample to the sequence's scale so the sun is one size
@@ -885,7 +934,7 @@ def render_sequence(photos: str, plan_text: str, directory: str,
         crop = image.crop((
             box["left"], box["top"],
             box["left"] + plan["width"], box["top"] + plan["height"]))
-        if operations:
+        if operations and not applied:
             # The engine's own invertible pair: display to scene-linear
             # and back, same primaries. Its sibling decode-to-rec2020
             # is NOT _encoded's inverse -- pairing them brightened every
@@ -905,6 +954,7 @@ def render_sequence(photos: str, plan_text: str, directory: str,
         "width": plan["width"], "height": plan["height"],
         "excluded": plan.get("excluded", []),
         "colour_shift": str(recipe) or "none",
+        "base": "demosaic" if demosaic else "embedded rendering",
         "assemble": _assemble_command(where, _video_target(where)),
         "video": None,
         "created_at": datetime.now(UTC).isoformat(),

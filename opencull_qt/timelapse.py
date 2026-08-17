@@ -17,6 +17,7 @@ from typing import Any
 from PySide6.QtCore import QRect
 from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDialog,
     QFileDialog,
@@ -122,6 +123,16 @@ class TimelapseDialog(QDialog):
         self.fps.valueChanged.connect(self._retell_speed)
         asks.addRow("Speed", self.fps)
         column.addLayout(asks)
+        self.demosaic = QCheckBox(
+            "Ultimate quality — demosaic every frame (much slower)")
+        self.demosaic.setFont(theme.body(9))
+        self.demosaic.setToolTip(tooltip(
+            "Develop each frame from the raw sensor data in sixteen-bit "
+            "float before the look is applied, instead of using the "
+            "camera's embedded rendering. Extreme moves -- a big kelvin "
+            "swing on infrared -- stay clean instead of clipping. Costs "
+            "a full raw decode per frame: minutes, not seconds."))
+        column.addWidget(self.demosaic)
         self.speed_note = QLabel("")
         self.speed_note.setObjectName("hint")
         self.speed_note.setFont(theme.body(9))
@@ -273,6 +284,7 @@ class TimelapseDialog(QDialog):
             "recipe": recipe,
             "output": str(home / "timelapse.json"),
             "fps": str(self.fps.value()),
+            "demosaic": "true" if self.demosaic.isChecked() else "false",
         }
         if self.sun.isChecked():
             return {"program": "eclipse_timelapse.kim",
