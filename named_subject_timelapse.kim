@@ -20,6 +20,7 @@ param detect_edge: num = 1200
 param output: text = "timelapse.json"
 param fps: num = 12
 param demosaic: bool = false
+param only: text = ""
 
 use "agents.kim"
 use python "timelapse_kernel.py"
@@ -33,7 +34,7 @@ schema Anchor:
     what: text
 
 check len(subject) > 0
-chosen := keyframes(photos, pattern, every)
+chosen := keyframes(photos, pattern, every, only)
 
 anchors := "[]"
 forall name in chosen:
@@ -47,7 +48,7 @@ forall name in chosen:
 -- nothing to carry between keyframes.
 check anchors_usable(anchors)
 
-measured := anchored_survey(photos, pattern, anchors, detect_edge)
+measured := anchored_survey(photos, pattern, anchors, detect_edge, only)
 plan := crop_plan(measured)
 check plan_valid(plan)
 print(plan_note(plan))

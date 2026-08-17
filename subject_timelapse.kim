@@ -21,10 +21,11 @@ param detect_edge: num = 1200
 param output: text = "timelapse.json"
 param fps: num = 12
 param demosaic: bool = false
+param only: text = ""
 
 use python "timelapse_kernel.py"
 
-measured := track_survey(photos, pattern, subject_box, subject_frame, detect_edge)
+measured := track_survey(photos, pattern, subject_box, subject_frame, detect_edge, only)
 plan := crop_plan(measured)
 check plan_valid(plan)
 print(plan_note(plan))

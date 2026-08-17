@@ -11,6 +11,7 @@ here is a second pipeline.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -43,9 +44,10 @@ class TimelapseDialog(QDialog):
     """What the subject is, what it wears, where it lands."""
 
     def __init__(self, photos: str, parent: QWidget | None = None,
-                 look: str = ""):
+                 look: str = "", selection: list[str] | None = None):
         super().__init__(parent)
         self.photos = str(photos)
+        self.selection = [str(name) for name in (selection or [])]
         self.setWindowTitle("Timelapse")
         self.setMinimumWidth(560)
         defaults = default_run(photos)
@@ -193,11 +195,31 @@ class TimelapseDialog(QDialog):
         column.addLayout(where_row)
 
         self.pattern = defaults["pattern"]
-        told = QLabel(
-            f"Frames: every {self.pattern} in the folder, in capture order.")
-        told.setObjectName("hint")
-        told.setFont(theme.body(9))
-        column.addWidget(told)
+        folder_count = self._frame_count
+        # The cull already said which frames matter; the timelapse aims at
+        # them by default rather than at everything the folder holds. The
+        # whole folder stays one click away, and a folder with no real
+        # selection simply is not asked.
+        self.only_selected = QCheckBox("")
+        self.only_selected.setFont(theme.body(9))
+        real = bool(self.selection) and len(self.selection) < folder_count
+        if real:
+            self.only_selected.setText(
+                f"Only the {len(self.selection)} selected photographs "
+                f"(untick for all {folder_count})")
+            self.only_selected.setChecked(True)
+            self.only_selected.toggled.connect(self._retell_speed)
+            column.addWidget(self.only_selected)
+            self._retell_speed()
+        else:
+            self.only_selected.setChecked(False)
+            self.only_selected.hide()
+            told = QLabel(
+                f"Frames: every {self.pattern} in the folder, "
+                "in capture order.")
+            told.setObjectName("hint")
+            told.setFont(theme.body(9))
+            column.addWidget(told)
 
         buttons = QHBoxLayout()
         buttons.addStretch(1)
@@ -229,14 +251,21 @@ class TimelapseDialog(QDialog):
         self.name_field.setEnabled(self.named.isChecked())
         self.every.setEnabled(self.named.isChecked())
 
+    def _counted(self) -> int:
+        if getattr(self, "only_selected", None) is not None \
+                and self.only_selected.isChecked():
+            return len(self.selection)
+        return self._frame_count
+
     def _retell_speed(self) -> None:
-        if not self._frame_count:
+        counted = self._counted()
+        if not counted:
             self.speed_note.setText("")
             return
-        seconds = self._frame_count / max(self.fps.value(), 1)
+        seconds = counted / max(self.fps.value(), 1)
         self.speed_note.setText(
             f"≈ {seconds:.0f} seconds of video from about "
-            f"{self._frame_count} frames.")
+            f"{counted} frames.")
 
     def _mark_box(self) -> None:
         """Open the frames; a dragged rectangle fills the field.
@@ -257,7 +286,14 @@ class TimelapseDialog(QDialog):
             self.status.setText(
                 f"No {self.pattern} frames were found in the folder.")
             return
-        paths = [Path(self.photos) / item["name"] for item in frames]
+        wanted = (set(self.selection)
+                  if self.only_selected.isChecked() and self.selection
+                  else None)
+        paths = [Path(self.photos) / item["name"] for item in frames
+                 if wanted is None or item["name"] in wanted]
+        if not paths:
+            self.status.setText("The selection holds no frames to mark.")
+            return
         picker = BoxPicker(paths, self)
         if picker.exec() == QDialog.DialogCode.Accepted and picker.box:
             self.box_field.setText(", ".join(
@@ -302,7 +338,21 @@ class TimelapseDialog(QDialog):
             "output": str(home / "timelapse.json"),
             "fps": str(self.fps.value()),
             "demosaic": "true" if self.demosaic.isChecked() else "false",
+            "only": "",
         }
+        if self.only_selected.isChecked() and self.selection:
+            # Three hundred names do not fit in a parameter; they ride in
+            # a small file beside the run's own outputs.
+            chosen = home / "selection.json"
+            try:
+                home.mkdir(parents=True, exist_ok=True)
+                chosen.write_text(json.dumps(
+                    {"names": self.selection}), encoding="utf-8")
+            except OSError as exc:
+                self.status.setText(
+                    f"The selection could not be written: {exc}")
+                return None
+            parameters["only"] = str(chosen)
         if self.sun.isChecked():
             return {"program": "eclipse_timelapse.kim",
                     "parameters": parameters}

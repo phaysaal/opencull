@@ -570,6 +570,34 @@ class TrackTests(unittest.TestCase):
         first_x, first_y = positions[0]
         return f"{first_x},{first_y},{first_x + 48},{first_y + 48}"
 
+    def test_a_selection_file_confines_the_run_to_the_kept_frames(self):
+        """The cull already said which frames matter. Given a selection
+        file, every measurer's listing holds only those names -- the
+        whole folder is not the default aim of a culled project."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.sequence(root, [(100, 100), (120, 100), (140, 104),
+                                 (160, 110)])
+            chosen = root / "selection.json"
+            chosen.write_text(json.dumps(
+                {"names": ["frame-001.jpg", "frame-003.jpg"]}))
+            listed = timelapse.list_frames(
+                str(root), "frame-*.jpg", only=str(chosen))
+            self.assertEqual([item["name"] for item in listed],
+                             ["frame-001.jpg", "frame-003.jpg"])
+            # And the box tracker sees the same confined world.
+            told = json.loads(timelapse.track_survey(
+                str(root), "frame-*.jpg", "120,100,168,148",
+                only=str(chosen)))
+            self.assertEqual(len(told["frames"]), 2)
+
+    def test_an_empty_only_means_the_whole_folder(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.sequence(root, [(100, 100), (130, 100)])
+            listed = timelapse.list_frames(str(root), "frame-*.jpg", only="")
+            self.assertEqual(len(listed), 2)
+
     def test_listing_frames_never_decodes_a_preview(self):
         """Listing is a read of names and clocks, not of pictures. An
         earlier version decoded every frame's embedded rendering just to

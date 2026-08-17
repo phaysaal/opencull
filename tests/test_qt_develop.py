@@ -648,6 +648,34 @@ class TimelapseDoorTests(FinetuneDoorTests):
         # The caption translates the speed into seconds of film.
         self.assertIn("seconds of video", dialog.speed_note.text())
 
+    def test_a_real_selection_confines_the_run_by_default(self):
+        import json as json_module
+
+        from opencull_qt.timelapse import TimelapseDialog
+
+        dialog = TimelapseDialog(
+            str(self.photos_path), selection=["A.JPG", "C.JPG"])
+        self.assertTrue(dialog.only_selected.isChecked())
+        request = dialog.run_request()
+        only = request["parameters"]["only"]
+        self.assertTrue(only.endswith("selection.json"))
+        written = json_module.loads(Path(only).read_text())
+        self.assertEqual(written["names"], ["A.JPG", "C.JPG"])
+        # The caption counts the aimed-at frames, not the folder.
+        self.assertIn("about 2 frames", dialog.speed_note.text())
+        # Unticked, the whole folder is back and no file is named.
+        dialog.only_selected.setChecked(False)
+        self.assertEqual(dialog.run_request()["parameters"]["only"], "")
+
+    def test_a_selection_of_everything_asks_no_question(self):
+        from opencull_qt.timelapse import TimelapseDialog
+
+        dialog = TimelapseDialog(
+            str(self.photos_path), selection=["A.JPG", "B.JPG", "C.JPG"])
+        # Selecting everything is no selection; the choice is not shown.
+        self.assertTrue(dialog.only_selected.isHidden())
+        self.assertEqual(dialog.run_request()["parameters"]["only"], "")
+
     def test_ultimate_quality_is_off_by_default_and_flows_when_asked(self):
         from opencull_qt.timelapse import TimelapseDialog
 
@@ -726,7 +754,8 @@ class TimelapseDoorTests(FinetuneDoorTests):
         class Stub:
             DialogCode = type("D", (), {"Accepted": 1})
 
-            def __init__(self, photos, parent=None, look=""):
+            def __init__(self, photos, parent=None, look="",
+                         selection=None):
                 self.photos = photos
                 self.look = look
 

@@ -15,6 +15,7 @@ already looked at costs nothing to look at again.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from PySide6.QtCore import (
@@ -1543,11 +1544,25 @@ class DevelopPage(QWidget):
         # the timelapse wears the same treatment being looked at.
         look = (self.treatment[len("preset-"):]
                 if self.treatment.startswith("preset-") else "")
+        # The cull's own selection, so the timelapse can aim at the kept
+        # frames rather than the whole folder. Computed by the kernel that
+        # reads selections everywhere else, not by a second rule here.
+        try:
+            from shortlist_kernel import chosen_photographs
+
+            from opencull_gui.reviews import default_review_path
+
+            review = default_review_path(self.report.path)
+            value = (json.loads(review.read_text(encoding="utf-8"))
+                     if review.is_file() else None)
+            selection = chosen_photographs(self.report.data, value)
+        except Exception:                            # noqa: BLE001 - whole folder
+            selection = []
         # No Qt parent on purpose: a modal dialog with a transient parent is
         # glued to it by some desktops (GNOME attaches modal dialogs) and
         # then cannot be dragged. exec() keeps it application-modal without a
         # parent; it is centred on this window by hand instead.
-        dialog = TimelapseDialog(photos, look=look)
+        dialog = TimelapseDialog(photos, look=look, selection=selection)
         dialog.adjustSize()
         host = self.window().frameGeometry()
         dialog.move(host.center() - dialog.rect().center())

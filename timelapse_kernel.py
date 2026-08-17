@@ -164,7 +164,25 @@ def _developed(path: Path,
     return image
 
 
-def list_frames(photos: str, pattern: str = "*.RAF") -> list[dict[str, str]]:
+def _only_names(only: str) -> set[str] | None:
+    """The selection a run is confined to, read from a small file.
+
+    A JSON list of file names, or {"names": [...]}. Empty means the
+    whole folder. A file rather than a parameter, because a selection
+    of three hundred names does not fit in a job parameter.
+    """
+    asked = str(only or "").strip()
+    if not asked:
+        return None
+    value = json.loads(Path(asked).expanduser().read_text(encoding="utf-8"))
+    names = value.get("names") if isinstance(value, dict) else value
+    if not isinstance(names, list):
+        raise ValueError(f"the selection file {asked} holds no list of names")
+    return {Path(str(name)).name for name in names}
+
+
+def list_frames(photos: str, pattern: str = "*.RAF",
+                only: str = "") -> list[dict[str, str]]:
     """The frames in shooting order: the clock, and the counter within
     a tied second, unwrapped -- the same order the assessment list shows,
     from the same function, so the two can never disagree about which
@@ -180,6 +198,9 @@ def list_frames(photos: str, pattern: str = "*.RAF") -> list[dict[str, str]]:
 
     root = Path(str(photos)).expanduser().resolve()
     found = sorted(root.glob(str(pattern)))
+    wanted = _only_names(only)
+    if wanted is not None:
+        found = [path for path in found if path.name in wanted]
     taken = capture_times(root, [path.name for path in found])
     names = shooting_order([path.name for path in found], taken)
 
@@ -327,7 +348,7 @@ def _smoothed(values: list[float], window: int = 5) -> list[float]:
 # --- the survey and the plan ------------------------------------------------
 
 def survey(photos: str, pattern: str = "*.RAF",
-           detect_edge: float = 1200) -> str:
+           detect_edge: float = 1200, only: str = "") -> str:
     """Every frame found, timed, and fitted; the excluded named.
 
     Detection runs on a downscaled copy and the fit is scaled back, so
@@ -336,7 +357,7 @@ def survey(photos: str, pattern: str = "*.RAF",
     """
     root = Path(str(photos)).expanduser().resolve()
     frames = []
-    items = list_frames(photos, pattern)
+    items = list_frames(photos, pattern, only)
     total = max(1, len(items))
     said = -1
     for order, item in enumerate(items, start=1):
@@ -402,7 +423,7 @@ TRACK_CONFIDENCE = 0.45
 
 def track_survey(photos: str, pattern: str, subject_box: str,
                  subject_frame: str = "",
-                 detect_edge: float = 1200) -> str:
+                 detect_edge: float = 1200, only: str = "") -> str:
     """Follow one subject named by a single box on one frame.
 
     The free tier of subject-locked stabilization: the photographer
@@ -422,7 +443,7 @@ def track_survey(photos: str, pattern: str, subject_box: str,
     import cv2
 
     root = Path(str(photos)).expanduser().resolve()
-    listed = list_frames(photos, pattern)
+    listed = list_frames(photos, pattern, only)
     if not listed:
         return json.dumps({"format": FORMAT, "photos": str(root),
                            "pattern": str(pattern), "frames": [],
@@ -532,14 +553,15 @@ def track_survey(photos: str, pattern: str, subject_box: str,
 # each one so drift is bounded by the anchor spacing and appearance
 # changes are absorbed where a model has just vouched for the box.
 
-def keyframes(photos: str, pattern: str, every: float = 30) -> list[str]:
+def keyframes(photos: str, pattern: str, every: float = 30,
+              only: str = "") -> list[str]:
     """The names a model will be shown: first, last, and every Nth.
 
     A real list, not a JSON string: the program iterates it with
     forall, and the runtime rightly refuses to iterate a string --
     which is exactly how the named path failed on its first live run.
     """
-    listed = list_frames(photos, pattern)
+    listed = list_frames(photos, pattern, only)
     stride = max(1, int(every))
     chosen = listed[::stride]
     if listed and (not chosen or chosen[-1]["name"] != listed[-1]["name"]):
@@ -632,7 +654,7 @@ def anchor_prompt(subject: str, proof: str) -> str:
 
 
 def anchored_survey(photos: str, pattern: str, anchors_json: str,
-                    detect_edge: float = 1200) -> str:
+                    detect_edge: float = 1200, only: str = "") -> str:
     """The tracker's survey, seeded and re-anchored by the model's boxes.
 
     Between anchors the tracker does what it always does. At each
@@ -647,7 +669,7 @@ def anchored_survey(photos: str, pattern: str, anchors_json: str,
     anchors = {item["name"]: item["box"]
                for item in json.loads(anchors_json or "[]")
                if "box" in item}
-    listed = list_frames(photos, pattern)
+    listed = list_frames(photos, pattern, only)
     frames: list[dict[str, Any]] = []
     template = None
     template_size = (0, 0)

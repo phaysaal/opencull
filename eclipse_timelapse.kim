@@ -20,12 +20,13 @@ param detect_edge: num = 1200
 param output: text = "timelapse.json"
 param fps: num = 12
 param demosaic: bool = false
+param only: text = ""
 
 use python "timelapse_kernel.py"
 
 -- Every frame found, timed, fitted; the excluded named, never dropped
 -- silently. Then the photographer's crop on the fitted centres.
-measured := survey(photos, pattern, detect_edge)
+measured := survey(photos, pattern, detect_edge, only)
 plan := crop_plan(measured)
 check plan_valid(plan)
 print(plan_note(plan))
