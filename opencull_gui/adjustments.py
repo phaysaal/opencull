@@ -497,12 +497,19 @@ def apply(recipe: dict[str, Any], changes: dict[str, Any]) -> dict[str, Any]:
         points = [[max(0.0, min(255.0, float(x))),
                    max(0.0, min(255.0, float(y)))]
                   for x, y in curve["points"]][:16]
+        # How faithfully colour rides the curve: 0 is the classic RGB
+        # curve (contrast saturates and bends hue, the film trade),
+        # 100 lifts luminance only and leaves the colour alone.
+        drawn = {"points": points}
+        preserve = curve.get("preserve")
+        if preserve is not None:
+            drawn["preserve"] = max(0.0, min(100.0, float(preserve)))
         existing = next(
             (item for item in result.get("operations", []) or []
              if isinstance(item, dict) and item.get("op") == "tone.curve"),
             None)
         if existing is not None:
-            existing["value"] = {"points": points}
+            existing["value"] = drawn
         else:
             operations = result.setdefault("operations", [])
             at = next(
@@ -512,7 +519,7 @@ def apply(recipe: dict[str, Any], changes: dict[str, Any]) -> dict[str, Any]:
                 len(operations))
             operations.insert(at, {
                 "op": "tone.curve", "unit": "curve", "mode": "absolute",
-                "value": {"points": points},
+                "value": drawn,
                 "source": "curve drawn by hand", "enabled": True})
         recorded.append({"id": "tone.curve", "op": "tone.curve",
                          "asked": 0.0, "set": 0.0, "enabled": True,

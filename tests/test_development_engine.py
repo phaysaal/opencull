@@ -318,6 +318,69 @@ class ColourMaskTests(unittest.TestCase):
         self.assertGreater(float(told[1]), 0.95)
 
 
+class CurveColourHoldTests(unittest.TestCase):
+    """The same drawing, two readings: film at 0, faithful at 100."""
+
+    def curve(self, preserve):
+        return [{"op": "tone.curve", "unit": "curve", "mode": "absolute",
+                 "enabled": True,
+                 "value": {"points": [[0, 0], [96, 48], [160, 208],
+                                      [255, 255]],
+                           "preserve": preserve}}]
+
+    def hue_of(self, rgb):
+        r, g, b = (float(v) for v in rgb)
+        import colorsys
+
+        return colorsys.rgb_to_hsv(r, g, b)[0] * 360.0
+
+    def test_the_rgb_reading_bends_hue_and_the_luma_reading_does_not(self):
+        from development_engine import _apply_global
+
+        # A warm, saturated patch of one colour: the kind of pixel an
+        # S-curve is hardest on.
+        patch = np.full((4, 4, 3), (0.5, 0.22, 0.1), dtype=np.float32)
+        before = self.hue_of(patch[0, 0])
+        filmed = _apply_global(patch, self.curve(0))
+        held = _apply_global(patch, self.curve(100))
+        bent = abs(self.hue_of(filmed[0, 0]) - before)
+        kept = abs(self.hue_of(held[0, 0]) - before)
+        self.assertGreater(bent, 1.0)     # the film trade is real
+        self.assertLess(kept, 0.75)       # and the hold really holds
+
+    def test_the_luma_reading_still_moves_the_tones(self):
+        from development_engine import _apply_global
+
+        patch = np.full((4, 4, 3), (0.5, 0.22, 0.1), dtype=np.float32)
+        held = _apply_global(patch, self.curve(100))
+        self.assertFalse(np.allclose(held, patch, atol=1e-3))
+
+    def test_halfway_sits_between_the_two_readings(self):
+        from development_engine import _apply_global
+
+        patch = np.full((4, 4, 3), (0.5, 0.22, 0.1), dtype=np.float32)
+        filmed = _apply_global(patch, self.curve(0))[0, 0]
+        held = _apply_global(patch, self.curve(100))[0, 0]
+        mixed = _apply_global(patch, self.curve(50))[0, 0]
+        for channel in range(3):
+            low = min(filmed[channel], held[channel]) - 1e-4
+            high = max(filmed[channel], held[channel]) + 1e-4
+            self.assertGreaterEqual(float(mixed[channel]), low)
+            self.assertLessEqual(float(mixed[channel]), high)
+
+    def test_a_curve_without_the_field_is_the_classic_curve(self):
+        from development_engine import _apply_global
+
+        patch = np.full((4, 4, 3), (0.5, 0.22, 0.1), dtype=np.float32)
+        bare = [{"op": "tone.curve", "unit": "curve", "mode": "absolute",
+                 "enabled": True,
+                 "value": {"points": [[0, 0], [96, 48], [160, 208],
+                                      [255, 255]]}}]
+        filmed = _apply_global(patch, self.curve(0))
+        plain = _apply_global(patch, bare)
+        self.assertTrue(np.allclose(filmed, plain, atol=1e-5))
+
+
 class BrushMaskWeightTests(unittest.TestCase):
     """Ink where the hand painted, nothing where it did not."""
 

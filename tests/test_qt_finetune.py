@@ -101,6 +101,31 @@ class FineTunePageTests(unittest.TestCase):
         page._curve_changed([[0.0, 0.0], [255.0, 255.0]])
         self.assertNotIn("curve", page.changes)
 
+    def test_the_colour_hold_rides_the_drawn_curve(self):
+        page = self.page()
+        page._show_controls()
+        page._curve_changed([[0.0, 0.0], [128.0, 190.0], [255.0, 255.0]])
+        page._curve_panel.points = [[0.0, 0.0], [128.0, 190.0],
+                                    [255.0, 255.0]]
+        page._curve_preserved("preserve", 70.0)
+        self.assertEqual(page.changes["curve"]["preserve"], 70.0)
+        applied = adjustments.apply(page.recipe, page.changes)
+        op = next(item for item in applied["operations"]
+                  if item.get("op") == "tone.curve")
+        self.assertEqual(op["value"]["preserve"], 70.0)
+        # Redrawing keeps the dial where the hand left it.
+        page._curve_changed([[0.0, 0.0], [128.0, 170.0], [255.0, 255.0]])
+        self.assertEqual(page.changes["curve"]["preserve"], 70.0)
+
+    def test_the_hold_alone_asks_nothing_until_a_curve_is_drawn(self):
+        page = self.page()
+        page._show_controls()
+        page._curve_preserved("preserve", 80.0)
+        self.assertNotIn("curve", page.changes)
+        # But the wish is remembered for the first drawing.
+        page._curve_changed([[0.0, 0.0], [128.0, 190.0], [255.0, 255.0]])
+        self.assertEqual(page.changes["curve"]["preserve"], 80.0)
+
     def test_a_colour_mask_layer_offers_its_own_geometry(self):
         page = self.page()
         made = {"shape": "color", "geometry": {
@@ -953,7 +978,8 @@ class LayerTests(FineTunePageTests):
 
         loose = [slider for slider in page.findChildren(GeometrySlider)
                  if not isinstance(slider.parent(), HslPanel)
-                 and slider is not page._crop_angle]
+                 and slider is not page._crop_angle
+                 and slider.key != "preserve"]   # the curve's colour hold
         self.assertEqual(loose, [])
 
     def test_base_layer_resets_do_not_touch_the_masks_moves(self):

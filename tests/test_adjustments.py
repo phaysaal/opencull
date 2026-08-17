@@ -397,3 +397,30 @@ class BrushMaskTests(unittest.TestCase):
             "effects": []}]})
         out = adjustments.apply(base, {"mask:1": {"map": "BBBB"}})
         self.assertEqual(out["operations"][-1]["value"]["map"], "BBBB")
+
+
+class CurveColourHoldFoldTests(unittest.TestCase):
+    """The colour-hold dial travels inside the drawn curve."""
+
+    def test_preserve_folds_into_the_curve_operation(self):
+        out = adjustments.apply(recipe(), {"curve": {
+            "points": [[0, 0], [128, 96], [255, 255]], "preserve": 60}})
+        op = next(item for item in out["operations"]
+                  if item.get("op") == "tone.curve")
+        self.assertEqual(op["value"]["preserve"], 60.0)
+
+    def test_redrawing_without_the_field_drops_the_hold(self):
+        base = adjustments.apply(recipe(), {"curve": {
+            "points": [[0, 0], [128, 96], [255, 255]], "preserve": 60}})
+        out = adjustments.apply(base, {"curve": {
+            "points": [[0, 0], [128, 110], [255, 255]]}})
+        op = next(item for item in out["operations"]
+                  if item.get("op") == "tone.curve")
+        self.assertNotIn("preserve", op["value"])
+
+    def test_the_hold_is_bounded(self):
+        out = adjustments.apply(recipe(), {"curve": {
+            "points": [[0, 0], [128, 96], [255, 255]], "preserve": 250}})
+        op = next(item for item in out["operations"]
+                  if item.get("op") == "tone.curve")
+        self.assertEqual(op["value"]["preserve"], 100.0)

@@ -1047,6 +1047,7 @@ class FineTunePage(QWidget):
 
         self._crop_overlay = CropOverlay(self.frame)
         self._crop_overlay.hide()
+        self._curve_preserve = 0.0
         self._brush_canvas = PaintOverlay(self.frame)
         self._brush_canvas.hide()
         self._brush_canvas.stroke_done.connect(self._stroke_done)
@@ -1976,8 +1977,10 @@ class FineTunePage(QWidget):
             # already drawn -- pending change first, then the recipe's own
             # operation -- so reopening the frame reopens the same curve.
             pending = self.changes.get("curve")
+            held_preserve = None
             if isinstance(pending, dict) and pending.get("points"):
                 points = pending["points"]
+                held_preserve = pending.get("preserve")
             else:
                 drawn = next(
                     (item for item in self.recipe.get("operations", []) or []
@@ -1987,6 +1990,8 @@ class FineTunePage(QWidget):
                     None)
                 points = (drawn["value"].get("points")
                           if drawn is not None else None)
+                if drawn is not None:
+                    held_preserve = drawn["value"].get("preserve")
             self.body.addWidget(self._heading("Curve", ""))
             curve = CurvePanel(points)
             curve.setToolTip(tooltip(
@@ -1997,6 +2002,22 @@ class FineTunePage(QWidget):
                 "what develops."))
             curve.changed.connect(self._curve_changed)
             self.body.addWidget(curve)
+            self._curve_panel = curve
+            # How faithfully colour rides the curve. At 0 the curve runs
+            # on all three channels -- contrast saturates and bends hue,
+            # the way film bought its pop. At 100 the curve lifts only
+            # brightness and every hue stays exactly what it was.
+            self._curve_preserve = float(held_preserve or 0.0)
+            hold = GeometrySlider("preserve", "Keep colour", 0.0, 100.0,
+                                  self._curve_preserve)
+            hold.setToolTip(tooltip(
+                "How faithfully colour rides the curve. At 0 contrast "
+                "also saturates and bends hue -- the classic film trade. "
+                "At 100 the curve changes brightness only and every hue "
+                "stays exactly what it was. Skin and skies usually want "
+                "some of this; a sunset may want none."))
+            hold.changed.connect(self._curve_preserved)
+            self.body.addWidget(hold)
         # Every control of every section, always. The first shape folded
         # the unused ones behind a per-section count, and the fold read
         # as absence: the photographer this page is for looked at it and
@@ -2114,7 +2135,22 @@ class FineTunePage(QWidget):
         if identity:
             self.changes.pop("curve", None)
         else:
-            self.changes["curve"] = {"points": points}
+            drawn = {"points": points}
+            if self._curve_preserve:
+                drawn["preserve"] = self._curve_preserve
+            self.changes["curve"] = drawn
+        self.render()
+
+    def _curve_preserved(self, _key: str, value: float) -> None:
+        """The colour-hold dial under the curve; a no-op until one is drawn."""
+        self._curve_preserve = float(value)
+        panel = getattr(self, "_curve_panel", None)
+        if panel is None or panel.is_identity():
+            return
+        self._remember("curve hold")
+        self.changes["curve"] = {
+            "points": [list(p) for p in panel.points],
+            "preserve": self._curve_preserve}
         self.render()
 
     def _ask_zones(self) -> None:

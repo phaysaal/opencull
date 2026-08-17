@@ -27,7 +27,7 @@ ENGINE_FORMAT = "opencull-development-render-v1"
 # changes when the engine's own arithmetic does -- so without this, an
 # improvement to the renderer is invisible on every frame already looked
 # at, which is exactly the frames somebody is judging it by.
-RECIPE_ENGINE_REVISION = 9
+RECIPE_ENGINE_REVISION = 10
 
 
 class DevelopmentError(ValueError):
@@ -368,15 +368,40 @@ def _apply_global(rgb: np.ndarray, operations: list[dict[str, Any]],
         if op == "tone.curve" and isinstance(value, dict):
             # The curve is a display-referred instrument: it is drawn
             # against the picture as shown, so it runs on the encoded
-            # values and the result is decoded back. Identical on all
-            # three channels, the classic RGB curve.
+            # values and the result is decoded back.
+            #
+            # Two readings of the same drawing. The classic RGB curve
+            # runs identically on all three channels: contrast separates
+            # the channels, which saturates and bends hue -- the film
+            # look, bought the way film bought it. The luma reading runs
+            # the curve on luminance alone and scales the channels by
+            # the same ratio, so a pixel gets lighter or darker without
+            # changing what colour it is. "preserve" is the dial between
+            # them: 0 is all film, 100 is all faithful.
             points = value.get("points") or []
             if len(points) >= 2:
                 shown = np.clip(_encoded(np.clip(result, 0.0, None)),
                                 0.0, 1.0)
                 lut = _curve_lut(points)
-                curved = np.interp(shown * 255.0, np.arange(256), lut)
-                result = _decoded(curved.astype(np.float32))
+                keep = min(max(float(value.get("preserve", 0) or 0), 0.0),
+                           100.0) / 100.0
+                curved = None
+                if keep < 1.0:
+                    curved = np.interp(
+                        shown * 255.0, np.arange(256), lut
+                    ).astype(np.float32)
+                if keep > 0.0:
+                    luma = (shown[..., 0] * 0.2126 + shown[..., 1] * 0.7152
+                            + shown[..., 2] * 0.0722)
+                    lifted = np.interp(
+                        luma * 255.0, np.arange(256), lut
+                    ).astype(np.float32) / 255.0
+                    ratio = lifted / np.maximum(luma, 1e-4)
+                    held = np.clip(
+                        shown * ratio[..., None] * 255.0, 0.0, 255.0)
+                    curved = (held if curved is None
+                              else curved * (1.0 - keep) + held * keep)
+                result = _decoded(np.clip(curved, 0.0, 255.0))
             if progress is not None:
                 progress(done, total, _named(item))
             continue
