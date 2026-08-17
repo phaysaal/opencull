@@ -577,7 +577,9 @@ def keyframe_proof(photos: str, name: str, directory: str,
     root = Path(str(photos)).expanduser().resolve()
     image = _preview(root / Path(str(name)).name)
     image.thumbnail((int(edge), int(edge)), Image.Resampling.LANCZOS)
-    where = Path(str(directory)).expanduser().resolve()
+    # Beside the frames, not among them: the numbered frames are the
+    # film, and browsing them should not wade through model proofs.
+    where = Path(str(directory)).expanduser().resolve() / "anchors"
     where.mkdir(parents=True, exist_ok=True)
     out = where / f"anchor-{Path(str(name)).stem}.jpg"
     image.save(out, quality=90)
@@ -965,6 +967,14 @@ def render_sequence(photos: str, plan_text: str, directory: str,
     root = Path(str(photos)).expanduser().resolve()
     where = Path(str(directory)).expanduser().resolve()
     where.mkdir(parents=True, exist_ok=True)
+    # The folder is reused run after run, and a run that keeps fewer
+    # frames than the last would leave the previous film's tail sitting
+    # beyond its own -- stale pictures that read as "the look was not
+    # applied", and that ffmpeg's numbered pattern would splice into the
+    # end of the new video. These are this pipeline's own regenerable
+    # outputs, never photographs; the render starts clean.
+    for stale in where.glob("[0-9][0-9][0-9][0-9].jpg"):
+        stale.unlink()
     operations = _shift_operations(recipe, photos)
     written = []
     total = max(1, len(plan["boxes"]))

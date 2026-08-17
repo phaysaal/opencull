@@ -463,6 +463,38 @@ class SequenceTests(unittest.TestCase):
             developed.assert_not_called()
             self.assertEqual(report["base"], "embedded rendering")
 
+    def test_a_previous_runs_tail_is_cleared_before_rendering(self):
+        """The frames folder is reused run after run. A shorter run must
+        not leave the last film's tail beyond its own -- stale frames
+        that read as "the look was not applied" and that ffmpeg's
+        numbered pattern would splice into the end of the video."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            crescent(root / "frame-000.jpg")
+            crescent(root / "frame-001.jpg", centre=(460, 310))
+            out = root / "out"
+            out.mkdir()
+            # The previous, longer run's leftovers.
+            for number in (1, 2, 3, 9):
+                (out / f"{number:04d}.jpg").write_bytes(b"stale")
+            (out / "anchors").mkdir()
+            plan = timelapse.crop_plan(
+                timelapse.survey(str(root), "frame-*.jpg"))
+            report = json.loads(timelapse.render_sequence(
+                str(root), plan, str(out)))
+            numbered = sorted(p.name for p in out.glob("*.jpg"))
+            self.assertEqual(numbered, ["0001.jpg", "0002.jpg"])
+            self.assertEqual(len(report["frames"]), 2)
+
+    def test_the_model_proofs_live_beside_the_frames_not_among_them(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            crescent(root / "frame-000.jpg")
+            proof = timelapse.keyframe_proof(
+                str(root), "frame-000.jpg", str(root / "frames"))
+            self.assertEqual(Path(proof).parent.name, "anchors")
+            self.assertEqual(Path(proof).parent.parent.name, "frames")
+
     def test_a_missing_frame_fails_completeness(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
