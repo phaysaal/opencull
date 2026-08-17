@@ -989,20 +989,40 @@ class DevelopmentWorkspace:
         so it is cached beside the darktable decodes and shared by every
         treatment of the same photograph.
         """
+        stamp = f"{source}|{source_stat.st_mtime_ns}|{source_stat.st_size}"
         identity = hashlib.sha256(
-            f"{source}|{source_stat.st_mtime_ns}|{source_stat.st_size}|"
-            f"{maximum}|libraw".encode()).hexdigest()[:20]
-        cache = self.project_layout["Previews"] / "DevelopBaselines" / (
-            f"{source.stem}.{maximum}.libraw.{identity}.tiff")
+            f"{stamp}|{maximum}|libraw".encode()).hexdigest()[:20]
+        home = self.project_layout["Previews"] / "DevelopBaselines"
+        cache = home / f"{source.stem}.{maximum}.libraw.{identity}.tiff"
         cache.parent.mkdir(parents=True, exist_ok=True)
         lock = self._native_locks.setdefault(identity, threading.Lock())
         with lock:
             if not cache.is_file():
-                record = render_baseline(source, work / "libraw")
-                full = Path(record["outputs"]["linear_tiff"]["path"])
+                # The decode itself is cached at full resolution, once per
+                # photograph, and every proof size shrinks from it. It was
+                # cached only at the asked size before, so a window resize
+                # that crossed into a new size bucket paid the whole decode
+                # again -- ten seconds and more, felt as "the preview takes
+                # time" at exactly the moment nothing seemed to ask for it.
+                full_identity = hashlib.sha256(
+                    f"{stamp}|full|libraw".encode()).hexdigest()[:20]
+                full_cache = home / (
+                    f"{source.stem}.full.libraw.{full_identity}.tiff")
+                full_lock = self._native_locks.setdefault(
+                    full_identity, threading.Lock())
+                with full_lock:
+                    if not full_cache.is_file():
+                        record = render_baseline(source, work / "libraw")
+                        made = Path(
+                            record["outputs"]["linear_tiff"]["path"])
+                        staged = full_cache.with_name(
+                            f".{full_cache.name}."
+                            f"{secrets.token_hex(4)}.tmp")
+                        shutil.copy2(made, staged)
+                        os.replace(staged, full_cache)
                 staged = cache.with_name(
                     f".{cache.name}.{secrets.token_hex(4)}.tmp")
-                shrink_linear(full, maximum, staged)
+                shrink_linear(full_cache, maximum, staged)
                 os.replace(staged, cache)
         return cache
 
