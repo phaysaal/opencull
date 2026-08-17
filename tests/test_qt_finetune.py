@@ -90,6 +90,17 @@ class FineTunePageTests(unittest.TestCase):
     def test_only_frames_with_a_treatment_are_offered(self):
         self.assertEqual(self.page().photos, [NAMES[0]])
 
+    def test_the_histogram_reads_the_arriving_render(self):
+        from PySide6.QtGui import QColor, QImage, QPixmap
+
+        page = self.page()
+        image = QImage(64, 48, QImage.Format.Format_RGB888)
+        image.fill(QColor(128, 128, 128))
+        page._rendered(page.current, page.treatment,
+                       QPixmap.fromImage(image))
+        self.assertIsNotNone(page.histogram._bins)
+        self.assertEqual(int(page.histogram._bins[0].argmax()), 128)
+
     def test_the_colour_controls_wear_their_ramp_and_others_do_not(self):
         from opencull_qt.finetune import Control
 
@@ -308,6 +319,51 @@ class FineTunePageTests(unittest.TestCase):
 
 
 @unittest.skipUnless(QApplication is not None, "PySide6 is not installed")
+class HistogramTests(unittest.TestCase):
+    """What the pixels actually did, read from the pane's own proof."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.application = QApplication.instance() or QApplication([])
+
+    def _pixmap(self, red, green, blue):
+        from PySide6.QtGui import QColor, QImage, QPixmap
+
+        image = QImage(64, 48, QImage.Format.Format_RGB888)
+        image.fill(QColor(red, green, blue))
+        return QPixmap.fromImage(image)
+
+    def test_a_flat_grey_spikes_every_channel_at_its_level(self):
+        from opencull_qt.finetune import Histogram
+
+        widget = Histogram()
+        widget.show_pixmap(self._pixmap(128, 128, 128))
+        for bins in widget._bins:
+            self.assertEqual(int(bins.argmax()), 128)
+
+    def test_a_red_frame_puts_reds_mass_high_and_blues_low(self):
+        from opencull_qt.finetune import Histogram
+
+        widget = Histogram()
+        widget.show_pixmap(self._pixmap(230, 20, 20))
+        red, green, blue = widget._bins
+        self.assertGreater(int(red.argmax()), 200)
+        self.assertLess(int(blue.argmax()), 60)
+
+    def test_nothing_shown_paints_nothing_and_does_not_crash(self):
+        from PySide6.QtGui import QImage
+
+        from opencull_qt.finetune import Histogram
+
+        widget = Histogram()
+        widget.show_pixmap(None)
+        self.assertIsNone(widget._bins)
+        canvas = QImage(200, 88, QImage.Format.Format_ARGB32)
+        canvas.fill(0)
+        widget.resize(200, 88)
+        widget.render(canvas)
+
+
 class ZoneSliderTests(unittest.TestCase):
     """The groove that says how far is wise."""
 

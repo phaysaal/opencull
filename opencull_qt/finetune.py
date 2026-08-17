@@ -262,6 +262,82 @@ class GeometrySlider(QWidget):
 
 
 
+class Histogram(QWidget):
+    """What the pixels actually did, beside the sliders that did it.
+
+    Three channel curves over 256 bins, computed from the same proof the
+    pane is showing -- the adjusted rendering, or the frame as shot while
+    the comparison key is held -- never from a mask overlay's tint. The
+    zone bands say how far is wise; this says what happened.
+    """
+
+    HEIGHT = 88
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(self.HEIGHT)
+        self._bins: list | None = None
+
+    def show_pixmap(self, pixmap) -> None:
+        if pixmap is None or pixmap.isNull():
+            self._bins = None
+            self.update()
+            return
+        import numpy as np
+        from PySide6.QtGui import QImage
+
+        # A histogram of a downscaled copy is indistinguishable from the
+        # full frame's and costs nothing on a slider drag.
+        image = pixmap.toImage().scaled(
+            320, 200, Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.FastTransformation,
+        ).convertToFormat(QImage.Format.Format_RGB888)
+        width, height = image.width(), image.height()
+        stride = image.bytesPerLine()
+        flat = np.frombuffer(image.constBits(), np.uint8, height * stride)
+        pixels = flat.reshape(height, stride)[:, :width * 3]
+        pixels = pixels.reshape(height, width, 3)
+        self._bins = [
+            np.bincount(pixels[..., channel].ravel(),
+                        minlength=256).astype(np.float32)
+            for channel in range(3)
+        ]
+        self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(QColor(theme.EDGE_SOFT), 1))
+        painter.setBrush(QColor(theme.INK))
+        painter.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), 8, 8)
+        if not self._bins:
+            painter.end()
+            return
+        peak = max(float(bins.max()) for bins in self._bins) or 1.0
+        top, bottom = 6.0, self.height() - 6.0
+        left, span = 6.0, self.width() - 12.0
+        for bins, colour in zip(self._bins, (
+                QColor(220, 90, 80), QColor(120, 200, 130),
+                QColor(110, 140, 230))):
+            path = QPainterPath()
+            path.moveTo(left, bottom)
+            for bin_index in range(256):
+                x = left + span * bin_index / 255.0
+                y = bottom - (bottom - top) * min(
+                    float(bins[bin_index]) / peak, 1.0)
+                path.lineTo(x, y)
+            path.lineTo(left + span, bottom)
+            path.closeSubpath()
+            fill = QColor(colour)
+            fill.setAlpha(70)
+            painter.setPen(QPen(colour, 1))
+            painter.setBrush(fill)
+            painter.drawPath(path)
+        painter.end()
+
+
 class FineTunePage(QWidget):
     """The operations behind one treatment, and the proof of moving them."""
 
@@ -405,6 +481,9 @@ class FineTunePage(QWidget):
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(16, 14, 16, 14)
         layout.setSpacing(10)
+
+        self.histogram = Histogram()
+        layout.addWidget(self.histogram)
 
         self.prompt = QLineEdit()
         self.prompt.setFont(theme.body(10))
@@ -1269,6 +1348,9 @@ class FineTunePage(QWidget):
             self.caption.setText(
                 "AS ADJUSTED" if self.changes else "AS SUGGESTED")
             self.frame.set_source(pixmap)
+            # Always the plain rendering: a mask overlay's tint would
+            # pollute the channels with the tint's own colour.
+            self.histogram.show_pixmap(pixmap)
             if self._overlay_for:
                 self._paint_overlay()
 
@@ -1285,10 +1367,14 @@ class FineTunePage(QWidget):
         if holding and self._as_shot_pixmap is not None:
             self.caption.setText("AS SHOT")
             self.frame.set_source(self._as_shot_pixmap)
+            # The comparison is honest end to end: the curves flip to the
+            # camera's rendering with the picture, and back.
+            self.histogram.show_pixmap(self._as_shot_pixmap)
         elif self._plain_pixmap is not None:
             self.caption.setText(
                 "AS ADJUSTED" if self.changes else "AS SUGGESTED")
             self.frame.set_source(self._plain_pixmap)
+            self.histogram.show_pixmap(self._plain_pixmap)
             if self._overlay_for:
                 self._paint_overlay()
 
