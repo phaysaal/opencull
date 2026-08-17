@@ -26,7 +26,7 @@ ENGINE_FORMAT = "opencull-development-render-v1"
 # changes when the engine's own arithmetic does -- so without this, an
 # improvement to the renderer is invisible on every frame already looked
 # at, which is exactly the frames somebody is judging it by.
-RECIPE_ENGINE_REVISION = 8
+RECIPE_ENGINE_REVISION = 9
 
 
 class DevelopmentError(ValueError):
@@ -432,7 +432,20 @@ def _apply_global(rgb: np.ndarray, operations: list[dict[str, Any]],
             lum = (result * np.array([0.2126, 0.7152, 0.0722])).sum(axis=2, keepdims=True)
             result = lum + (result - lum) * (1.0 + value / 100.0)
         elif op == "color.temperature":
-            factor = 1.0 + value / 5000.0 if item.get("mode") == "delta" else 1.0
+            # A delta warms or cools from where the frame is. An absolute
+            # kelvin names the light itself, and is read against the D65
+            # base every reference here is developed to -- 5400 on a D65
+            # frame asks for a cooler rendering, the way a develop
+            # module's temperature slider reads. Treated as a no-op
+            # before, an absolute temperature (which is how the compiler
+            # spells any kelvin of 2000 or more, including its own
+            # "white balance 5500K" example) silently changed nothing,
+            # and the fine-tune slider on such an operation was dead.
+            told = (value if item.get("mode") == "delta"
+                    else value - 6500.0)
+            # Bounded: the compiler admits absolutes to 50000K, and an
+            # unbounded factor would push channels negative or absurd.
+            factor = min(max(1.0 + told / 5000.0, 0.2), 5.0)
             result[..., 0] *= factor
             result[..., 2] /= max(factor, 0.01)
         elif op == "color.tint":

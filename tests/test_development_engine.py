@@ -189,6 +189,62 @@ class InfraredOperationTests(unittest.TestCase):
         self.assertLess(float(means.max() - means.min()), 1.5)
 
 
+class TemperatureTests(unittest.TestCase):
+    """White balance in both the modes a recipe can spell it.
+
+    A delta warms or cools from where the frame is. An absolute kelvin
+    names the light itself, read against the D65 base every reference here
+    is developed to -- it was silently a no-op before, which made the
+    compiler's own "white balance 5500K" spelling (and the fine-tune
+    slider on such an op) change nothing at all.
+    """
+
+    def grey(self):
+        frame = np.zeros((4, 6, 3), np.float32)
+        frame[...] = 0.30
+        return frame
+
+    def averages(self, frame):
+        return frame.reshape(-1, 3).mean(axis=0)
+
+    def test_a_positive_delta_warms(self):
+        red, _, blue = self.averages(_apply_global(self.grey(), [
+            {"op": "color.temperature", "value": 600, "mode": "delta"}]))
+        self.assertGreater(red, 0.30)
+        self.assertLess(blue, 0.30)
+
+    def test_an_absolute_below_d65_cools(self):
+        # Naming the light 5400K on a D65-based reference asks for a
+        # cooler rendering, the way a develop module's slider reads.
+        red, _, blue = self.averages(_apply_global(self.grey(), [
+            {"op": "color.temperature", "value": 5400,
+             "mode": "absolute"}]))
+        self.assertLess(red, 0.30)
+        self.assertGreater(blue, 0.30)
+
+    def test_an_absolute_above_d65_warms(self):
+        red, _, blue = self.averages(_apply_global(self.grey(), [
+            {"op": "color.temperature", "value": 8000,
+             "mode": "absolute"}]))
+        self.assertGreater(red, 0.30)
+        self.assertLess(blue, 0.30)
+
+    def test_an_absolute_at_d65_changes_nothing(self):
+        frame = self.grey()
+        out = _apply_global(frame, [
+            {"op": "color.temperature", "value": 6500,
+             "mode": "absolute"}])
+        self.assertTrue(np.allclose(out, frame))
+
+    def test_extreme_values_stay_bounded_and_positive(self):
+        for value, mode in ((50000, "absolute"), (2000, "absolute"),
+                            (-1999, "delta")):
+            out = _apply_global(self.grey(), [
+                {"op": "color.temperature", "value": value, "mode": mode}])
+            self.assertTrue(np.isfinite(out).all(), (value, mode))
+            self.assertGreaterEqual(float(out.min()), 0.0, (value, mode))
+
+
 class MidtoneBandTests(unittest.TestCase):
     """One tone equalizer band: the clouds without the sky or the sun."""
 
