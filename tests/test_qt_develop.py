@@ -648,6 +648,35 @@ class TimelapseDoorTests(FinetuneDoorTests):
         # The caption translates the speed into seconds of film.
         self.assertIn("seconds of video", dialog.speed_note.text())
 
+    def test_the_marks_are_the_selection_the_timelapse_aims_at(self):
+        """A folder opened without culling has an everything-included
+        report, which confines nothing -- the assessment marks are the
+        photographer's own say about which frames matter, and they come
+        first. Caught live: a 260-frame marked selection was ignored
+        because the cull selection counted all three hundred."""
+        from opencull_gui.shortlist_reviews import (
+            default_shortlist_review_path,
+        )
+
+        page = self.page()
+        shortlist = self.report.path.with_name(
+            f"{self.report.path.stem}.professional-shortlist.json")
+        review = default_shortlist_review_path(shortlist)
+        review.parent.mkdir(parents=True, exist_ok=True)
+        review.write_text(json.dumps({"entries": {
+            "A.JPG": {"interesting": True},
+            "B.JPG": {"interesting": False},
+            "C.JPG": {"interesting": True},
+        }}))
+        self.assertEqual(page._timelapse_selection(), ["A.JPG", "C.JPG"])
+
+    def test_without_marks_the_cull_selection_speaks(self):
+        page = self.page()
+        told = page._timelapse_selection()
+        # build_shoot's cull keeps one representative; the fallback
+        # reports exactly the kept set, nothing invented.
+        self.assertEqual(told, ["A.JPG"])
+
     def test_a_real_selection_confines_the_run_by_default(self):
         import json as json_module
 

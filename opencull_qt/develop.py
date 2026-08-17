@@ -1533,6 +1533,45 @@ class DevelopPage(QWidget):
             # rebuild changes nothing and the rounds are still on disk.
             self._fill_treatments()
 
+    def _timelapse_selection(self) -> list[str]:
+        """The frames the photographer means by "selected".
+
+        The marks made in assessment come first: "worth developing" is
+        the photographer's own say about which frames matter, and it is
+        the only selection a folder opened without culling has -- the
+        everything-included report counts every frame and confines
+        nothing. Only where nobody has marked anything does the cull's
+        kept set speak instead.
+        """
+        try:
+            from opencull_gui.shortlist_reviews import (
+                default_shortlist_review_path,
+            )
+
+            shortlist = self.report.path.with_name(
+                f"{self.report.path.stem}.professional-shortlist.json")
+            review = default_shortlist_review_path(shortlist)
+            told = json.loads(review.read_text(encoding="utf-8"))
+            marked = sorted(
+                photo for photo, entry in (told.get("entries") or {}).items()
+                if isinstance(entry, dict)
+                and entry.get("interesting") is True)
+            if marked:
+                return marked
+        except Exception:                            # noqa: BLE001 - fall back
+            pass
+        try:
+            from shortlist_kernel import chosen_photographs
+
+            from opencull_gui.reviews import default_review_path
+
+            review = default_review_path(self.report.path)
+            value = (json.loads(review.read_text(encoding="utf-8"))
+                     if review.is_file() else None)
+            return chosen_photographs(self.report.data, value)
+        except Exception:                            # noqa: BLE001 - whole folder
+            return []
+
     def timelapse_current(self) -> None:
         """The whole-folder stabilizer, obvious parameters pre-filled."""
         from .timelapse import TimelapseDialog
@@ -1544,20 +1583,7 @@ class DevelopPage(QWidget):
         # the timelapse wears the same treatment being looked at.
         look = (self.treatment[len("preset-"):]
                 if self.treatment.startswith("preset-") else "")
-        # The cull's own selection, so the timelapse can aim at the kept
-        # frames rather than the whole folder. Computed by the kernel that
-        # reads selections everywhere else, not by a second rule here.
-        try:
-            from shortlist_kernel import chosen_photographs
-
-            from opencull_gui.reviews import default_review_path
-
-            review = default_review_path(self.report.path)
-            value = (json.loads(review.read_text(encoding="utf-8"))
-                     if review.is_file() else None)
-            selection = chosen_photographs(self.report.data, value)
-        except Exception:                            # noqa: BLE001 - whole folder
-            selection = []
+        selection = self._timelapse_selection()
         # No Qt parent on purpose: a modal dialog with a transient parent is
         # glued to it by some desktops (GNOME attaches modal dialogs) and
         # then cannot be dragged. exec() keeps it application-modal without a
