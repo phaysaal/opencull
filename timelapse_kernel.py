@@ -532,8 +532,13 @@ def track_survey(photos: str, pattern: str, subject_box: str,
 # each one so drift is bounded by the anchor spacing and appearance
 # changes are absorbed where a model has just vouched for the box.
 
-def keyframes(photos: str, pattern: str, every: float = 30) -> str:
-    """The names a model will be shown: first, last, and every Nth."""
+def keyframes(photos: str, pattern: str, every: float = 30) -> list[str]:
+    """The names a model will be shown: first, last, and every Nth.
+
+    A real list, not a JSON string: the program iterates it with
+    forall, and the runtime rightly refuses to iterate a string --
+    which is exactly how the named path failed on its first live run.
+    """
     listed = list_frames(photos, pattern)
     stride = max(1, int(every))
     chosen = listed[::stride]
@@ -541,7 +546,7 @@ def keyframes(photos: str, pattern: str, every: float = 30) -> str:
         chosen.append(listed[-1])
     _say_progress(1, (
         f"{len(chosen)} keyframes chosen -- a model call each"))
-    return json.dumps([item["name"] for item in chosen])
+    return [item["name"] for item in chosen]
 
 
 def keyframe_proof(photos: str, name: str, directory: str,
@@ -558,7 +563,7 @@ def keyframe_proof(photos: str, name: str, directory: str,
 
 
 def collect_anchor(anchors_json: str, photos: str, name: str,
-                   proof: str, answer: Any, chosen: str = "") -> str:
+                   proof: str, answer: Any, chosen: Any = "") -> str:
     """One model answer, validated and scaled to full resolution.
 
     The model answered in the proof's own pixels; the survey speaks
@@ -595,10 +600,13 @@ def collect_anchor(anchors_json: str, photos: str, name: str,
             max(0.0, min(values[3], shown_h)) * scale,
         ]
     held.append(entry)
-    try:
-        total = len(json.loads(chosen)) if chosen else 0
-    except (ValueError, TypeError):
-        total = 0
+    if isinstance(chosen, list):
+        total = len(chosen)
+    else:
+        try:
+            total = len(json.loads(chosen)) if chosen else 0
+        except (ValueError, TypeError):
+            total = 0
     if total:
         _say_progress(_ANCHOR_BAND * len(held) / total,
                       f"anchored keyframe {len(held)} of {total}")

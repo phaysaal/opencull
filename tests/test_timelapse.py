@@ -744,8 +744,8 @@ class AnchoredTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             self.sequence(root, [(100 + 6 * i, 100) for i in range(9)])
-            chosen = json.loads(timelapse.keyframes(
-                str(root), "frame-*.jpg", every=4))
+            chosen = timelapse.keyframes(
+                str(root), "frame-*.jpg", every=4)
             self.assertEqual(chosen, ["frame-000.jpg", "frame-004.jpg",
                                       "frame-008.jpg"])
 
