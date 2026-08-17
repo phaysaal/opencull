@@ -138,6 +138,46 @@ class PopoverTests(unittest.TestCase):
         cancel.click()
         self.assertEqual(heard, ["run-1"])
 
+    def test_a_poll_that_changes_only_numbers_keeps_the_rows(self):
+        """The open panel must not be torn down by every poll. Rebuilt
+        whole each 1.5s it collapsed and regrew -- which read as closing
+        and reopening continuously while a run was watched. Same jobs,
+        same statuses: the rows stay and their moving parts move."""
+        from PySide6.QtWidgets import QLabel
+
+        pop = QueuePopover()
+        self.addCleanup(pop.deleteLater)
+        first = _job(id="run-1", kind="kimiya_program",
+                     program="eclipse_timelapse.kim", status="running",
+                     progress={"fraction": 0.4,
+                               "stage": "rendering frame 100 of 274"})
+        self.assertTrue(pop.rebuild({"jobs": [first]}))
+        stage = pop._live["run-1"]["stage"]
+        self.assertIsInstance(stage, QLabel)
+        moved = dict(first, progress={"fraction": 0.6,
+                                      "stage": "rendering frame 170 of 274"})
+        self.assertFalse(pop.rebuild({"jobs": [moved]}))
+        # The very same label, its words moved -- nothing was deleted.
+        self.assertIs(pop._live["run-1"]["stage"], stage)
+        self.assertIn("170", stage.text())
+        # A status change is structural: now it rebuilds.
+        done = dict(first, status="completed", output="/nope.json")
+        self.assertTrue(pop.rebuild({"jobs": [done]}))
+
+    def test_the_click_that_closed_the_popup_does_not_reopen_it(self):
+        import time as time_module
+
+        from opencull_qt.queuebadge import QueueBadge
+
+        badge = QueueBadge()
+        self.addCleanup(badge.deleteLater)
+        badge.set_snapshot({"jobs": []})
+        # The popup just auto-closed from this very click landing outside
+        # it; the badge's press must not immediately reopen it.
+        badge._popover.closed_at = time_module.monotonic()
+        badge.mousePressEvent(None)
+        self.assertFalse(badge._popover.isVisible())
+
     def test_a_finished_timelapse_row_reveals_its_video(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

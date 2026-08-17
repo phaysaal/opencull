@@ -16,6 +16,7 @@ other is wired.
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Any
 
@@ -226,19 +227,48 @@ class QueuePopover(QFrame):
         self._outer = QVBoxLayout(self)
         self._outer.setContentsMargins(0, 0, 0, 0)
         self._outer.setSpacing(0)
+        # What the panel is currently built for, and the widgets that can
+        # be updated without rebuilding. Tearing every row down on every
+        # poll made the open panel collapse and regrow each second --
+        # which read as closing and reopening -- so a poll that changes
+        # only a fraction or a stage line touches those widgets in place,
+        # and only a changed job set rebuilds.
+        self._structure: tuple | None = None
+        self._live: dict[str, dict[str, Any]] = {}
+        self._count_label: QLabel | None = None
+        self.closed_at = 0.0
 
-    def rebuild(self, snapshot: dict[str, Any]) -> None:
-        while self._outer.count():
-            item = self._outer.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.deleteLater()
+    def hideEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        # A popup is closed by the very click that lands on the badge; the
+        # badge reads this stamp so that click does not immediately reopen.
+        self.closed_at = time.monotonic()
+        super().hideEvent(event)
 
+    @staticmethod
+    def _shape(jobs: list) -> tuple:
+        return tuple(
+            (str(job.get("id")), str(job.get("status"))) for job in jobs)
+
+    def rebuild(self, snapshot: dict[str, Any]) -> bool:
+        """Reflect a snapshot; True when the panel was rebuilt whole."""
         jobs = list(snapshot.get("jobs") or [])
         active = [j for j in jobs if str(j.get("status")) in _ACTIVE]
         waiting = [j for j in jobs if str(j.get("status")) in _WAITING]
         recent = [j for j in jobs if str(j.get("status")) in _TERMINAL][-6:]
         recent.reverse()
+        shape = self._shape(active + waiting + recent)
+        if shape == self._structure:
+            self._refresh(active + waiting)
+            if self._count_label is not None:
+                self._count_label.setText(self._summary(active, waiting))
+            return False
+        self._structure = shape
+        self._live = {}
+        while self._outer.count():
+            item = self._outer.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
 
         head = QHBoxLayout()
         head.setContentsMargins(14, 12, 14, 8)
@@ -250,6 +280,7 @@ class QueuePopover(QFrame):
         count = QLabel(self._summary(active, waiting))
         count.setObjectName("hint")
         count.setFont(theme.body(9))
+        self._count_label = count
         head.addWidget(count)
         holder = QWidget()
         holder.setLayout(head)
@@ -272,6 +303,25 @@ class QueuePopover(QFrame):
             self._outer.addWidget(label)
             for job in recent:
                 self._outer.addWidget(self._row(job, running=False))
+        return True
+
+    def _refresh(self, jobs: list) -> None:
+        """The same rows, their moving parts moved."""
+        for job in jobs:
+            live = self._live.get(str(job.get("id")))
+            if live is None:
+                continue
+            progress = job.get("progress") or {}
+            stage = str(progress.get("stage") or job.get("message") or "")
+            if stage:
+                live["stage"].setText(stage)
+            ring = live.get("ring")
+            if ring is not None:
+                try:
+                    value = float(progress.get("fraction"))
+                except (TypeError, ValueError):
+                    value = 0.0
+                ring.set_state(fraction=value if value > 0 else None)
 
     @staticmethod
     def _summary(active: list, waiting: list) -> str:
@@ -292,7 +342,8 @@ class QueuePopover(QFrame):
         status = str(job.get("status") or "")
         progress = job.get("progress") or {}
         fraction = progress.get("fraction")
-        line.addWidget(self._indicator(status, fraction))
+        indicator = self._indicator(status, fraction)
+        line.addWidget(indicator)
 
         body = QVBoxLayout()
         body.setSpacing(1)
@@ -304,6 +355,10 @@ class QueuePopover(QFrame):
         stage.setObjectName("hint")
         stage.setFont(theme.body(9))
         body.addWidget(stage)
+        self._live[str(job.get("id"))] = {
+            "stage": stage,
+            "ring": indicator if isinstance(indicator, QueueRing) else None,
+        }
         holder = QWidget()
         holder.setLayout(body)
         line.addWidget(holder, 1)
@@ -435,8 +490,8 @@ class QueueBadge(QWidget):
 
         self.setToolTip(self._tooltip(active, waiting))
         if self._popover.isVisible():
-            self._popover.rebuild(self._snapshot)
-            self._popover.adjustSize()
+            if self._popover.rebuild(self._snapshot):
+                self._popover.adjustSize()
 
     @staticmethod
     def _tooltip(active: list, waiting: list) -> str:
@@ -456,6 +511,10 @@ class QueueBadge(QWidget):
     def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt naming
         if self._popover.isVisible():
             self._popover.hide()
+            return
+        if time.monotonic() - self._popover.closed_at < 0.25:
+            # The popup was closed by this very click landing outside it;
+            # reopening now would make the badge impossible to close.
             return
         self._popover.rebuild(self._snapshot)
         self._popover.adjustSize()
