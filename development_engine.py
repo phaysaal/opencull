@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import math
@@ -737,6 +738,37 @@ def _spatial_mask(rgb: np.ndarray, shape: str, value: dict[str, Any]) -> np.ndar
             shown = np.power(np.clip(lum, 0.0, 1.0), 1.0 / _ENCODE_GAMMA)
             return np.clip(1.0 - np.abs(shown - 0.5) * 2.5, 0.0, 1.0)
         return np.clip((1 - lum * 2) if "shadow" in anchor else lum * 2, 0, 1)
+    if shape == "brush":
+        # Painted by hand: the weights are a small greyscale map carried
+        # inside the operation itself -- base64, bounded resolution -- so
+        # a portable recipe stays portable and the same strokes land on a
+        # proof and on the full-size render alike. Feather blurs the map
+        # before it is stretched, so the stroke's edge softens in the
+        # map's own scale whatever size the render is.
+        import io as io_module
+
+        from PIL import Image as PILImage
+        from PIL import ImageFilter
+
+        encoded = str(value.get("map") or "")
+        if not encoded:
+            return np.zeros(rgb.shape[:2], dtype=np.float32)
+        try:
+            sheet = PILImage.open(io_module.BytesIO(
+                base64.b64decode(encoded))).convert("L")
+        except Exception:                            # noqa: BLE001 - no mask
+            return np.zeros(rgb.shape[:2], dtype=np.float32)
+        stated = value.get("feather")
+        feather = 1.0 if stated is None else float(stated)
+        radius = max(0.0, min(feather, 1.0)) * 6.0
+        if radius >= 0.5:
+            sheet = sheet.filter(ImageFilter.GaussianBlur(radius))
+        height, width = rgb.shape[:2]
+        sheet = sheet.resize((width, height), PILImage.Resampling.BILINEAR)
+        weights = np.asarray(sheet, dtype=np.float32) / 255.0
+        if "invert" in anchor or "outside" in anchor or "except" in anchor:
+            return (1.0 - weights).astype(np.float32)
+        return weights
     if shape == "color":
         # Selected by what the pixels ARE rather than where they sit: a
         # hue around a centre, softly, gated so near-grey pixels -- which

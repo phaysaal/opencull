@@ -318,6 +318,52 @@ class ColourMaskTests(unittest.TestCase):
         self.assertGreater(float(told[1]), 0.95)
 
 
+class BrushMaskWeightTests(unittest.TestCase):
+    """Ink where the hand painted, nothing where it did not."""
+
+    def encoded(self):
+        import base64
+        import io
+
+        from PIL import Image, ImageDraw
+
+        sheet = Image.new("L", (64, 48), 0)
+        ImageDraw.Draw(sheet).rectangle((0, 0, 31, 47), fill=255)
+        buffer = io.BytesIO()
+        sheet.save(buffer, "PNG")
+        return base64.b64encode(buffer.getvalue()).decode()
+
+    def test_the_map_stretches_to_the_render_and_keeps_its_sides(self):
+        from development_engine import mask_weights
+
+        weights = mask_weights(
+            np.zeros((480, 640, 3), np.float32), "brush",
+            {"anchor": "painted by hand", "map": self.encoded(),
+             "feather": 0.0})
+        self.assertGreater(float(weights[240, 100]), 0.9)   # painted side
+        self.assertLess(float(weights[240, 540]), 0.1)      # clean side
+
+    def test_feather_softens_the_strokes_edge(self):
+        from development_engine import mask_weights
+
+        hard = mask_weights(
+            np.zeros((48, 64, 3), np.float32), "brush",
+            {"anchor": "x", "map": self.encoded(), "feather": 0.0})
+        soft = mask_weights(
+            np.zeros((48, 64, 3), np.float32), "brush",
+            {"anchor": "x", "map": self.encoded(), "feather": 1.0})
+        edge_hard = float(np.abs(np.diff(hard[24])).max())
+        edge_soft = float(np.abs(np.diff(soft[24])).max())
+        self.assertLess(edge_soft, edge_hard)
+
+    def test_an_empty_map_masks_nothing_rather_than_everything(self):
+        from development_engine import mask_weights
+
+        weights = mask_weights(
+            np.zeros((24, 32, 3), np.float32), "brush", {"anchor": "x"})
+        self.assertEqual(float(weights.max()), 0.0)
+
+
 class MidtoneBandTests(unittest.TestCase):
     """One tone equalizer band: the clouds without the sky or the sun."""
 

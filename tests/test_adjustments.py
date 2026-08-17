@@ -376,3 +376,24 @@ class CropFoldTests(unittest.TestCase):
         self.assertGreaterEqual(value["width"], 0.05)
         self.assertLessEqual(value["left"] + value["width"], 1.0)
         self.assertEqual(held["geometry.rotation"]["value"], 15.0)
+
+
+class BrushMaskTests(unittest.TestCase):
+    """The painted mask travels inside the recipe, strokes and all."""
+
+    def test_an_added_brush_carries_its_map(self):
+        out = adjustments.apply(recipe(), {"+mask": [{
+            "shape": "brush", "label": "dodge the rocks", "map": "AAAA",
+            "geometry": {"opacity": 100, "feather": 60},
+            "effects": [{"op": "tone.exposure", "value": 0.4}]}]})
+        op = out["operations"][-1]
+        self.assertEqual(op["op"], "mask.brush")
+        self.assertEqual(op["value"]["map"], "AAAA")
+        self.assertEqual(op["value"]["anchor"], "painted by hand")
+
+    def test_a_new_stroke_replaces_the_map(self):
+        base = adjustments.apply(recipe(), {"+mask": [{
+            "shape": "brush", "map": "AAAA", "geometry": {},
+            "effects": []}]})
+        out = adjustments.apply(base, {"mask:1": {"map": "BBBB"}})
+        self.assertEqual(out["operations"][-1]["value"]["map"], "BBBB")

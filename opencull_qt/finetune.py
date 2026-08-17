@@ -370,6 +370,181 @@ def _band_rgb(band: str, *, hue_shift: float = 0.0, sat: float = 0.75,
     return (int(r * 255), int(g * 255), int(b * 255))
 
 
+class PaintOverlay(QWidget):
+    """The brush: strokes gathered over the picture, kept as a map.
+
+    The mask is a small greyscale map -- ink where the hand painted,
+    nothing where it did not -- stretched over the photograph at render.
+    Painting adds soft stamps along the drag; the eraser is the same
+    brush taking ink away. The overlay shows the ink as the safelight
+    wash while the hand works, and hands the finished stroke back as
+    one gesture.
+    """
+
+    stroke_done = Signal()
+
+    MAP_EDGE = 384
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.map = None                # QImage, grayscale
+        self.erasing = False
+        self.brush = 8.0               # percent of the picture's width
+        self.softness = 55.0           # percent of the brush that fades
+        self._last = None
+
+    def begin(self, width: int, height: int, encoded: str = "") -> None:
+        """A map matching the photograph's shape, resumed if it exists."""
+        import base64
+        import io as io_module
+
+        from PySide6.QtGui import QImage
+
+        scale = self.MAP_EDGE / max(width, height, 1)
+        size = (max(2, round(width * scale)), max(2, round(height * scale)))
+        self.map = QImage(size[0], size[1],
+                          QImage.Format.Format_Grayscale8)
+        self.map.fill(0)
+        if encoded:
+            try:
+                from PIL import Image as PILImage
+
+                sheet = PILImage.open(io_module.BytesIO(
+                    base64.b64decode(encoded))).convert("L")
+                sheet = sheet.resize(size)
+                held = QImage(sheet.tobytes(), size[0], size[1],
+                              size[0], QImage.Format.Format_Grayscale8)
+                self.map = held.copy()
+            except Exception:                        # noqa: BLE001 - fresh
+                pass
+        self.update()
+
+    def encoded(self) -> str:
+        """The map as it travels: a base64 PNG inside the operation."""
+        import base64
+        import io as io_module
+
+        from PIL import Image as PILImage
+
+        if self.map is None:
+            return ""
+        pointer = self.map.constBits()
+        stride = self.map.bytesPerLine()
+        raw = bytes(pointer)[:self.map.height() * stride]
+        rows = [raw[row * stride: row * stride + self.map.width()]
+                for row in range(self.map.height())]
+        sheet = PILImage.frombytes(
+            "L", (self.map.width(), self.map.height()), b"".join(rows))
+        buffer = io_module.BytesIO()
+        sheet.save(buffer, "PNG", optimize=True)
+        return base64.b64encode(buffer.getvalue()).decode()
+
+    # --- geometry ----------------------------------------------------------
+
+    def _shown(self):
+        from PySide6.QtCore import QRectF
+
+        label = self.parent()
+        pixmap = label.pixmap() if label is not None else None
+        if pixmap is None or pixmap.isNull():
+            return QRectF(0, 0, max(self.width(), 1), max(self.height(), 1))
+        ratio = float(pixmap.devicePixelRatio() or 1.0)
+        width, height = pixmap.width() / ratio, pixmap.height() / ratio
+        return QRectF((self.width() - width) / 2,
+                      (self.height() - height) / 2, width, height)
+
+    def _to_map(self, pos):
+        shown = self._shown()
+        if self.map is None or shown.width() <= 0:
+            return None
+        fx = (pos.x() - shown.left()) / shown.width()
+        fy = (pos.y() - shown.top()) / shown.height()
+        if not (0 <= fx <= 1 and 0 <= fy <= 1):
+            return None
+        return (fx * self.map.width(), fy * self.map.height())
+
+    # --- the strokes -------------------------------------------------------
+
+    def _stamp(self, at) -> None:
+        from PySide6.QtCore import QPointF
+        from PySide6.QtGui import QColor, QPainter, QRadialGradient
+
+        radius = max(2.0, self.brush / 100.0 * self.map.width() / 2)
+        core = 1.0 - max(0.0, min(self.softness, 95.0)) / 100.0
+        painter = QPainter(self.map)
+        if self.erasing:
+            painter.setCompositionMode(
+                QPainter.CompositionMode.CompositionMode_Multiply)
+        else:
+            painter.setCompositionMode(
+                QPainter.CompositionMode.CompositionMode_Lighten)
+        gradient = QRadialGradient(QPointF(at[0], at[1]), radius)
+        ink = 0 if self.erasing else 255
+        keep = 255 if self.erasing else 0
+        gradient.setColorAt(0.0, QColor(ink, ink, ink))
+        gradient.setColorAt(max(core, 0.02), QColor(ink, ink, ink))
+        gradient.setColorAt(1.0, QColor(keep, keep, keep))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(gradient)
+        painter.drawEllipse(QPointF(at[0], at[1]), radius, radius)
+        painter.end()
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        at = self._to_map(event.position())
+        if at is None:
+            return
+        self._stamp(at)
+        self._last = at
+        self.update()
+
+    def mouseMoveEvent(self, event) -> None:   # noqa: N802 - Qt naming
+        at = self._to_map(event.position())
+        if at is None or self._last is None:
+            return
+        # Stamps along the path, close enough to read as one stroke.
+        span = max(abs(at[0] - self._last[0]),
+                   abs(at[1] - self._last[1]))
+        radius = max(2.0, self.brush / 100.0 * self.map.width() / 2)
+        steps = max(1, int(span / max(radius * 0.35, 1)))
+        for step in range(1, steps + 1):
+            t = step / steps
+            self._stamp((self._last[0] + (at[0] - self._last[0]) * t,
+                         self._last[1] + (at[1] - self._last[1]) * t))
+        self._last = at
+        self.update()
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        if self._last is not None:
+            self._last = None
+            self.stroke_done.emit()
+
+    def paintEvent(self, event) -> None:       # noqa: N802 - Qt naming
+        from PySide6.QtGui import QColor, QPainter, QPixmap
+
+        if self.map is None:
+            return
+        painter = QPainter(self)
+        shown = self._shown()
+        tinted = self.map.convertToFormat(
+            self.map.Format.Format_ARGB32)
+        # The ink as the safelight wash: alpha from the map itself.
+        import numpy as _np
+        stride = tinted.bytesPerLine()
+        flat = _np.frombuffer(tinted.bits(), _np.uint8,
+                              tinted.height() * stride)
+        pixels = flat.reshape(tinted.height(), stride // 4 * 4)
+        view = pixels[:, :tinted.width() * 4].reshape(
+            tinted.height(), tinted.width(), 4)
+        strength = view[..., 0].copy()
+        view[..., 0] = 40    # B
+        view[..., 1] = 130   # G
+        view[..., 2] = 255   # R
+        view[..., 3] = (strength * 0.55).astype(_np.uint8)
+        painter.drawPixmap(
+            shown.toRect(), QPixmap.fromImage(tinted))
+        painter.end()
+
+
 class CropOverlay(QWidget):
     """The photographer's frame, drawn over the picture and draggable.
 
@@ -872,6 +1047,10 @@ class FineTunePage(QWidget):
 
         self._crop_overlay = CropOverlay(self.frame)
         self._crop_overlay.hide()
+        self._brush_canvas = PaintOverlay(self.frame)
+        self._brush_canvas.hide()
+        self._brush_canvas.stroke_done.connect(self._stroke_done)
+        self._painting_layer = 0
         self._crop_base = None
         crop_bar = QHBoxLayout()
         crop_bar.setSpacing(8)
@@ -1319,6 +1498,44 @@ class FineTunePage(QWidget):
         self._show_controls()
         self.render()
 
+    def _begin_paint(self, ordinal: int, erasing: bool) -> None:
+        self._painting_layer = ordinal
+        self._brush_canvas.erasing = erasing
+        # Fit view, so the strokes land where the eye puts them.
+        self.frame._zoom = 0.0
+        self.frame._redraw()
+        held = ""
+        operations = self.recipe.get("operations", []) or []
+        counted = 0
+        for op in operations:
+            if isinstance(op, dict) and str(
+                    op.get("op", "")).startswith("mask.") \
+                    and str(op.get("op", "")) != "mask.vignette" \
+                    and isinstance(op.get("value"), dict):
+                counted += 1
+                if counted == ordinal:
+                    held = str(op["value"].get("map") or "")
+        source = self.frame._source
+        if source is not None:
+            self._brush_canvas.begin(source.width(), source.height(), held)
+        self._brush_canvas.setGeometry(self.frame.rect())
+        self._brush_canvas.show()
+        self._brush_canvas.raise_()
+        self._report(
+            "Erase where you overdid it." if erasing
+            else "Paint where the layer should land.")
+
+    def _end_paint(self) -> None:
+        self._painting_layer = 0
+        self._brush_canvas.hide()
+
+    def _stroke_done(self) -> None:
+        if not self._painting_layer:
+            return
+        self._remember(f"paint mask:{self._painting_layer}")
+        self._mask_changed(f"mask:{self._painting_layer}",
+                           {"map": self._brush_canvas.encoded()})
+
     def _crop_mode_toggled(self, on: bool) -> None:
         self._crop_bar.setVisible(on)
         if on:
@@ -1454,6 +1671,8 @@ class FineTunePage(QWidget):
         if watched is self.frame and event.type() == QEvent.Type.Resize:
             if self._crop_overlay.isVisible():
                 self._crop_overlay.setGeometry(self.frame.rect())
+            if self._brush_canvas.isVisible():
+                self._brush_canvas.setGeometry(self.frame.rect())
         if (watched is self.frame and self._picking_for
                 and event.type() == QEvent.Type.MouseButtonPress):
             self._pick_at(event.position())
@@ -1589,7 +1808,8 @@ class FineTunePage(QWidget):
         for label in ("Radial — around a point",
                       "Linear — from an edge",
                       "Luma — a band of brightness",
-                      "Color — a range of colour"):
+                      "Color — a range of colour",
+                      "Brush — painted by hand"):
             action = menu.addAction(label)
             action.setData(label.split(" ", 1)[0].lower())
         chosen = menu.exec(QCursor.pos())
@@ -1986,6 +2206,53 @@ class FineTunePage(QWidget):
                 lambda text, m=key_prefix: self._mask_changed(
                     m, {"geometry": {"band": text}}))
             self.body.addWidget(band)
+        elif mask["shape"] == "brush":
+            row = QHBoxLayout()
+            row.setSpacing(8)
+            paint = QPushButton("Paint")
+            paint.setObjectName("ghost")
+            paint.setCheckable(True)
+            paint.setFont(theme.body(9))
+            paint.setChecked(self._painting_layer == ordinal
+                             and not self._brush_canvas.erasing)
+            erase = QPushButton("Erase")
+            erase.setObjectName("ghost")
+            erase.setCheckable(True)
+            erase.setFont(theme.body(9))
+            erase.setChecked(self._painting_layer == ordinal
+                             and self._brush_canvas.erasing)
+
+            def switch(mode_erase: bool, on: bool,
+                       o=ordinal, paint=paint, erase=erase) -> None:
+                if not on:
+                    if not (paint.isChecked() or erase.isChecked()):
+                        self._end_paint()
+                    return
+                (erase if mode_erase else paint).setChecked(True)
+                (paint if mode_erase else erase).setChecked(False)
+                self._begin_paint(o, mode_erase)
+
+            paint.toggled.connect(lambda on: switch(False, on))
+            erase.toggled.connect(lambda on: switch(True, on))
+            row.addWidget(paint)
+            row.addWidget(erase)
+            row.addStretch(1)
+            holder2 = QWidget()
+            holder2.setLayout(row)
+            holder2.layout().setContentsMargins(0, 0, 0, 0)
+            self.body.addWidget(holder2)
+            size = GeometrySlider("brush", "Brush", 1.0, 30.0,
+                                  self._brush_canvas.brush)
+            size.changed.connect(
+                lambda _k, v: setattr(self._brush_canvas, "brush",
+                                      float(v)))
+            self.body.addWidget(size)
+            soft = GeometrySlider("softness", "Softness", 0.0, 95.0,
+                                  self._brush_canvas.softness)
+            soft.changed.connect(
+                lambda _k, v: setattr(self._brush_canvas, "softness",
+                                      float(v)))
+            self.body.addWidget(soft)
         elif mask["shape"] == "color":
             # Selected by what the pixels are, not where they sit: a hue
             # around a centre, softly, gated so near-grey stays out.

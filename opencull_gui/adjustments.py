@@ -250,6 +250,8 @@ def _parse_anchor(shape: str, anchor: str) -> dict[str, Any]:
         found["band"] = next(
             (band for band in BANDS
              if band.rstrip("s") in text or band in text), "shadows")
+    elif shape == "brush":
+        pass                                  # the map is the geometry
     elif shape == "color":
         def stated(name: str, default: float) -> float:
             match = re.search(rf"\b{name}\s*(-?\d+(?:\.\d+)?)", text)
@@ -281,6 +283,8 @@ def _build_anchor(shape: str, geometry: dict[str, Any]) -> str:
     elif shape == "luma":
         band = str(geometry.get("band", "shadows"))
         parts.append(band if band in BANDS else "shadows")
+    elif shape == "brush":
+        parts = ["painted by hand"]
     elif shape == "color":
         parts = ["colour mask"]
         parts.append(f"hue {float(geometry.get('hue', 0)):.0f}")
@@ -608,7 +612,7 @@ def apply(recipe: dict[str, Any], changes: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(item, dict):
             continue
         shape = str(item.get("shape", "radial"))
-        if shape not in {"radial", "linear", "luma", "color"}:
+        if shape not in {"radial", "linear", "luma", "color", "brush"}:
             shape = "radial"
         geometry = dict(item.get("geometry") or {})
         result.setdefault("operations", []).append({
@@ -620,6 +624,11 @@ def apply(recipe: dict[str, Any], changes: dict[str, Any]) -> dict[str, Any]:
                 "anchor": _build_anchor(shape, geometry),
                 "opacity": float(geometry.get("opacity", 100)) / 100.0,
                 "feather": float(geometry.get("feather", 100)) / 100.0,
+                # A painted mask carries its strokes with it: a small
+                # greyscale map inside the operation, so the recipe
+                # remains one self-contained file.
+                **({"map": str(item.get("map"))}
+                   if item.get("map") else {}),
                 "effects": [
                     {"op": str(effect.get("op")),
                      "value": max(RANGES[str(effect.get("op"))][0],
@@ -661,6 +670,8 @@ def apply(recipe: dict[str, Any], changes: dict[str, Any]) -> dict[str, Any]:
         value = operation["value"]
         shape = str(operation["op"])[5:]
         if not effect_op:
+            if "map" in change:
+                value["map"] = str(change["map"])
             if "label" in change:
                 operation["source"] = str(change["label"])[:80]
             if change.get("deleted") is True:

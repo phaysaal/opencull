@@ -307,6 +307,57 @@ class FineTunePageTests(unittest.TestCase):
         page.undo()
         self.assertNotIn("crop", page.changes)
 
+    def test_a_painted_stroke_lands_in_the_recipe_and_renders(self):
+        import numpy as np
+        from PySide6.QtCore import QPointF
+        from PySide6.QtGui import QColor, QImage, QPixmap
+
+        from development_engine import mask_weights
+
+        page = self.page()
+        page._create_mask("brush")
+        ordinal = adjustments.masks(page.recipe)[-1]["ordinal"]
+        # A proof on the pane to paint over.
+        image = QImage(640, 480, QImage.Format.Format_RGB888)
+        image.fill(QColor(60, 50, 40))
+        page.frame.resize(320, 240)
+        page.frame.set_source(QPixmap.fromImage(image))
+        page._begin_paint(ordinal, erasing=False)
+
+        class Event:
+            def __init__(self, x, y):
+                self._at = QPointF(x, y)
+
+            def position(self):
+                return self._at
+
+        centre = page._brush_canvas._shown().center()
+        page._brush_canvas.mousePressEvent(
+            Event(centre.x() - 30, centre.y()))
+        page._brush_canvas.mouseMoveEvent(
+            Event(centre.x() + 30, centre.y()))
+        page._brush_canvas.mouseReleaseEvent(Event(0, 0))
+        held = [op for op in page.recipe["operations"]
+                if op.get("op") == "mask.brush"][0]
+        self.assertTrue(held["value"].get("map"))
+        weights = mask_weights(
+            np.zeros((480, 640, 3), np.float32), "brush", held["value"])
+        self.assertGreater(float(weights[240, 320]), 0.5)   # painted
+        self.assertLess(float(weights[20, 20]), 0.05)       # untouched
+        # The eraser takes it back off.
+        page._begin_paint(ordinal, erasing=True)
+        for _pass in range(3):
+            page._brush_canvas.mousePressEvent(
+                Event(centre.x() - 30, centre.y()))
+            page._brush_canvas.mouseMoveEvent(
+                Event(centre.x() + 30, centre.y()))
+            page._brush_canvas.mouseReleaseEvent(Event(0, 0))
+        held = [op for op in page.recipe["operations"]
+                if op.get("op") == "mask.brush"][0]
+        weights = mask_weights(
+            np.zeros((480, 640, 3), np.float32), "brush", held["value"])
+        self.assertLess(float(weights[240, 320]), 0.4)
+
     def test_the_histogram_reads_the_arriving_render(self):
         from PySide6.QtGui import QColor, QImage, QPixmap
 
