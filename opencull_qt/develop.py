@@ -378,6 +378,17 @@ class Renderer(QObject):
         # A render saturates the machine on its own. Two at once makes both
         # slower and neither useful sooner.
         self._pool.setMaxThreadCount(1)
+        # The latest-wins slot. Fine tuning asks for a render on every
+        # slider tick; queueing each one had a drag pile up dozens of
+        # full renders that all ran serially and were all discarded as
+        # stale on arrival -- the preview sat frozen while the machine
+        # ground through them. Instead, while one render is in flight the
+        # newest request waits here, each new one replacing the last, and
+        # it is submitted the moment the running render settles. At most
+        # one render runs and one waits; a drag costs two renders, not
+        # forty.
+        self._inflight = 0
+        self._waiting: tuple | None = None
 
     def render(self, photo: str, treatment: str, engine: str,
                demosaic: str, adjustments: dict | None = None,
@@ -388,11 +399,29 @@ class Renderer(QObject):
         the fine-tune page, re-rendering on every slider move -- passes
         the screen's own size and pays for nothing it cannot display.
         """
+        request = (photo, treatment, engine, demosaic, adjustments,
+                   maximum or self.maximum)
+        if self._inflight > 0:
+            # The running render is left to land -- its picture is still
+            # fresher than what is on screen, so the drag reads as
+            # movement -- and this newest request takes the waiting slot.
+            self._waiting = request
+            return
+        self._start(request)
+
+    def _start(self, request: tuple) -> None:
+        photo, treatment, engine, demosaic, adjustments, maximum = request
         self._generation += 1
+        self._inflight += 1
         self._pool.start(_RenderJob(
             self.workspace, photo, treatment, engine, demosaic,
-            self._signals, self._generation, maximum or self.maximum,
-            adjustments))
+            self._signals, self._generation, maximum, adjustments))
+
+    def _settle(self) -> None:
+        self._inflight = max(0, self._inflight - 1)
+        if self._waiting is not None and self._inflight == 0:
+            request, self._waiting = self._waiting, None
+            self._start(request)
 
     def render_many(self, photo: str, treatments: list[str], engine: str,
                     demosaic: str) -> None:
@@ -406,6 +435,7 @@ class Renderer(QObject):
         """
         self._generation += 1
         for treatment in treatments:
+            self._inflight += 1
             self._pool.start(_RenderJob(
                 self.workspace, photo, treatment, engine, demosaic,
                 self._signals, self._generation, self.maximum))
@@ -413,6 +443,8 @@ class Renderer(QObject):
     def abandon(self) -> None:
         """Stop caring about a render whose frame is no longer on screen."""
         self._generation += 1
+        # The waiting request belongs to the abandoned frame too.
+        self._waiting = None
 
     def drop_queued(self) -> None:
         """Give up the work not yet started, and the right to its results.
@@ -421,10 +453,17 @@ class Renderer(QObject):
         wastes what it has done and leaves its working files behind.
         """
         self._generation += 1
+        self._waiting = None
         self._pool.clear()
+        # Cleared jobs never signal; only the (at most one) running job
+        # still will. Counting the cleared ones as settled keeps the
+        # latest-wins slot from waiting forever on jobs that no longer
+        # exist.
+        self._inflight = min(self._inflight, 1)
 
     def _finished(self, generation: int, photo: str, treatment: str,
                   path: str) -> None:
+        self._settle()
         if generation != self._generation:
             return
         pixmap = load_for_screen(path)
@@ -434,13 +473,16 @@ class Renderer(QObject):
         self.done.emit(photo, treatment, pixmap)
 
     def _failed(self, generation: int, photo: str, reason: str) -> None:
+        self._settle()
         if generation == self._generation:
             self.failed.emit(photo, reason)
 
     def shutdown(self) -> None:
         self._generation += 1
+        self._waiting = None
         self._pool.clear()
         self._pool.waitForDone(5000)
+        self._inflight = 0
 
 
 class PreviewQueue(QObject):

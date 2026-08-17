@@ -1936,6 +1936,79 @@ class DevelopPageTests(unittest.TestCase):
         self.assertEqual(page.status.property("tone"), "alarm")
 
 
+class RendererCoalescingTests(unittest.TestCase):
+    """A slider drag is many requests but must not be many renders.
+
+    Fine tuning re-renders on every slider tick. Queueing each request had
+    a drag pile up dozens of full renders that ran serially and were all
+    discarded as stale -- the preview sat frozen while the machine ground
+    through them. The renderer now holds one waiting request, newest wins.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.application = QApplication.instance() or QApplication([])
+
+    def test_a_burst_of_requests_runs_two_renders_and_ends_on_the_last(self):
+        import time
+
+        from opencull_qt.develop import Renderer
+
+        rendered = []
+
+        class Workspace:
+            def recipe_preview(self, photo, style, engine, demosaic,
+                               maximum, adjustments=None):
+                time.sleep(0.05)
+                rendered.append(adjustments)
+                return Path("/nonexistent.jpg")   # unreadable: fails cleanly
+
+        renderer = Renderer(Workspace())
+        self.addCleanup(renderer.shutdown)
+        outcomes = []
+        renderer.failed.connect(lambda *a: outcomes.append(a))
+        for tick in range(12):
+            renderer.render("A.JPG", "standard", "auto", "half",
+                            adjustments={"tone.exposure": {"value": tick}})
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and (
+                renderer._inflight or renderer._waiting):
+            self.application.processEvents()
+            time.sleep(0.01)
+        self.application.processEvents()
+        # The first request ran at once; the other eleven collapsed into
+        # one waiting render carrying the newest value.
+        self.assertEqual(len(rendered), 2)
+        self.assertEqual(rendered[-1], {"tone.exposure": {"value": 11}})
+
+    def test_abandon_clears_the_waiting_request(self):
+        import time
+
+        from opencull_qt.develop import Renderer
+
+        rendered = []
+
+        class Workspace:
+            def recipe_preview(self, photo, style, engine, demosaic,
+                               maximum, adjustments=None):
+                time.sleep(0.05)
+                rendered.append(photo)
+                return Path("/nonexistent.jpg")
+
+        renderer = Renderer(Workspace())
+        self.addCleanup(renderer.shutdown)
+        renderer.render("OLD.JPG", "standard", "auto", "half")
+        renderer.render("OLD.JPG", "standard", "auto", "half")
+        renderer.abandon()                    # switched to another frame
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and renderer._inflight:
+            self.application.processEvents()
+            time.sleep(0.01)
+        self.application.processEvents()
+        # The running render finished; the waiting one never started.
+        self.assertEqual(rendered, ["OLD.JPG"])
+
+
 class DecoderDetectionTests(unittest.TestCase):
     def test_nothing_is_assumed_to_be_installed(self):
         from opencull_gui.development import available_decoders
