@@ -14,7 +14,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QRect
+from PySide6.QtCore import QRect, Qt, QThread, Signal
 from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -358,6 +358,55 @@ def full_box(drag, shown_width: int, shown_height: int,
     )
 
 
+class _FrameLoader(QThread):
+    """One frame's embedded rendering, extracted off the GUI thread."""
+
+    ready = Signal(int, QImage, int, int)   # generation, image, full w, h
+
+    def __init__(self, generation: int, path: Path, fit: tuple,
+                 parent=None):
+        super().__init__(parent)
+        self._generation = generation
+        self._path = Path(path)
+        self._fit = fit
+
+    def run(self) -> None:
+        from timelapse_kernel import _preview
+
+        try:
+            image = _preview(self._path)
+        except Exception:                            # noqa: BLE001 - shown
+            self.ready.emit(self._generation, QImage(), 0, 0)
+            return
+        full_w, full_h = image.size
+        shown = image.copy()
+        shown.thumbnail(self._fit)
+        data = shown.tobytes("raw", "RGB")
+        made = QImage(data, shown.width, shown.height,
+                      shown.width * 3, QImage.Format.Format_RGB888).copy()
+        self.ready.emit(self._generation, made, full_w, full_h)
+
+
+class _LoadingFace(QLabel):
+    """What the picker shows while a frame is being developed."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("hint")
+        self.setFont(theme.body(10))
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setStyleSheet(
+            "background: rgba(19, 18, 17, 0.75); border-radius: 10px;")
+
+    def say(self, text: str) -> None:
+        self.setText(text)
+
+    def show_over(self, canvas: QWidget) -> None:
+        self.setGeometry(canvas.rect())
+        self.raise_()
+        self.show()
+
+
 class _FrameCanvas(QLabel):
     """The first frame, with one rectangle draggable over it."""
 
@@ -427,7 +476,10 @@ class BoxPicker(QDialog):
         lead.setFont(theme.body(9))
         column.addWidget(lead)
         self.canvas = _FrameCanvas()
+        self.canvas.setMinimumSize(640, 420)
         column.addWidget(self.canvas)
+        self._loading = _LoadingFace(self.canvas)
+        self._loading.hide()
 
         walk = QHBoxLayout()
         walk.setSpacing(8)
@@ -451,32 +503,54 @@ class BoxPicker(QDialog):
         walk.addWidget(use)
         column.addLayout(walk)
 
+        self._generation = 0
+        self._loader = None
         self._show(0)
 
     def _walk(self, step: int) -> None:
         self._show(self._at + step)
 
     def _show(self, index: int) -> None:
-        from timelapse_kernel import _preview
+        """Ask for a frame; the decode happens off the interface thread.
 
+        A raw's embedded rendering takes a moment to extract, and a
+        window that freezes for it reads as broken. The window stays
+        live, the loading face says what is happening, and a result
+        arriving for a frame the photographer has already walked past
+        is dropped by generation.
+        """
         self._at = max(0, min(int(index), len(self._paths) - 1))
-        image = _preview(self._paths[self._at])
-        self._full = image.size
-        shown = image.copy()
-        shown.thumbnail(self.FIT)
-        self._shown = shown.size
-        data = shown.tobytes("raw", "RGB")
-        pixmap = QPixmap.fromImage(QImage(
-            data, shown.width, shown.height,
-            shown.width * 3, QImage.Format.Format_RGB888).copy())
-        self.canvas.setPixmap(pixmap)
-        self.canvas.setFixedSize(pixmap.size())
-        # A box drawn on another frame means nothing on this one.
-        self.canvas.drag = None
-        self.canvas.update()
+        self._generation += 1
         self.which.setText(
             f"frame {self._at + 1} of {len(self._paths)} · "
             f"{self._paths[self._at].name}")
+        # A box drawn on another frame means nothing on this one.
+        self.canvas.drag = None
+        self.canvas.update()
+        self._loading.say(f"developing {self._paths[self._at].name}…")
+        self._loading.show_over(self.canvas)
+        loader = _FrameLoader(
+            self._generation, self._paths[self._at], self.FIT, self)
+        loader.ready.connect(self._arrived)
+        loader.finished.connect(loader.deleteLater)
+        self._loader = loader
+        loader.start()
+
+    def _arrived(self, generation: int, image: QImage,
+                 full_w: int, full_h: int) -> None:
+        if generation != self._generation:
+            return                                   # walked past it
+        self._loading.hide()
+        if image.isNull():
+            self.which.setText(
+                self.which.text() + "  (could not be read)")
+            return
+        self._full = (full_w, full_h)
+        self._shown = (image.width(), image.height())
+        pixmap = QPixmap.fromImage(image)
+        self.canvas.setPixmap(pixmap)
+        self.canvas.setFixedSize(pixmap.size())
+        self.canvas.update()
 
     def _use(self) -> None:
         drag = self.canvas.drag.normalized() if self.canvas.drag else None

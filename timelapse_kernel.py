@@ -163,34 +163,33 @@ def _developed(path: Path,
     return image
 
 
-def _taken_at(path: Path) -> str:
-    """Capture time, because file names wrap: DSCF9999 precedes DSCF1001."""
-    try:
-        from PIL import ExifTags
-
-        image = _preview(path)
-        exif = image.getexif() or {}
-        for tag, value in exif.items():
-            if ExifTags.TAGS.get(tag) in ("DateTimeOriginal", "DateTime"):
-                return str(value)
-    except Exception:                                # noqa: BLE001 - mtime
-        pass
-    return datetime.fromtimestamp(path.stat().st_mtime, UTC).isoformat()
-
-
 def list_frames(photos: str, pattern: str = "*.RAF") -> list[dict[str, str]]:
     """The frames in shooting order: the clock, and the counter within
     a tied second, unwrapped -- the same order the assessment list shows,
     from the same function, so the two can never disagree about which
-    frame follows which."""
-    from opencull_gui.scenes import capture_time, shooting_order
+    frame follows which.
+
+    The clock comes from the persisted capture-times map, which reads a
+    file's head once ever. An earlier version decoded every frame's
+    embedded preview a second time just to spell the date -- listing a
+    300-frame folder cost half a minute before any work began, which is
+    what made "Mark it" feel broken.
+    """
+    from opencull_gui.scenes import capture_times, shooting_order
 
     root = Path(str(photos)).expanduser().resolve()
     found = sorted(root.glob(str(pattern)))
-    taken = {path.name: capture_time(path) for path in found}
+    taken = capture_times(root, [path.name for path in found])
     names = shooting_order([path.name for path in found], taken)
-    return [{"name": name, "taken": _taken_at(root / name)}
-            for name in names]
+
+    def spelled(name: str) -> str:
+        stamp = taken.get(name)
+        if stamp is not None:
+            return datetime.fromtimestamp(stamp, UTC).isoformat()
+        return datetime.fromtimestamp(
+            (root / name).stat().st_mtime, UTC).isoformat()
+
+    return [{"name": name, "taken": spelled(name)} for name in names]
 
 
 # --- finding the sun -------------------------------------------------------

@@ -570,6 +570,20 @@ class TrackTests(unittest.TestCase):
         first_x, first_y = positions[0]
         return f"{first_x},{first_y},{first_x + 48},{first_y + 48}"
 
+    def test_listing_frames_never_decodes_a_preview(self):
+        """Listing is a read of names and clocks, not of pictures. An
+        earlier version decoded every frame's embedded rendering just to
+        spell the date -- half a minute before any work began."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.sequence(root, [(100, 100), (130, 100)])
+            with mock.patch.object(
+                    timelapse, "_preview",
+                    side_effect=AssertionError("decoded a preview")):
+                listed = timelapse.list_frames(str(root), "frame-*.jpg")
+            self.assertEqual(len(listed), 2)
+            self.assertTrue(all(item["taken"] for item in listed))
+
     def test_tracking_starts_at_the_marked_frame_not_the_first(self):
         """The first shots of a sequence often are not the subject yet.
         The box belongs to the frame it was drawn on: everything before
