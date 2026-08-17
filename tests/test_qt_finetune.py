@@ -669,12 +669,39 @@ class LayerTests(FineTunePageTests):
 
     def test_adding_a_mask_selects_its_layer(self):
         page = self.page()
-        with unittest.mock.patch(
-                "opencull_qt.finetune.QInputDialog.getItem",
-                return_value=("radial — around a point", True)):
-            page._add_mask()
+        page._create_mask("radial")
         self.assertEqual(page.layer, len(adjustments.masks(page.recipe)))
         self.assertGreaterEqual(page.layers.count(), 2)
+
+    def test_the_story_waits_behind_the_dot(self):
+        # Seventeen sliders each trailing two lines of prose made the
+        # column mostly prose; the story unfolds on the (!) instead.
+        page = self.page()
+        exposure = self.control(page, "tone.exposure")
+        self.assertTrue(exposure.provenance.isHidden())
+        exposure.about.setChecked(True)
+        self.assertFalse(exposure.provenance.isHidden())
+        self.assertIn("exposure +0.45", exposure.source.text())
+        exposure.about.setChecked(False)
+        self.assertTrue(exposure.provenance.isHidden())
+
+    def test_rebuilding_the_column_keeps_the_scroll_where_it_was(self):
+        page = self.page()
+        page.resize(1100, 500)
+        page.show()
+        self.addCleanup(page.hide)
+        QApplication.processEvents()
+        bar = page._scroll.verticalScrollBar()
+        if bar.maximum() == 0:
+            self.skipTest("column fits without scrolling at this size")
+        bar.setValue(bar.maximum() // 2)
+        held = bar.value()
+        page._show_controls()
+        # The purge and the relayout land on successive event passes;
+        # the running application's loop spins them back to back.
+        for _round in range(4):
+            QApplication.processEvents()
+        self.assertAlmostEqual(bar.value(), held, delta=40)
 
     def test_selecting_the_layer_points_the_surface_at_the_mask(self):
         page = self.masked_page()

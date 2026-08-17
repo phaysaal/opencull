@@ -125,6 +125,16 @@ class Control(QWidget):
         self.reading.setObjectName("reading")
         self.reading.setFont(theme.mono(9))
         head.addWidget(self.reading)
+        self.about = QPushButton("!")
+        self.about.setObjectName("aboutDot")
+        self.about.setCheckable(True)
+        self.about.setFixedSize(16, 16)
+        self.about.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.about.setToolTip(tooltip(
+            "The story of this control: the sentence that produced it, "
+            "what the model asked for, and what you set."))
+        self.about.toggled.connect(self._tell)
+        head.addWidget(self.about)
         layout.addLayout(head)
 
         self.slider = ZoneSlider()
@@ -155,18 +165,27 @@ class Control(QWidget):
         self.slider.valueChanged.connect(self._moved)
         layout.addWidget(self.slider)
 
-        if control["source"]:
-            source = QLabel(f"from: “{control['source']}”")
-            source.setObjectName("rowPath")
-            source.setWordWrap(True)
-            source.setFont(theme.body(8))
-            layout.addWidget(source)
+        # The story stays one click away rather than always on screen:
+        # seventeen sliders each trailing two lines of prose made the
+        # column mostly prose. The (!) beside the reading unfolds it.
+        self.source = QLabel(
+            f"from: “{control['source']}”" if control["source"] else "")
+        self.source.setObjectName("rowPath")
+        self.source.setWordWrap(True)
+        self.source.setFont(theme.body(8))
+        self.source.hide()
+        layout.addWidget(self.source)
 
         self.provenance = QLabel(adjustments.describe(control))
         self.provenance.setObjectName("provenance")
         self.provenance.setWordWrap(True)
         self.provenance.setFont(theme.body(8))
+        self.provenance.hide()
         layout.addWidget(self.provenance)
+
+    def _tell(self, on: bool) -> None:
+        self.provenance.setVisible(on)
+        self.source.setVisible(on and bool(self.control["source"]))
 
     # --- the slider is integers, the control is not ----------------------
 
@@ -227,7 +246,7 @@ class GeometrySlider(QWidget):
     changed = Signal(str, float)
 
     def __init__(self, key: str, label: str, low: float, high: float,
-                 value: float, unit: str = "%"):
+                 value: float, unit: str = "%", ramp: list | None = None):
         super().__init__()
         self.key = key
         self.low, self.high, self.unit = low, high, unit
@@ -247,6 +266,8 @@ class GeometrySlider(QWidget):
             per_step = max(1, round(TICKS / (high - low)))
             self.slider.setSingleStep(per_step)
             self.slider.setPageStep(per_step * 10)
+        if ramp:
+            self.slider.set_ramp(ramp)
         self.slider.valueChanged.connect(self._moved)
         row.addWidget(self.slider, 1)
         self.reading = QLabel(f"{value:.0f}{unit}")
@@ -665,6 +686,12 @@ class FineTunePage(QWidget):
         layout.addWidget(self.layers)
 
         scroll = QScrollArea()
+        self._scroll = scroll
+        # Where the column should sit after a rebuild. The area grows its
+        # range asynchronously as the new widgets land, so the restore
+        # rides rangeChanged for the burst instead of firing once early.
+        self._hold_scroll = 0
+        scroll.verticalScrollBar().rangeChanged.connect(self._scroll_grew)
         scroll.setObjectName("controlScroll")
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(
@@ -971,16 +998,23 @@ class FineTunePage(QWidget):
         self.render()
 
     def _add_mask(self) -> None:
-        shapes = ["radial — around a point",
-                  "linear — from an edge",
-                  "luma — a band of brightness",
-                  "color — a range of colour"]
-        chosen, agreed = QInputDialog.getItem(
-            self, "Add a mask", "What is this mask the answer to?",
-            shapes, 0, False)
-        if not agreed:
+        from PySide6.QtGui import QCursor
+        from PySide6.QtWidgets import QMenu
+
+        menu = QMenu(self)
+        menu.setFont(theme.body(10))
+        for label in ("Radial — around a point",
+                      "Linear — from an edge",
+                      "Luma — a band of brightness",
+                      "Color — a range of colour"):
+            action = menu.addAction(label)
+            action.setData(label.split(" ", 1)[0].lower())
+        chosen = menu.exec(QCursor.pos())
+        if chosen is None:
             return
-        shape = chosen.split(" ", 1)[0]
+        self._create_mask(str(chosen.data()))
+
+    def _create_mask(self, shape: str) -> None:
         geometry = {"centre_x": 50.0, "centre_y": 50.0,
                     "radius": 30.0, "feather": 100, "reach": 40.0}
         if shape == "color":
@@ -1095,6 +1129,11 @@ class FineTunePage(QWidget):
         self._mask_changed(f"mask:{ordinal}", {"enabled": on})
 
     def _show_controls(self) -> None:
+        # Rebuilding the column must not move it: ticking one control
+        # into the recipe rebuilt everything and threw the scroll back
+        # to the top, right out from under the hand that ticked it.
+        held = (self._scroll.verticalScrollBar().value()
+                if getattr(self, "_scroll", None) is not None else 0)
         self._clear()
         self._fill_layers()
         on_mask = self.layer > 0
@@ -1118,14 +1157,14 @@ class FineTunePage(QWidget):
             if isinstance(pending, dict) and pending.get("points"):
                 points = pending["points"]
             else:
-                held = next(
+                drawn = next(
                     (item for item in self.recipe.get("operations", []) or []
                      if isinstance(item, dict)
                      and item.get("op") == "tone.curve"
                      and isinstance(item.get("value"), dict)),
                     None)
-                points = (held["value"].get("points")
-                          if held is not None else None)
+                points = (drawn["value"].get("points")
+                          if drawn is not None else None)
             self.body.addWidget(self._heading("Curve", ""))
             curve = CurvePanel(points)
             curve.setToolTip(tooltip(
@@ -1172,6 +1211,20 @@ class FineTunePage(QWidget):
                 "makes."))
             self.body.addWidget(rail)
         self.body.addStretch(1)
+        if getattr(self, "_scroll", None) is not None and held:
+            from PySide6.QtCore import QTimer
+
+            self._hold_scroll = held
+            self._scroll.verticalScrollBar().setValue(held)
+            # The burst of layout growth is over well within this; after
+            # it, the hand owns the scrollbar again.
+            QTimer.singleShot(150, lambda: setattr(
+                self, "_hold_scroll", 0))
+
+    def _scroll_grew(self, _minimum: int, maximum: int) -> None:
+        if self._hold_scroll:
+            self._scroll.verticalScrollBar().setValue(
+                min(self._hold_scroll, maximum))
 
     # --- moving them ------------------------------------------------------
 
@@ -1313,13 +1366,19 @@ class FineTunePage(QWidget):
             pick.clicked.connect(
                 lambda _checked=False, m=key_prefix: self._start_pick(m))
             self.body.addWidget(pick)
+            wheel = [
+                (0.0, (210, 60, 60)), (1 / 6, (210, 200, 60)),
+                (2 / 6, (70, 190, 80)), (3 / 6, (60, 190, 200)),
+                (4 / 6, (70, 90, 210)), (5 / 6, (200, 70, 200)),
+                (1.0, (210, 60, 60))]
             for key, label, low, high in (
                     ("hue", "Hue", 0.0, 360.0),
                     ("range", "Range", 5.0, 120.0),
                     ("softness", "Softness", 0.0, 90.0),
                     ("sat_floor", "Sat floor", 0.0, 80.0)):
                 slider = GeometrySlider(
-                    key, label, low, high, float(geometry.get(key, 20)))
+                    key, label, low, high, float(geometry.get(key, 20)),
+                    ramp=wheel if key == "hue" else None)
                 slider.changed.connect(
                     lambda k, v, m=key_prefix: self._mask_changed(
                         m, {"geometry": {k: v}}))

@@ -177,6 +177,17 @@ QPushButton#primary:pressed {{ background: {SAFELIGHT_DEEP}; }}
 QPushButton#primary:disabled {{ background: {EDGE}; color: {FAINT};
     border-color: {EDGE}; }}
 
+/* The small round story-toggle beside a control's reading. */
+QPushButton#aboutDot {{
+    background: transparent; color: {FAINT};
+    border: 1px solid {EDGE}; border-radius: 8px; padding: 0;
+    font-size: 10px; font-weight: 600;
+}}
+QPushButton#aboutDot:hover {{ color: {PAPER}; border-color: #3B3633; }}
+QPushButton#aboutDot:checked {{
+    color: {SAFELIGHT}; border-color: {SAFELIGHT}; background: {RAISED};
+}}
+
 QPushButton#ghost {{
     background: transparent; border: 1px solid {EDGE};
     border-radius: 8px; padding: 8px 16px;
@@ -222,6 +233,15 @@ QMessageBox QPushButton:pressed, QDialogButtonBox QPushButton:pressed {{
 QMessageBox QPushButton:default, QDialogButtonBox QPushButton:default {{
     border-color: {SAFELIGHT}; color: {PAPER};
 }}
+
+/* Menus are the application's own, not the platform's light-grey. */
+QMenu {{
+    background: {RAISED}; color: {PAPER};
+    border: 1px solid {EDGE}; border-radius: 10px; padding: 6px;
+}}
+QMenu::item {{ padding: 8px 18px; border-radius: 7px; }}
+QMenu::item:selected {{ background: {EDGE}; }}
+QMenu::separator {{ height: 1px; background: {EDGE_SOFT}; margin: 5px 8px; }}
 
 /* The queue badge's popover: the whole queue as a panel under the ring. */
 QFrame#queuePopover {{
