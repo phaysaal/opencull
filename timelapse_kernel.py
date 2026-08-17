@@ -929,21 +929,32 @@ def _video_target(frames_dir: Path) -> Path:
     return parent / "timelapse.mp4"
 
 
-def _assemble_command(frames_dir: Path, target: Path) -> str:
+def _fps_of(asked) -> int:
+    """The framerate a run asked for, bounded to something playable."""
+    try:
+        told = int(float(asked))
+    except (TypeError, ValueError):
+        return FRAMERATE
+    return max(1, min(told, 60)) if told else FRAMERATE
+
+
+def _assemble_command(frames_dir: Path, target: Path,
+                      fps: int = FRAMERATE) -> str:
     return " ".join(shlex.quote(part) for part in _ffmpeg_argv(
-        Path(frames_dir), Path(target)))
+        Path(frames_dir), Path(target), fps))
 
 
-def _ffmpeg_argv(frames_dir: Path, target: Path) -> list[str]:
+def _ffmpeg_argv(frames_dir: Path, target: Path,
+                 fps: int = FRAMERATE) -> list[str]:
     return [
-        "ffmpeg", "-y", "-framerate", str(FRAMERATE),
+        "ffmpeg", "-y", "-framerate", str(fps),
         "-i", str(frames_dir / "%04d.jpg"),
         "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "18",
         str(target)]
 
 
-def _encode(frames_dir: Path, target: Path,
-            total: int) -> tuple[int | None, list[str]]:
+def _encode(frames_dir: Path, target: Path, total: int,
+            fps: int = FRAMERATE) -> tuple[int | None, list[str]]:
     """Run ffmpeg, moving the bar across the encode as frames are written.
 
     ffmpeg reports its own progress on ``-progress pipe:1`` as a stream of
@@ -954,7 +965,7 @@ def _encode(frames_dir: Path, target: Path,
     (None if ffmpeg could not be launched) and the tail of its output for
     the error line.
     """
-    argv = _ffmpeg_argv(frames_dir, target)
+    argv = _ffmpeg_argv(frames_dir, target, fps)
     argv = argv[:1] + ["-progress", "pipe:1", "-nostats"] + argv[1:]
     try:
         proc = subprocess.Popen(
@@ -990,7 +1001,7 @@ def _encode(frames_dir: Path, target: Path,
     return proc.returncode, tail
 
 
-def assemble_video(report_text: str) -> str:
+def assemble_video(report_text: str, fps: float = FRAMERATE) -> str:
     """Encode the numbered frames into the video, and record where it went.
 
     The alignment produced the frames and the exact ffmpeg line; running
@@ -1002,9 +1013,10 @@ def assemble_video(report_text: str) -> str:
     is not failed over a missing encoder, it just has no film yet.
     """
     report = json.loads(report_text)
+    rate = _fps_of(fps)
     frames_dir = Path(str(report.get("directory") or "."))
     target = _video_target(frames_dir)
-    report["assemble"] = _assemble_command(frames_dir, target)
+    report["assemble"] = _assemble_command(frames_dir, target, rate)
     frames = report.get("frames") or []
     if not frames:
         report["video"] = None
@@ -1017,7 +1029,7 @@ def assemble_video(report_text: str) -> str:
             "was not made; install ffmpeg and run the assemble line above")
         return json.dumps(report, indent=2, sort_keys=True)
     _say_progress(_ENCODE_AT, "encoding the video")
-    returncode, tail = _encode(frames_dir, target, len(frames))
+    returncode, tail = _encode(frames_dir, target, len(frames), rate)
     if returncode is None:
         report["video"] = None
         report["video_note"] = f"ffmpeg could not run: {tail[-1] if tail else ''}"
@@ -1030,8 +1042,8 @@ def assemble_video(report_text: str) -> str:
         return json.dumps(report, indent=2, sort_keys=True)
     report["video"] = str(target)
     report["video_note"] = (
-        f"{len(frames)} frames at {FRAMERATE} fps -- "
-        f"{len(frames) / FRAMERATE:.0f} seconds")
+        f"{len(frames)} frames at {rate} fps -- "
+        f"{len(frames) / rate:.0f} seconds")
     return json.dumps(report, indent=2, sort_keys=True)
 
 

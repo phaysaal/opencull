@@ -14,6 +14,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from PySide6.QtCore import QRect
+from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -83,8 +85,19 @@ class TimelapseDialog(QDialog):
         self.box_field.setFont(theme.mono(9))
         self.box_field.setToolTip(tooltip(
             "The subject's box in pixels of the first frame, origin "
-            "top-left. Read the numbers off any image viewer."))
-        asks.addRow("Subject box", self.box_field)
+            "top-left. Mark it on the picture rather than typing it."))
+        box_row = QHBoxLayout()
+        box_row.setSpacing(8)
+        box_row.addWidget(self.box_field, 1)
+        self.mark_button = QPushButton("Mark it…")
+        self.mark_button.setObjectName("ghost")
+        self.mark_button.setFont(theme.body(9))
+        self.mark_button.setToolTip(tooltip(
+            "Open the first frame and drag a box over the subject; the "
+            "numbers fill themselves in, in the frame's own pixels."))
+        self.mark_button.clicked.connect(self._mark_box)
+        box_row.addWidget(self.mark_button)
+        asks.addRow("Subject box", box_row)
         self.name_field = QLineEdit()
         self.name_field.setPlaceholderText(
             "e.g. the eclipsed sun · the red kite · the lead cyclist")
@@ -98,7 +111,27 @@ class TimelapseDialog(QDialog):
             "free tracking carries the subject between. Smaller N is "
             "more calls and tighter anchoring."))
         asks.addRow("Anchor every", self.every)
+        self.fps = QSpinBox()
+        self.fps.setRange(2, 60)
+        self.fps.setValue(12)
+        self.fps.setSuffix(" fps")
+        self.fps.setToolTip(tooltip(
+            "How fast the film plays: frames of the sequence per second "
+            "of video. Slower shows more of each frame; 12 is a classic "
+            "timelapse pace."))
+        self.fps.valueChanged.connect(self._retell_speed)
+        asks.addRow("Speed", self.fps)
         column.addLayout(asks)
+        self.speed_note = QLabel("")
+        self.speed_note.setObjectName("hint")
+        self.speed_note.setFont(theme.body(9))
+        column.addWidget(self.speed_note)
+        # How many frames the folder holds, for saying what a speed means
+        # in seconds of film. A count, not a survey: excluded frames make
+        # it an estimate, and it says so.
+        self._frame_count = len(list(
+            Path(self.photos).glob(str(defaults["pattern"]))))
+        self._retell_speed()
 
         look_title = QLabel("THE LOOK")
         look_title.setObjectName("eyebrow")
@@ -174,8 +207,37 @@ class TimelapseDialog(QDialog):
 
     def _retell(self) -> None:
         self.box_field.setEnabled(self.marked.isChecked())
+        self.mark_button.setEnabled(self.marked.isChecked())
         self.name_field.setEnabled(self.named.isChecked())
         self.every.setEnabled(self.named.isChecked())
+
+    def _retell_speed(self) -> None:
+        if not self._frame_count:
+            self.speed_note.setText("")
+            return
+        seconds = self._frame_count / max(self.fps.value(), 1)
+        self.speed_note.setText(
+            f"≈ {seconds:.0f} seconds of video from about "
+            f"{self._frame_count} frames.")
+
+    def _mark_box(self) -> None:
+        """Open the first frame; a dragged rectangle fills the field."""
+        from timelapse_kernel import list_frames
+
+        try:
+            frames = list_frames(self.photos, self.pattern)
+        except Exception as exc:                     # noqa: BLE001 - reported
+            self.status.setText(f"The frames could not be listed: {exc}")
+            return
+        if not frames:
+            self.status.setText(
+                f"No {self.pattern} frames were found in the folder.")
+            return
+        first = Path(self.photos) / frames[0]["name"]
+        picker = BoxPicker(first, self)
+        if picker.exec() == QDialog.DialogCode.Accepted and picker.box:
+            self.box_field.setText(", ".join(
+                str(value) for value in picker.box))
 
     def _chose_look(self) -> None:
         if self.look.currentData() != "…browse…":
@@ -210,6 +272,7 @@ class TimelapseDialog(QDialog):
             "frames_dir": str(home / "frames"),
             "recipe": recipe,
             "output": str(home / "timelapse.json"),
+            "fps": str(self.fps.value()),
         }
         if self.sun.isChecked():
             return {"program": "eclipse_timelapse.kim",
@@ -242,3 +305,121 @@ class TimelapseDialog(QDialog):
         if self.run_request() is not None:
             self.accept()
 
+
+
+def full_box(drag, shown_width: int, shown_height: int,
+             full_width: int, full_height: int) -> tuple[int, int, int, int]:
+    """A rectangle dragged on the scaled preview, in the frame's own pixels.
+
+    Ordered, scaled back up, and clamped to the frame, so a drag that
+    started at either corner or wandered off the edge still names a real
+    region. Pure, so the scale-back -- the exact thing that goes wrong
+    when numbers are read off a fit-to-window viewer -- is testable.
+    """
+    scale_x = full_width / max(shown_width, 1)
+    scale_y = full_height / max(shown_height, 1)
+    x0, x1 = sorted((drag.left(), drag.left() + drag.width()))
+    y0, y1 = sorted((drag.top(), drag.top() + drag.height()))
+    return (
+        max(0, min(round(x0 * scale_x), full_width - 1)),
+        max(0, min(round(y0 * scale_y), full_height - 1)),
+        max(1, min(round(x1 * scale_x), full_width)),
+        max(1, min(round(y1 * scale_y), full_height)),
+    )
+
+
+class _FrameCanvas(QLabel):
+    """The first frame, with one rectangle draggable over it."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.drag = None                       # QRect while dragging / kept
+        self._down = None
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        self._down = event.position().toPoint()
+        self.drag = QRect(self._down, self._down)
+        self.update()
+
+    def mouseMoveEvent(self, event) -> None:   # noqa: N802 - Qt naming
+        if self._down is not None:
+            self.drag = QRect(self._down, event.position().toPoint())
+            self.update()
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        if self._down is not None:
+            self.drag = QRect(self._down, event.position().toPoint())
+            self._down = None
+            self.update()
+
+    def paintEvent(self, event) -> None:       # noqa: N802 - Qt naming
+        super().paintEvent(event)
+        if self.drag is None:
+            return
+        painter = QPainter(self)
+        painter.setPen(QPen(QColor(255, 155, 71), 2))
+        painter.setBrush(QColor(255, 155, 71, 40))
+        painter.drawRect(self.drag.normalized())
+        painter.end()
+
+
+class BoxPicker(QDialog):
+    """Drag one box over the subject on the first frame.
+
+    The picture is the same embedded rendering the survey reads, so the
+    numbers agree with the tracker by construction; the drag happens on a
+    fit-to-window copy and is scaled back to the frame's own pixels --
+    the arithmetic nobody should be doing off an image viewer's rulers.
+    """
+
+    FIT = (980, 660)
+
+    def __init__(self, frame_path: Path, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setWindowTitle("Mark the subject")
+        self.box: tuple[int, int, int, int] | None = None
+
+        from timelapse_kernel import _preview
+
+        image = _preview(Path(frame_path))
+        self._full = image.size
+        shown = image.copy()
+        shown.thumbnail(self.FIT)
+        self._shown = shown.size
+        data = shown.tobytes("raw", "RGB")
+        pixmap = QPixmap.fromImage(QImage(
+            data, shown.width, shown.height,
+            shown.width * 3, QImage.Format.Format_RGB888).copy())
+
+        column = QVBoxLayout(self)
+        lead = QLabel(
+            "Drag a box over the subject. The tracker follows whatever "
+            "you mark, so include the whole of it and little else.")
+        lead.setObjectName("hint")
+        lead.setWordWrap(True)
+        lead.setFont(theme.body(9))
+        column.addWidget(lead)
+        self.canvas = _FrameCanvas()
+        self.canvas.setPixmap(pixmap)
+        self.canvas.setFixedSize(pixmap.size())
+        column.addWidget(self.canvas)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        cancel = QPushButton("Cancel")
+        cancel.clicked.connect(self.reject)
+        buttons.addWidget(cancel)
+        use = QPushButton("Use this box")
+        use.setObjectName("primary")
+        use.clicked.connect(self._use)
+        buttons.addWidget(use)
+        column.addLayout(buttons)
+
+    def _use(self) -> None:
+        drag = self.canvas.drag.normalized() if self.canvas.drag else None
+        if drag is None or drag.width() < 4 or drag.height() < 4:
+            return                              # nothing marked yet
+        self.box = full_box(
+            drag, self._shown[0], self._shown[1],
+            self._full[0], self._full[1])
+        self.accept()

@@ -474,6 +474,24 @@ class AssembleVideoTests(unittest.TestCase):
         self.assertIsNone(film["video"])
         self.assertIn("no frames", film["video_note"])
 
+    def test_the_asked_speed_reaches_the_encoder_and_the_note(self):
+        # Kimiya hands a num over as a float; it must land in the ffmpeg
+        # line and the note as the framerate, bounded to the playable.
+        told = timelapse._assemble_command(
+            Path("/f"), Path("/f/t.mp4"), timelapse._fps_of(6.0))
+        self.assertIn("-framerate 6", told)
+        self.assertEqual(timelapse._fps_of(0), 12)      # unset -> default
+        self.assertEqual(timelapse._fps_of("nope"), 12)
+        self.assertEqual(timelapse._fps_of(500), 60)    # bounded
+        self.assertEqual(timelapse._fps_of(-3), 1)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            film = json.loads(timelapse.assemble_video(
+                self._rendered(root), fps=6.0))
+            if film.get("video"):                       # ffmpeg installed
+                self.assertIn("6 fps", film["video_note"])
+                self.assertIn("-framerate 6", film["assemble"])
+
 
 class TrackTests(unittest.TestCase):
     """Mark it once, track it free -- and never trust a lost match.

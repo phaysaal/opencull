@@ -638,6 +638,68 @@ class TimelapseDoorTests(FinetuneDoorTests):
         dialog = TimelapseDialog(str(self.photos_path), look="not-a-preset")
         self.assertEqual(dialog.look.currentData(), "")
 
+    def test_the_speed_control_flows_into_the_run_and_the_caption(self):
+        from opencull_qt.timelapse import TimelapseDialog
+
+        dialog = TimelapseDialog(str(self.photos_path))
+        self.assertEqual(dialog.run_request()["parameters"]["fps"], "12")
+        dialog.fps.setValue(6)
+        self.assertEqual(dialog.run_request()["parameters"]["fps"], "6")
+        # The caption translates the speed into seconds of film.
+        self.assertIn("seconds of video", dialog.speed_note.text())
+
+    def test_a_dragged_box_scales_back_to_the_frames_own_pixels(self):
+        # The exact arithmetic nobody should be doing off an image
+        # viewer's rulers: a drag on the fit-to-window copy lands in
+        # full-resolution pixels, whichever corner it started from,
+        # clamped to the frame.
+        from PySide6.QtCore import QRect
+
+        from opencull_qt.timelapse import full_box
+
+        # Shown at quarter size: every coordinate scales by four.
+        self.assertEqual(
+            full_box(QRect(100, 50, 200, 100), 980, 660, 3920, 2640),
+            (400, 200, 1200, 600))
+        # Dragged from the bottom-right corner: same box.
+        self.assertEqual(
+            full_box(QRect(300, 150, -200, -100), 980, 660, 3920, 2640),
+            (400, 200, 1200, 600))
+        # Wandered off the edge: clamped to the frame.
+        x0, y0, x1, y1 = full_box(
+            QRect(-40, -40, 2000, 2000), 980, 660, 3920, 2640)
+        self.assertEqual((x0, y0), (0, 0))
+        self.assertLessEqual(x1, 3920)
+        self.assertLessEqual(y1, 2640)
+
+    def test_marking_a_box_fills_the_field_from_the_picker(self):
+        from PySide6.QtCore import QRect
+
+        from opencull_qt.timelapse import BoxPicker, TimelapseDialog
+
+        dialog = TimelapseDialog(str(self.photos_path))
+        dialog.marked.setChecked(True)
+
+        picked = []
+
+        class Picker:
+            def __init__(self, frame_path, parent=None):
+                picked.append(Path(frame_path).name)
+                self.box = (120, 80, 360, 320)
+
+            def exec(self):
+                return BoxPicker.DialogCode.Accepted
+
+        with unittest.mock.patch(
+                "opencull_qt.timelapse.BoxPicker", Picker):
+            dialog._mark_box()
+        # The FIRST frame by capture order, and the four numbers landed.
+        self.assertEqual(picked, ["A.JPG"])
+        self.assertEqual(dialog.box_field.text(), "120, 80, 360, 320")
+        request = dialog.run_request()
+        self.assertEqual(request["parameters"]["subject_box"],
+                         "120,80,360,320")
+
     def test_the_button_emits_the_program_and_its_parameters(self):
         page = self.page()
         heard = []

@@ -18,6 +18,7 @@ param frames_dir: text = ""
 param recipe: text = ""
 param detect_edge: num = 1200
 param output: text = "timelapse.json"
+param fps: num = 12
 
 use python "timelapse_kernel.py"
 
@@ -32,7 +33,7 @@ check sequence_complete(report, plan)
 -- The last thing the photographer asked for: turn the frames into the
 -- video. Best-effort -- a missing encoder leaves the frames and the
 -- assemble line, never a failed run.
-film := assemble_video(report)
+film := assemble_video(report, fps)
 print(video_note(film))
 
 -- The film is the report with its frames still on disk, plus where the
