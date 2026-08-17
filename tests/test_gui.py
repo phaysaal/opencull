@@ -3266,6 +3266,51 @@ class GuiJobTests(unittest.TestCase):
             finally:
                 manager.shutdown()
 
+    def test_a_live_run_outranks_a_leftover_output_at_restart(self):
+        """Some jobs write to the same output path every run -- the
+        timelapse's report -- so the LAST run's file is on disk the whole
+        time this one renders. Read as completion at startup, it marked a
+        working run finished and freed the queue to start a second one
+        beside it. A live pid says the run is still going, whatever is
+        on disk; only a dead pid makes the file the evidence."""
+        import opencull_gui.jobs as jobs_module
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output = root / "timelapse.json"
+            output.write_text("{}")               # last run's report
+            state = {
+                "format": jobs_module.QUEUE_FORMAT, "revision": 1,
+                "jobs": [{
+                    "id": "t1", "kind": "kimiya_program",
+                    "program": "eclipse_timelapse.kim",
+                    "photos": str(root), "output": str(output),
+                    "checkpoint": str(root / "c.json"),
+                    "log": str(root / "l.log"),
+                    "status": "running", "pid": 12345,
+                }],
+            }
+            (root / "jobs.json").write_text(json.dumps(state))
+            with patch.object(jobs_module, "_pid_alive", return_value=True):
+                manager = JobManager(
+                    root / "jobs.json", root,
+                    command_builder=lambda job: [], autostart=False)
+            try:
+                job = manager._state["jobs"][0]
+                self.assertEqual(job["status"], "detached")
+            finally:
+                manager.shutdown()
+            # And with the process gone, the file is honest evidence.
+            with patch.object(jobs_module, "_pid_alive", return_value=False):
+                manager = JobManager(
+                    root / "jobs.json", root,
+                    command_builder=lambda job: [], autostart=False)
+            try:
+                job = manager._state["jobs"][0]
+                self.assertEqual(job["status"], "completed")
+            finally:
+                manager.shutdown()
+
     def test_a_detached_run_can_be_paused_when_the_pid_is_provably_ours(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

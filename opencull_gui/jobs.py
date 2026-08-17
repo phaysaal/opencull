@@ -426,7 +426,22 @@ class JobManager:
                 )
         for job in self._state["jobs"]:
             if job.get("status") in ACTIVE:
-                if Path(job["output"]).is_file():
+                # A live process outranks a file on disk. Some jobs write
+                # to the same output path every run -- the timelapse's
+                # report -- so a leftover from the LAST run is on disk the
+                # whole time this one renders; read as completion, it
+                # marked a working run finished at startup and freed the
+                # queue to start a second one beside it. Only a dead pid
+                # makes the file the evidence.
+                if _pid_alive(job.get("pid")):
+                    job.update(
+                        status="detached",
+                        message=(
+                            "The run survived the GUI restart; "
+                            "monitoring without launching another job."
+                        ),
+                    )
+                elif Path(job["output"]).is_file():
                     # The message is what the photographer reads, and
                     # leaving the old one there says "is running" beside a
                     # job that finished. Registering the output here too:
@@ -438,14 +453,6 @@ class JobManager:
                         message="Completed while the application was "
                                 "not running.")
                     self._register_completed_output(job)
-                elif _pid_alive(job.get("pid")):
-                    job.update(
-                        status="detached",
-                        message=(
-                            "Culling process survived the GUI restart; "
-                            "monitoring without launching another job."
-                        ),
-                    )
                 else:
                     job.update(
                         status="paused", pid=None,
