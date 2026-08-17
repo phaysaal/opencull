@@ -308,15 +308,61 @@ class ProgressMarkerTests(unittest.TestCase):
                 "some noise\n"
                 "TIMELAPSE_PROGRESS 45 aligning frame 130 of 289\n"
                 "TIMELAPSE_PROGRESS 70 rendering frame 40 of 260\n")
+            # The output from an EARLIER run is still on disk -- the
+            # timelapse writes to the same folder every time -- and must
+            # not read as this run being done.
+            (root / "report.json").write_text("{}")
             job = {"kind": "kimiya_program", "log": str(log),
+                   "status": "running",
                    "output": str(root / "report.json"),
                    "checkpoint": str(root / "cp.json")}
             progress = JobManager._progress(job)
             self.assertAlmostEqual(progress["fraction"], 0.70)
             self.assertIn("rendering", progress["stage"])
-            # Once the report is written the run is done: a full bar.
-            (root / "report.json").write_text("{}")
-            self.assertEqual(JobManager._progress(job)["fraction"], 1.0)
+
+    def test_a_rerun_ignores_the_previous_runs_markers(self):
+        # The supervisor appends run after run to one log. The moment a
+        # rerun starts, the tail still ends with last run's markers; only
+        # what follows this run's own opening line counts, so a fresh run
+        # opens at nothing rather than at 92%.
+        from opencull_gui.jobs import JobManager
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            log = root / "run.log"
+            log.write_text(
+                "starting supervised command\n"
+                "TIMELAPSE_PROGRESS 92 encoding the video\n"
+                "COMMITTED\n"
+                "starting supervised command\n")
+            job = {"kind": "kimiya_program", "log": str(log),
+                   "status": "running",
+                   "output": str(root / "report.json"),
+                   "checkpoint": str(root / "cp.json")}
+            progress = JobManager._progress(job)
+            self.assertNotEqual(progress.get("fraction"), 0.92)
+            # And once THIS run speaks, its own markers count.
+            with log.open("a") as handle:
+                handle.write("TIMELAPSE_PROGRESS 18 aligning frame 5 of 300\n")
+            self.assertAlmostEqual(
+                JobManager._progress(job)["fraction"], 0.18)
+
+    def test_a_queued_rerun_claims_no_progress_at_all(self):
+        from opencull_gui.jobs import JobManager
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            log = root / "run.log"
+            log.write_text(
+                "starting supervised command\n"
+                "TIMELAPSE_PROGRESS 92 encoding the video\n")
+            job = {"kind": "kimiya_program", "log": str(log),
+                   "status": "queued",
+                   "output": str(root / "report.json"),
+                   "checkpoint": str(root / "cp.json")}
+            progress = JobManager._progress(job)
+            self.assertEqual(progress["fraction"], 0.0)
+            self.assertEqual(progress["stage"], "")
 
 
 class SequenceTests(unittest.TestCase):

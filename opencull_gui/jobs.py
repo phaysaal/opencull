@@ -2037,16 +2037,33 @@ class JobManager:
             # timelapse prints a marker per phase step; when it does, that
             # is the honest progress. A program that prints none falls
             # through to the checkpoint reading below unchanged.
+            #
+            # The log and the output both survive from run to run -- the
+            # timelapse writes to the same folder every time -- so a rerun
+            # opened at 100% instantly: last run's markers still in the
+            # tail, last run's report still on disk. Only what THIS run
+            # printed counts, which is everything after the supervisor's
+            # own opening line; and being finished is the job's status to
+            # say, never the presence of a file an earlier run wrote.
+            if job.get("status") == "queued":
+                # Not started: whatever the log holds is another run's.
+                return {
+                    "completed_clusters": 0, "total_clusters": 0,
+                    "fraction": 0.0, "checkpoint_complete": False,
+                    "completed_items": 0, "total_items": 0, "stage": "",
+                }
+            tail = JobManager._log_tail(Path(str(job.get("log", ""))))
+            begun = tail.rfind("starting supervised command")
+            if begun >= 0:
+                tail = tail[begun:]
             said = re.findall(
-                r"TIMELAPSE_PROGRESS\s+(\d{1,3})\s+([^\r\n]+)",
-                JobManager._log_tail(Path(str(job.get("log", "")))))
+                r"TIMELAPSE_PROGRESS\s+(\d{1,3})\s+([^\r\n]+)", tail)
             if said:
-                done = Path(job.get("output", "")).is_file()
-                percent = 100 if done else int(said[-1][0])
+                percent = int(said[-1][0])
                 return {
                     "completed_clusters": 0, "total_clusters": 0,
                     "fraction": max(0.0, min(1.0, percent / 100)),
-                    "checkpoint_complete": done,
+                    "checkpoint_complete": False,
                     "completed_items": 0, "total_items": 0,
                     "stage": said[-1][1].strip(),
                 }
