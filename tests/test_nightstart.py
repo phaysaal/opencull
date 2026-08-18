@@ -173,18 +173,58 @@ class NightStartTests(unittest.TestCase):
             self.assertIn("noise allows", told["note"])
             self.assertIn("more frames", told["note"].casefold())
 
-    def test_a_stack_is_not_smoothed_like_a_single_frame(self):
-        with tempfile.TemporaryDirectory() as folder:
-            shown = night_frame(sky=(0.02, 0.02, 0.02), noise=0.006)
-            path = self.written(Path(folder), shown)
-            alone = nightstart.night_start(path, shown=shown, frames=1)
-            stacked = nightstart.night_start(path, shown=shown,
-                                             frames=25)
+    def quieting(self, told) -> float:
+        return next((item["value"] for item in told["operations"]
+                     if item["op"] == "detail.night_clean"), 0.0)
 
-            def quieting(told):
-                return next((item["value"] for item in told["operations"]
-                             if item["op"] == "detail.night_clean"), 0.0)
-            self.assertGreater(quieting(alone), quieting(stacked))
+    def test_a_cleaner_picture_is_smoothed_less(self):
+        """What earns less smoothing is BEING cleaner, not claiming to be.
+
+        The frame count is not arithmetic here. A stack's own measured
+        noise already carries what the stacking bought, and taking the
+        credit twice once left a real ten-frame stack prescribed no
+        quieting at all -- so what the numbers answer to is the
+        picture, and a picture that is genuinely quieter says so by
+        being quieter.
+        """
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            noisy = night_frame(sky=(0.02, 0.02, 0.02), noise=0.006,
+                                seed=4)
+            clean = night_frame(sky=(0.02, 0.02, 0.02), noise=0.002,
+                                seed=4)
+            alone = nightstart.night_start(
+                self.written(root, noisy, "one.png"), shown=noisy,
+                frames=1)
+            stacked = nightstart.night_start(
+                self.written(root, clean, "many.png"), shown=clean,
+                frames=9)
+            self.assertGreater(self.quieting(alone),
+                               self.quieting(stacked))
+
+    def test_the_black_point_does_not_cancel_the_noise_out(self):
+        """A cleaner frame must end up with less grain, not the same.
+
+        Setting the black point a few deviations under the sky leaves
+        the sky exactly that many deviations above it, so the lift is
+        the target divided by those deviations and the noise cancels
+        out of the answer -- every bit of what stacking bought spent
+        on a longer lift. Measured on a real ten-frame stack before
+        this was fixed: 2.9 times cleaner going in, identical grain
+        coming out.
+        """
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            noisy = night_frame(sky=(0.02, 0.02, 0.02), noise=0.006,
+                                seed=4)
+            clean = night_frame(sky=(0.02, 0.02, 0.02), noise=0.002,
+                                seed=4)
+            rough = nightstart.night_start(
+                self.written(root, noisy, "one.png"), shown=noisy)
+            smooth = nightstart.night_start(
+                self.written(root, clean, "many.png"), shown=clean)
+            self.assertLess(smooth["noise_after"],
+                            rough["noise_after"] * 0.6)
 
     def test_a_black_frame_is_refused_rather_than_amplified(self):
         with tempfile.TemporaryDirectory() as folder:

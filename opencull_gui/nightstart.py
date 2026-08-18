@@ -147,10 +147,11 @@ def night_start(path: str | Path, shown: np.ndarray | None = None,
     """A first version of a night frame: what to do, and why.
 
     ``frames`` is how many exposures were averaged into this picture.
-    A stack of N has already divided its noise by the square root of
-    N, so it needs proportionally less quieting -- which is the whole
-    reason to stack, and the reason a stack should not then be
-    smoothed as hard as a single frame.
+    It is not arithmetic here -- a stack's own measured noise already
+    carries what the stacking bought, and counting it again would be
+    counting it twice -- but it is worth saying out loud, because it
+    is the difference between a sky that needs smoothing and one that
+    does not.
     """
     path = Path(path)
     facts = camera_facts(path)
@@ -180,18 +181,34 @@ def night_start(path: str | Path, shown: np.ndarray | None = None,
     # level, and that is what the stretch is aimed at.
     sky = floor
 
-    # The black point sits just under the sky, not on it. Clipping the
-    # sky itself would take the faintest stars with it, and they are
-    # the ones the whole exercise is for.
-    black = max(sky - 3.0 * noise, 0.0)
+    # The black point sits WELL under the sky, and the distance is
+    # what matters. Setting it a few deviations under -- the obvious
+    # rule, and the one this had -- leaves the sky exactly that many
+    # deviations above black, so the lift needed to reach the target
+    # is the target divided by those deviations, and the noise
+    # cancels out of the answer entirely. Measured on a real
+    # ten-frame stack against one of its own frames: the stack was
+    # 2.9 times cleaner and came out with IDENTICAL grain, because
+    # every bit of what the stacking bought was spent on a longer
+    # lift. Far enough under that nothing clips, and no further: what
+    # is left of the sky is real signal, and keeping it is what keeps
+    # the lift short.
+    black = max(sky - 8.0 * noise, 0.0)
     strength = _strength_for(sky, black, SKY_TARGET)
 
     # Noise is lifted by exactly as much as the signal beside it, so
     # what matters is how big it will be AFTER the stretch, not now.
     def noise_after(at: float) -> float:
+        # No credit for stacking here, and that is not an oversight.
+        # The noise being lifted is the noise MEASURED IN THIS
+        # PICTURE, and if this picture is a stack of fifty then the
+        # stacking is already in that number. Dividing by the root of
+        # N as well counts it twice, which on a real ten-frame stack
+        # prescribed no quieting at all for a sky that plainly wanted
+        # some. What the frame count is honestly for is the note.
         lifted = (_lands_at(sky + noise, black, at)
                   - _lands_at(sky, black, at))
-        return max(lifted, 1e-6) / math.sqrt(max(int(frames), 1))
+        return max(lifted, 1e-6)
 
     # And a frame cannot be lifted further than its own noise allows.
     # Where the sky is very dark and very noisy -- a short exposure at
@@ -292,8 +309,9 @@ def note_for(told: dict, facts: dict, frames: int, strength: float,
             "smoothed.")
     if frames > 1:
         parts.append(
-            f"{frames} frames were averaged, which had already divided "
-            f"the noise by {math.sqrt(frames):.1f}.")
+            f"{frames} frames were averaged into this, and the sky "
+            "measured above is what that stacking left -- which is why "
+            "it needs less quieting than one frame would.")
     if facts.get("seconds") and facts.get("focal"):
         limit = trailing_limit(float(facts["focal"]))
         parts.append(
