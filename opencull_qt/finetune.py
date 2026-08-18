@@ -1947,8 +1947,12 @@ class FineTunePage(QWidget):
                 "effects": [{"op": "tone.exposure", "value": 0.0}]}
         self.changes.setdefault("+mask", []).append(made)
         self.recipe = adjustments.apply(self.recipe, {"+mask": [made]})
-        # The new mask is the layer being worked on; select it.
-        self.layer = len(adjustments.masks(self.recipe))
+        # The new mask is the layer being worked on; select it BY ITS
+        # ORDINAL. An erased mask keeps its number forever, so the
+        # count and the newest ordinal part ways the first time one is
+        # erased -- and the count then addressed the corpse.
+        placed = adjustments.masks(self.recipe)
+        self.layer = placed[-1]["ordinal"] if placed else 0
         self._show_controls()
         self.render()
 
@@ -2021,7 +2025,8 @@ class FineTunePage(QWidget):
     def _fill_layers(self) -> None:
         """The base layer and one row per mask, visibility on the row."""
         placed = adjustments.masks(self.recipe)
-        if self.layer > len(placed):
+        if self.layer and self.layer not in {
+                item["ordinal"] for item in placed}:
             self.layer = 0
         self.layers.blockSignals(True)
         self.layers.clear()
@@ -2675,8 +2680,8 @@ class FineTunePage(QWidget):
         turned_off: dict[str, Any] = {
             item["id"]: {"enabled": False}
             for item in adjustments.controls(self._pristine)}
-        for index in range(len(adjustments.masks(self._pristine))):
-            turned_off[f"mask:{index + 1}"] = {"enabled": False}
+        for held in adjustments.masks(self._pristine):
+            turned_off[f"mask:{held['ordinal']}"] = {"enabled": False}
         self.changes = turned_off
         self._rebuild_mirror()
         self._report(

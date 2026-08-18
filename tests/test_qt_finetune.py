@@ -438,6 +438,45 @@ class FineTunePageTests(unittest.TestCase):
         self.assertAlmostEqual(height / full_h, 0.5, delta=0.02)
         self.assertNotEqual(str(path), str(full))
 
+    def test_a_mask_added_after_an_erasure_gets_its_own_controls(self):
+        from PySide6.QtWidgets import QLabel, QPushButton
+
+        page = self.page()
+        page._create_mask("color")
+        page._mask_structure(1, {"deleted": True})
+        if page.layer == 1:
+            page.layer = 0
+        page._rebuild_mirror()
+        page._create_mask("color")
+        # The erased mask keeps ordinal 1 forever; the new one is 2,
+        # and the page must be standing on 2 -- the count said 1, and
+        # the colour controls vanished into the corpse.
+        self.assertEqual(page.layer, 2)
+        texts = [label.text() for label in page.findChildren(QLabel)]
+        self.assertIn("Hue", texts)
+        self.assertIn("EVEN OUT", texts)
+        self.assertTrue([b for b in page.findChildren(QPushButton)
+                         if "Pick" in b.text()])
+        # And the dance holds for a second round with another shape.
+        page._mask_structure(2, {"deleted": True})
+        if page.layer == 2:
+            page.layer = 0
+        page._rebuild_mirror()
+        page._create_mask("brush")
+        self.assertEqual(page.layer, 3)
+        texts = [label.text() for label in page.findChildren(QLabel)]
+        self.assertIn("Brush", texts)
+
+    def test_the_layer_survives_rebuilds_with_erased_ordinals_around(self):
+        page = self.page()
+        page._create_mask("color")
+        page._mask_structure(1, {"deleted": True})
+        page.layer = 0
+        page._rebuild_mirror()
+        page._create_mask("radial")          # ordinal 2, selected
+        page._show_controls()                # a rebuild must not evict it
+        self.assertEqual(page.layer, 2)
+
     def test_a_colour_mask_layer_offers_its_own_geometry(self):
         page = self.page()
         made = {"shape": "color", "geometry": {
