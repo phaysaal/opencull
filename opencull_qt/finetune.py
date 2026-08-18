@@ -2148,6 +2148,7 @@ class FineTunePage(QWidget):
         # to the top, right out from under the hand that ticked it.
         held = (self._scroll.verticalScrollBar().value()
                 if getattr(self, "_scroll", None) is not None else 0)
+        self._twice: dict[str, list] = {}
         self._clear()
         self._fill_layers()
         on_mask = self.layer > 0
@@ -2232,19 +2233,7 @@ class FineTunePage(QWidget):
             # Canonical order, whether a control is in the recipe or not:
             # ticking one in used to promote it to the top of its section,
             # which moved it out from under the hand that ticked it.
-            told: dict[str, int] = {}
-            for control in members:
-                # A treatment may honestly ask for the same move twice
-                # -- "lift the shadows" here, "shadows -6" there -- and
-                # both are real and both render. Two identical labels
-                # are not readable, so the second and later wear their
-                # count; the (!) beside each still tells which sentence
-                # asked for it.
-                label = str(control["label"])
-                told[label] = told.get(label, 0) + 1
-                if told[label] > 1:
-                    control = dict(control)
-                    control["label"] = f"{label} · {told[label]}"
+            for control in self._fold_twice_asked(members):
                 widget = Control(control, advice.get(control["op"]))
                 widget.changed.connect(self._control_changed)
                 widget.wanted.connect(self._control_wanted)
@@ -2307,8 +2296,93 @@ class FineTunePage(QWidget):
 
     # --- moving them ------------------------------------------------------
 
+    def _fold_twice_asked(self, members: list) -> list:
+        """One controller for a move the treatment asked for twice.
+
+        Two Shadows rows are the compiled truth and a surprise to
+        anyone else. Where every asking is a delta in the same unit,
+        the surface shows ONE row carrying their net; moving it steers
+        the last asking -- the second thought -- and switching it off
+        switches every asking off. The recipe itself is untouched
+        until the hand moves, so what renders is exactly what the
+        treatment wrote. An asking that cannot be safely combined --
+        an absolute mode, a mixed unit -- keeps its own numbered row.
+        Folding runs once per section; the registry is reset by the
+        rebuild that walks the sections, never here -- resetting here
+        let the last section quietly wipe the first one's fold.
+        """
+        grouped: dict[str, list] = {}
+        for control in members:
+            grouped.setdefault(str(control["op"]), []).append(control)
+        told: dict[str, int] = {}
+        settled = []
+        seen: set = set()
+        for control in members:
+            name = str(control["op"])
+            if name in seen:
+                continue
+            family = grouped[name]
+            if len(family) == 1:
+                settled.append(control)
+                continue
+            seen.add(name)
+            foldable = all(
+                str(item.get("mode") or "delta") == "delta"
+                and item["unit"] in {"percent", "EV"}
+                and not item.get("absent")
+                for item in family)
+            if foldable:
+                last = dict(family[-1])
+                low, high = last["low"], last["high"]
+                last["label"] = str(control["label"])
+                last["value"] = max(low, min(
+                    high, sum(item["value"] for item in family)))
+                last["asked"] = max(low, min(
+                    high, sum(item["asked"] for item in family)))
+                last["enabled"] = any(item["enabled"] for item in family)
+                last["source"] = "  ·  ".join(
+                    item["source"] for item in family if item["source"])
+                self._twice[str(last["id"])] = [
+                    str(item["id"]) for item in family]
+                settled.append(last)
+            else:
+                for item in family:
+                    label = str(item["label"])
+                    told[label] = told.get(label, 0) + 1
+                    if told[label] > 1:
+                        item = dict(item)
+                        item["label"] = f"{label} · {told[label]}"
+                    settled.append(item)
+        return settled
+
     def _control_changed(self, key: str, change: dict) -> None:
         self._remember(str(key))
+        family = getattr(self, "_twice", {}).get(str(key))
+        if family:
+            # The one controller for a twice-asked move. Off means all
+            # of them off; a move means the net the hand wants, landed
+            # on the last asking.
+            if "enabled" in change:
+                for sibling in family:
+                    self.changes.setdefault(sibling, {}).update(
+                        {"enabled": change["enabled"]})
+            if "value" in change:
+                # The truth as it stands: the pristine compile with the
+                # hand's changes folded over it, because the mirror only
+                # refolds on structure and a prior move lives in changes.
+                folded = adjustments.apply(self._pristine, self.changes)
+                live = {item["id"]: item
+                        for item in adjustments.controls(folded)}
+                others = sum(
+                    live[sibling]["value"] for sibling in family[:-1]
+                    if sibling in live)
+                low = live[str(key)]["low"] if str(key) in live else -100.0
+                high = live[str(key)]["high"] if str(key) in live else 100.0
+                self.changes.setdefault(str(key), {}).update(
+                    {"value": max(low, min(
+                        high, float(change["value"]) - others))})
+            self.render()
+            return
         if str(key).startswith("mask:") and "/" in str(key):
             head, _, op = str(key).partition("/")
             added = next(

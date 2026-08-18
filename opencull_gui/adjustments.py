@@ -140,6 +140,7 @@ def controls(recipe: dict[str, Any]) -> list[dict[str, Any]]:
             "high": high,
             "enabled": operation.get("enabled", True) is not False,
             "source": str(operation.get("source_instruction") or ""),
+            "mode": str(operation.get("mode") or "delta"),
         })
     found.sort(key=lambda item: _ORDER.get(item["op"], len(_ORDER)))
     return found

@@ -635,7 +635,7 @@ class FineTunePageTests(unittest.TestCase):
         # the untouched path once swallowed the adjustments silently.
         self.assertIn("as-shot-adjusted", page.status.text())
 
-    def test_a_move_asked_for_twice_wears_its_count(self):
+    def twice_asked(self):
         page = self.page()
         page.recipe["operations"].append({
             "id": "op-090", "op": "tone.shadow", "unit": "percent",
@@ -643,10 +643,57 @@ class FineTunePageTests(unittest.TestCase):
             "source_instruction": "shadows -6 for the second thought"})
         page._pristine = json.loads(json.dumps(page.recipe))
         page._show_controls()
+        return page
+
+    def test_a_move_asked_for_twice_is_one_controller(self):
+        page = self.twice_asked()
+        rows = [w.control for w in page.controls
+                if w.control["op"] == "tone.shadow"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["label"], "Shadows")
+        self.assertEqual(rows[0]["value"], 12.0)   # 18 + (-6), the net
+        # Both sentences ride the one (!) dot.
+        self.assertIn("second thought", rows[0]["source"])
+
+    def test_moving_the_net_steers_the_second_thought(self):
+        page = self.twice_asked()
+        combined = next(w.control["id"] for w in page.controls
+                        if w.control["op"] == "tone.shadow")
+        page._control_changed(combined, {"value": 20.0})
+        folded = adjustments.apply(page._pristine, page.changes)
+        values = {item["id"]: item["value"]
+                  for item in adjustments.controls(folded)
+                  if item["op"] == "tone.shadow"}
+        self.assertEqual(values["op-090"], 2.0)    # 18 stands; net is 20
+        self.assertEqual(sum(values.values()), 20.0)
+        page._control_changed(combined, {"value": 5.0})
+        folded = adjustments.apply(page._pristine, page.changes)
+        net = sum(item["value"]
+                  for item in adjustments.controls(folded)
+                  if item["op"] == "tone.shadow")
+        self.assertEqual(net, 5.0)                 # a second move counts
+
+    def test_switching_the_net_off_switches_every_asking_off(self):
+        page = self.twice_asked()
+        combined = next(w.control["id"] for w in page.controls
+                        if w.control["op"] == "tone.shadow")
+        page._control_changed(combined, {"enabled": False})
+        folded = adjustments.apply(page._pristine, page.changes)
+        self.assertEqual(
+            [item["enabled"] for item in adjustments.controls(folded)
+             if item["op"] == "tone.shadow"], [False, False])
+
+    def test_an_unfoldable_duplicate_keeps_numbered_rows(self):
+        page = self.page()
+        page.recipe["operations"].append({
+            "id": "op-091", "op": "color.temperature", "unit": "kelvin",
+            "mode": "absolute", "value": 6200.0, "enabled": True,
+            "source_instruction": "temperature 6200 kelvin again"})
+        page._pristine = json.loads(json.dumps(page.recipe))
+        page._show_controls()
         labels = [w.control["label"] for w in page.controls
-                  if w.control["op"] == "tone.shadow"]
-        self.assertEqual(len(labels), 2)
-        self.assertEqual(len(set(labels)), 2)      # tellable apart
+                  if w.control["op"] == "color.temperature"]
+        self.assertEqual(len(labels), 2)           # absolutes do not sum
         self.assertTrue(any("· 2" in label for label in labels))
 
     def test_a_colour_mask_layer_offers_its_own_geometry(self):
