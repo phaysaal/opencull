@@ -1328,6 +1328,20 @@ class FineTunePage(QWidget):
 
         keeps = QHBoxLayout()
         keeps.setSpacing(8)
+        self.night_button = QPushButton("Night…")
+        self.night_button.setObjectName("ghost")
+        self.night_button.setFont(theme.body(10))
+        self.night_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.night_button.setToolTip(tooltip(
+            "A first version of a night frame, measured rather than "
+            "guessed: the sky's own colour taken off, a black point "
+            "set just under it, a stretch that lifts the faint stars "
+            "without blowing the bright ones, and the background "
+            "quietened by however much that stretch multiplied its "
+            "noise. Every one of them is a slider afterwards."))
+        self.night_button.clicked.connect(self.night_start)
+        keeps.addWidget(self.night_button)
+
         self.preset_button = QPushButton("Preset…")
         self.preset_button.setObjectName("ghost")
         self.preset_button.setFont(theme.body(10))
@@ -3291,6 +3305,58 @@ class FineTunePage(QWidget):
             return []
         applied = adjustments.apply(self.recipe, self.changes)
         return presets.portable_operations(applied.get("operations", []))
+
+    def night_start(self) -> None:
+        """Measure this frame's sky and lay a first version on it."""
+        from opencull_gui import nightstart
+
+        if not self.current:
+            return
+        source = Path(str(
+            self.workspace.project.get("source_folder") or ".")
+        ) / self.current
+        if not source.is_file():
+            self._report(
+                f"{self.current} is not where the project says it is.",
+                "alarm")
+            return
+        self._report(f"Measuring {self.current}'s sky…")
+        try:
+            told = nightstart.night_start(
+                source, frames=self._frames_behind(source))
+        except Exception as exc:                     # noqa: BLE001 - shown
+            self._report(f"The sky could not be measured: {exc}", "alarm")
+            return
+        if not told["operations"]:
+            self._report(told["note"], "alarm")
+            return
+        self._remember("night start")
+        self.changes["+ops"] = told["operations"]
+        self._rebuild_mirror()
+        self._show_controls()
+        self.render()
+        self._report(told["note"], "ok")
+
+    def _frames_behind(self, source: Path) -> int:
+        """How many exposures are already averaged into this picture.
+
+        A stack carries a report beside it saying so, and a stack has
+        already divided its own noise -- smoothing it as hard as a
+        single frame would throw away what the stacking bought.
+        """
+        beside = source.with_suffix(".json")
+        if beside.is_file():
+            try:
+                import json as json_module
+
+                told = json_module.loads(
+                    beside.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                return 1
+            if str(told.get("format", "")).startswith(
+                    "darkimiya-superimpose"):
+                return max(int(told.get("frames_used", 1)), 1)
+        return 1
 
     def save_preset(self) -> None:
         name, said = self.ask_preset_name()

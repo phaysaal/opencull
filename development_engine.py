@@ -422,6 +422,25 @@ def _apply_global(rgb: np.ndarray, operations: list[dict[str, Any]],
             if progress is not None:
                 progress(done, total, _named(item))
             continue
+        if op == "color.sky_offset" and isinstance(value, dict):
+            # Light pollution is not grey. It arrives as a different
+            # amount of red, green and blue added to every pixel, and a
+            # stretch multiplies that difference along with everything
+            # else -- which is how a night sky becomes a blue wash. It
+            # is SUBTRACTED per channel rather than gained away,
+            # because it was added: gains would rescale the stars'
+            # colour to fix the sky's, and the stars are the subject.
+            shown = np.clip(_encoded(np.clip(result, 0.0, None)),
+                            0.0, 1.0)
+            for index, channel in enumerate(("red", "green", "blue")):
+                level = float(value.get(channel, 0.0) or 0.0)
+                if level:
+                    shown[..., index] = np.clip(
+                        shown[..., index] - level, 0.0, 1.0)
+            result = _decoded(shown)
+            if progress is not None:
+                progress(done, total, _named(item))
+            continue
         if op == "tone.curve" and isinstance(value, dict):
             # The curve is a display-referred instrument: it is drawn
             # against the picture as shown, so it runs on the encoded
@@ -600,6 +619,25 @@ def _apply_global(rgb: np.ndarray, operations: list[dict[str, Any]],
                 _blur(chroma, DENOISE_RADIUS * detail_scale) - chroma) * weight
         elif op == "detail.clean_colour":
             result = _clean_colour(result, value, detail_scale, window)
+        elif op == "tone.stretch":
+            # The astronomer's stretch. A night frame's signal lives in
+            # the bottom few percent of the range, and a curve or an
+            # exposure lifts it by multiplying -- which lifts the noise
+            # with it and blows every star to white on the way. asinh
+            # is logarithmic where the signal is faint and linear where
+            # it is strong, so the sky comes up, the faint stars come
+            # WITH it, and the bright ones compress instead of clipping
+            # and keep their colour.
+            factor = float(10.0 ** (min(max(value, 0.0), 100.0) / 25.0)
+                           - 1.0)
+            if factor > 1e-6:
+                shown = np.clip(_encoded(np.clip(result, 0.0, None)),
+                                0.0, 1.0)
+                lifted = (np.arcsinh(factor * shown)
+                          / float(np.arcsinh(factor)))
+                result = _decoded(np.clip(lifted, 0.0, 1.0))
+        elif op == "detail.night_clean":
+            result = _night_clean(result, value, detail_scale, window)
         elif op == "finish.grain":
             result = _film_grain(result, value, window)
         elif op == "levels.midpoint":
@@ -1141,6 +1179,48 @@ def _clean_colour(rgb: np.ndarray, strength: float,
             + _box_mean(offset, radius)
         cleaned[..., channel] = plane + (smoothed - plane) * k
     return np.clip(cleaned, 0.0, None).astype(np.float32)
+
+
+def _night_clean(rgb: np.ndarray, strength: float,
+                 detail_scale: float,
+                 window: dict[str, float] | None = None) -> np.ndarray:
+    """Smooth the sky and leave the stars alone.
+
+    An ordinary denoise cannot tell a star from a hot pixel: both are
+    small and bright, so smoothing enough to quieten a high-ISO sky
+    dissolves exactly what the photograph was taken for. Here the
+    smoothing is laid ONLY where the picture is dark. What stands
+    clear of its own neighbourhood -- which is what a star is, and
+    what the dust module and the star finder both already use -- keeps
+    every pixel it had, and the fade between the two is smooth, so
+    there is no halo around anything.
+    """
+    amount = min(max(float(strength or 0.0), 0.0), 100.0) / 100.0
+    if amount <= 0.0:
+        return rgb
+    height, width = rgb.shape[:2]
+    virtual = min(height, width)
+    if window:
+        virtual = min(height / max(float(window["h"]), 1e-6),
+                      width / max(float(window["w"]), 1e-6))
+    reach = max(1, int(round(virtual * 0.0025 * detail_scale)))
+    lum = (rgb * _LUMA).sum(axis=2)
+    background = _box_mean(lum, max(reach * 6, 6))
+    over = lum - background
+    # What counts as standing clear is measured against the NOISE, not
+    # against the sky's brightness. Judged against brightness, a dark
+    # and grainy frame reads its own grain as a field of stars and
+    # protects every speck of it -- which is a denoise that denoises
+    # nothing. The local deviation says how big a nothing is here.
+    grain = _box_mean(np.abs(over), max(reach * 6, 6)) * 1.4826
+    lift = np.clip(over / np.maximum(grain * 4.0, 1e-5), 0.0, 1.0)
+    keeps = (lift * lift * (3.0 - 2.0 * lift))[..., None]
+    # A Gaussian, not a box: a box mean laid on at nine tenths shows
+    # its own square edges as faint tiling across the sky, and a sky
+    # is the one place there is nothing else to hide them behind.
+    smoothed = _blur(rgb, float(reach))
+    quiet = rgb + (smoothed - rgb) * amount
+    return (quiet * (1.0 - keeps) + rgb * keeps).astype(np.float32)
 
 
 def _film_grain(rgb: np.ndarray, value: Any,

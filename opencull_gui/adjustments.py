@@ -39,11 +39,12 @@ FORMAT = "opencull-development-adjustment-v1"
 # the way the operation names sort.
 SECTIONS = (
     ("Tone", ("tone.exposure", "tone.brightness", "tone.contrast",
-              "tone.highlight", "tone.shadow", "tone.white", "tone.black")),
+              "tone.highlight", "tone.shadow", "tone.white", "tone.black",
+              "tone.stretch")),
     ("Levels", ("levels.black_input", "levels.white_input", "levels.midpoint")),
     ("Colour", ("color.temperature", "color.tint", "color.saturation")),
     ("Detail", ("detail.clarity", "detail.structure", "detail.dehaze",
-                "detail.clean_colour")),
+                "detail.clean_colour", "detail.night_clean")),
     ("Finish", ("finish.vignette", "finish.grain")),
 )
 
@@ -55,6 +56,7 @@ LABELS = {
     "tone.shadow": "Shadows",
     "tone.white": "Whites",
     "tone.black": "Blacks",
+    "tone.stretch": "Night stretch",
     "levels.black_input": "Black point",
     "levels.white_input": "White point",
     "levels.midpoint": "Midpoint",
@@ -65,6 +67,7 @@ LABELS = {
     "detail.structure": "Structure",
     "detail.dehaze": "Dehaze",
     "detail.clean_colour": "Clean colour",
+    "detail.night_clean": "Quiet the sky",
     "finish.vignette": "Vignette",
     "finish.grain": "Grain",
 }
@@ -542,6 +545,35 @@ def apply(recipe: dict[str, Any], changes: dict[str, Any]) -> dict[str, Any]:
                          "set": float(item.get("value", 0.0)),
                          "enabled": True,
                          "unit": RANGES[op][2], "inserted": True})
+
+    # Operations a measurement produced rather than a slider: the
+    # night start's sky offset and its stretch, say. They are ordinary
+    # operations once they land -- movable, switchable, portable --
+    # but nothing on the page could have typed them, so they arrive
+    # whole. Asking again replaces what was asked before.
+    made = changes.get("+ops")
+    if isinstance(made, list):
+        result["operations"] = [
+            item for item in result.get("operations", []) or []
+            if not (isinstance(item, dict) and item.get("measured"))]
+        at = next(
+            (index for index, item in enumerate(result["operations"])
+             if isinstance(item, dict)
+             and str(item.get("op", "")).startswith("mask.")),
+            len(result["operations"]))
+        placed = []
+        for item in made:
+            if not isinstance(item, dict) or not item.get("op"):
+                continue
+            held = json.loads(json.dumps(item))
+            held["measured"] = True
+            held.setdefault("enabled", True)
+            placed.append(held)
+            recorded.append({"id": str(held["op"]), "op": str(held["op"]),
+                             "asked": 0.0, "set": 0.0, "enabled": True,
+                             "unit": str(held.get("unit", "")),
+                             "inserted": True})
+        result["operations"][at:at] = placed
 
     # The curve the photographer drew. One per recipe: drawing again
     # replaces it, and clearing the change removes nothing the model
