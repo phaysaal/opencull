@@ -689,6 +689,76 @@ class FineTunePageTests(unittest.TestCase):
         self.assertEqual(len(labels), 2)           # absolutes do not sum
         self.assertTrue(any("· 2" in label for label in labels))
 
+    def wheel_at(self, widget, modifiers):
+        from PySide6.QtCore import QPoint, QPointF, Qt
+        from PySide6.QtGui import QWheelEvent
+
+        centre = widget.mapToGlobal(widget.rect().center())
+        return QWheelEvent(
+            QPointF(widget.mapFromGlobal(centre)), QPointF(centre),
+            QPoint(0, 0), QPoint(0, 120), Qt.MouseButton.NoButton,
+            modifiers, Qt.ScrollPhase.NoScrollPhase, False)
+
+    def visible_slider(self, page):
+        from PySide6.QtWidgets import QApplication
+
+        from opencull_qt.zoneslider import ZoneSlider
+
+        page.resize(1280, 800)
+        page.show()
+        QApplication.instance().processEvents()
+        page.show_photo(NAMES[0])
+        QApplication.instance().processEvents()
+        return next(slider for slider in page.findChildren(ZoneSlider)
+                    if slider.isVisible())
+
+    def test_a_bare_wheel_leaves_the_control_alone(self):
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QApplication
+
+        page = self.page()
+        slider = self.visible_slider(page)
+        before = slider.value()
+        QApplication.instance().sendEvent(
+            slider, self.wheel_at(slider, Qt.KeyboardModifier.NoModifier))
+        self.assertEqual(slider.value(), before)   # the panel scrolls
+
+    def test_a_held_modifier_means_this_control(self):
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QApplication
+
+        page = self.page()
+        slider = self.visible_slider(page)
+        before = slider.value()
+        QApplication.instance().sendEvent(
+            slider,
+            self.wheel_at(slider, Qt.KeyboardModifier.ControlModifier))
+        self.assertNotEqual(slider.value(), before)
+        held = slider.value()
+        QApplication.instance().sendEvent(
+            slider, self.wheel_at(slider, Qt.KeyboardModifier.ShiftModifier))
+        self.assertNotEqual(slider.value(), held)
+
+    def test_a_modifier_wheel_beside_a_control_still_finds_it(self):
+        from PySide6.QtCore import QPoint, QPointF, Qt
+        from PySide6.QtGui import QWheelEvent
+        from PySide6.QtWidgets import QApplication
+
+        page = self.page()
+        slider = self.visible_slider(page)
+        before = slider.value()
+        # The pointer sits on the row's label, not on the groove.
+        centre = slider.mapToGlobal(slider.rect().center())
+        viewport = page._scroll.viewport()
+        event = QWheelEvent(
+            QPointF(viewport.mapFromGlobal(centre)), QPointF(centre),
+            QPoint(0, 0), QPoint(0, 120), Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.ShiftModifier,
+            Qt.ScrollPhase.NoScrollPhase, False)
+        QApplication.instance().sendEvent(viewport, event)
+        self.assertNotEqual(slider.value(), before)
+        self.assertTrue(event.isAccepted())
+
     def test_a_colour_mask_layer_offers_its_own_geometry(self):
         page = self.page()
         made = {"shape": "color", "geometry": {

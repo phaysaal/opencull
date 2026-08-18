@@ -1262,6 +1262,10 @@ class FineTunePage(QWidget):
         scroll.verticalScrollBar().rangeChanged.connect(self._scroll_grew)
         scroll.setObjectName("controlScroll")
         scroll.setWidgetResizable(True)
+        # Ctrl- or Shift-wheel anywhere over the column adjusts the
+        # nearest control, even when the pointer sits on its label
+        # rather than dead on the slider.
+        scroll.viewport().installEventFilter(self)
         scroll.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         holder = QWidget()
@@ -1798,6 +1802,11 @@ class FineTunePage(QWidget):
     def eventFilter(self, watched, event) -> bool:  # noqa: N802 - Qt naming
         from PySide6.QtCore import QEvent
 
+        if getattr(self, "_scroll", None) is not None \
+                and watched is self._scroll.viewport() \
+                and event.type() == QEvent.Type.Wheel:
+            if self._steer_nearest(event):
+                return True
         if watched is self.frame and event.type() == QEvent.Type.Resize:
             if self._crop_overlay.isVisible():
                 self._crop_overlay.setGeometry(self.frame.rect())
@@ -2266,6 +2275,29 @@ class FineTunePage(QWidget):
                 min(self._hold_scroll, maximum))
 
     # --- moving them ------------------------------------------------------
+
+    def _steer_nearest(self, event) -> bool:
+        """A modifier wheel over the column, landed on the closest slider."""
+        if not (event.modifiers() & (Qt.KeyboardModifier.ControlModifier
+                                     | Qt.KeyboardModifier.ShiftModifier)):
+            return False
+        from opencull_qt.zoneslider import ZoneSlider
+
+        where = event.globalPosition()
+        nearest, span = None, None
+        for slider in self.body.parentWidget().findChildren(ZoneSlider):
+            if not slider.isVisible():
+                continue
+            centre = slider.mapToGlobal(slider.rect().center())
+            away = abs(centre.y() - where.y())
+            if span is None or away < span:
+                nearest, span = slider, away
+        if nearest is None:
+            return False
+        notches = event.angleDelta().y() / 120.0
+        step = max(nearest.singleStep(), 1)
+        nearest.setValue(round(nearest.value() + notches * step))
+        return True
 
     def _fold_twice_asked(self, members: list) -> list:
         """One controller for a move the treatment asked for twice.

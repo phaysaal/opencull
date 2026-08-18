@@ -62,6 +62,13 @@ class ZoneSlider(QSlider):
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
     def wheelEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        # Held Ctrl or Shift says "I mean this control": the wheel then
+        # adjusts. Bare, the wheel stays the panel's and scrolls.
+        if event.modifiers() & (Qt.KeyboardModifier.ControlModifier
+                                | Qt.KeyboardModifier.ShiftModifier):
+            super().wheelEvent(event)
+            event.accept()
+            return
         event.ignore()
 
     def set_ramp(self, stops: list[tuple[float, tuple[int, int, int]]]) -> None:
