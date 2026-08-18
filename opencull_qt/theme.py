@@ -205,6 +205,16 @@ QLabel#tileBadge {{
 QPushButton#ghost:hover {{ background: {RAISED}; border-color: #3B3633; }}
 QPushButton#ghost:pressed {{ background: {EDGE_SOFT}; }}
 QPushButton#ghost:disabled {{ color: {FAINT}; border-color: {EDGE_SOFT}; }}
+/* A toggle that is ON looks on. Every checkable ghost -- A|B, a
+   mask's Show and Range, Paint and Erase, the colour bands' Hue /
+   Saturation / Lightness, the crop -- wears the safelight while it
+   holds, because an invisible state is a lie told by a button. */
+QPushButton#ghost:checked {{
+    background: {SAFELIGHT}; color: {INK}; border-color: {SAFELIGHT};
+}}
+QPushButton#ghost:checked:hover {{
+    background: #FFAA60; border-color: #FFAA60; color: {INK};
+}}
 
 /* Dialog buttons are the application's own buttons, not the platform's.
    Left alone they take the default style and then inherit PAPER text from
