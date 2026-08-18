@@ -24,7 +24,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QSize, Qt, QThreadPool, Signal
+from PySide6.QtCore import QObject, QRunnable, QSize, Qt, QThreadPool, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -921,6 +921,37 @@ class CurvePanel(QWidget):
         painter.end()
 
 
+class _ExportSignals(QObject):
+    done = Signal(str, dict)
+    failed = Signal(str, str)
+
+
+class _ExportJob(QRunnable):
+    """One full-size render, off the interface thread."""
+
+    def __init__(self, workspace, photo: str, treatment: str, engine: str,
+                 demosaic: str, changes: dict, signals: _ExportSignals):
+        super().__init__()
+        self.workspace = workspace
+        self.photo = photo
+        self.treatment = treatment
+        self.engine = engine
+        self.demosaic = demosaic
+        self.changes = changes
+        self.signals = signals
+        self.setAutoDelete(True)
+
+    def run(self) -> None:
+        try:
+            record = self.workspace.render_full(
+                self.photo, self.treatment, self.engine, self.demosaic,
+                adjustments=self.changes)
+        except Exception as exc:                     # noqa: BLE001 - reported
+            self.signals.failed.emit(self.photo, str(exc))
+            return
+        self.signals.done.emit(self.photo, record or {})
+
+
 class FineTunePage(QWidget):
     """The operations behind one treatment, and the proof of moving them."""
 
@@ -980,6 +1011,12 @@ class FineTunePage(QWidget):
         # stale proof as a sharp patch until the full render lands.
         self.fast = Renderer(workspace, PROOF_EDGE, None, self)
         self.fast.done.connect(self._fast_rendered)
+        # Exports run one at a time, off the interface thread.
+        self._export_pool = QThreadPool(self)
+        self._export_pool.setMaxThreadCount(1)
+        self._export_signals = _ExportSignals()
+        self._export_signals.done.connect(self._exported)
+        self._export_signals.failed.connect(self._export_failed)
         self._fast_window: dict | None = None
         # Thumbnails for the filmstrip, at the develop page's own edge so
         # the two pages share one cache and the icons are usually free.
@@ -3087,7 +3124,13 @@ class FineTunePage(QWidget):
         self._report(f"{photo} could not be rendered: {reason}", "alarm")
 
     def keep(self) -> None:
-        """Record this version at full size, beside the one it came from."""
+        """Record this version at full size, beside the one it came from.
+
+        On a worker, never on the interface thread: a full-size X-Trans
+        render is a minute of work, and a minute of frozen window is a
+        crash as far as anyone watching it can tell -- the desktop
+        offers to force-quit, and the offer gets taken.
+        """
         if not self.current or not self.treatment:
             return
         if not self.changes:
@@ -3096,24 +3139,30 @@ class FineTunePage(QWidget):
                 "suggested. Develop it from the development page.", "alarm")
             return
         self.keep_button.setEnabled(False)
+        self.keep_button.setText("Exporting…")
         self._report(
             f"Rendering {self.current} at full size with your adjustments. "
-            "It is recorded as its own version, not as the treatment.")
-        try:
-            record = self.workspace.render_full(
-                self.current, self.treatment, self.engine(),
-                self._demosaic(), adjustments=self.changes)
-        except Exception as exc:                     # noqa: BLE001 - reported
-            self.keep_button.setEnabled(True)
-            self._report(f"It could not be rendered: {exc}", "alarm")
-            return
+            "The page stays usable; the export announces itself when it "
+            "lands.")
+        self._export_pool.start(_ExportJob(
+            self.workspace, self.current, self.treatment, self.engine(),
+            self._demosaic(), json.loads(json.dumps(self.changes)),
+            self._export_signals))
+
+    def _exported(self, photo: str, record: dict) -> None:
         self.keep_button.setEnabled(True)
-        self._ledger.mark_exported(self.current)
+        self.keep_button.setText("Export")
+        self._ledger.mark_exported(photo)
         self._dress_rows()
         variant = str((record.get("render") or {}).get("variant") or "")
         self._report(
-            f"Exported as {variant}. It is on the export page beside "
-            "the treatment it came from.", "ok")
+            f"Exported {photo} as {variant}. It is on the export page "
+            "beside the treatment it came from.", "ok")
+
+    def _export_failed(self, photo: str, reason: str) -> None:
+        self.keep_button.setEnabled(True)
+        self.keep_button.setText("Export")
+        self._report(f"{photo} could not be rendered: {reason}", "alarm")
 
     # --- keeping a look ---------------------------------------------------
 

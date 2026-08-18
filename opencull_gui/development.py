@@ -1161,11 +1161,13 @@ class DevelopmentWorkspace:
         reference = (Path(str(workspace["source_folder"])) / photo).resolve()
         if not reference.is_file():
             raise ValueError("reference photograph is unavailable")
-        if style == "as-shot":
+        if style == "as-shot" and not adjustments:
             # Not a render: the camera already made this picture. It is
             # copied out and registered like any other so a delivery can
             # always be traced, but nothing is decoded or interpreted and
-            # no recipe is claimed for it.
+            # no recipe is claimed for it. The moment a hand has moved
+            # something, it IS a render -- silently registering the
+            # untouched JPEG here once threw the adjustments away.
             return self._register_as_shot(photo, reference, provenance)
         prepared = self._prepare(photo, style, engine)
         maximum = full_size(prepared["source"], reference)

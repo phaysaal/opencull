@@ -224,6 +224,16 @@ class FineTunePageTests(unittest.TestCase):
         page.workspace.render_full = (
             lambda *args, **kw: {"render": {"variant": "v1"}})
         page.keep()
+        # The export runs on a worker now; wait for it to announce.
+        import time
+
+        from PySide6.QtWidgets import QApplication
+
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline \
+                and page.keep_button.text() != "Export":
+            QApplication.instance().processEvents()
+            time.sleep(0.01)
         self.assertEqual(page.list.item(row).text(), NAMES[0])
 
     def test_undoing_everything_settles_the_dot(self):
@@ -575,6 +585,55 @@ class FineTunePageTests(unittest.TestCase):
         self.assertGreater(bright, camera + 5)   # the EV landed
         # And untouched as-shot is still the fast path: the JPEG itself.
         self.assertNotEqual(str(adjusted), str(plain))
+
+    def test_an_export_never_freezes_the_page(self):
+        import threading
+        import time
+
+        from PySide6.QtWidgets import QApplication
+
+        page = self.page()
+        page.show_photo(NAMES[0])
+        page._curve_changed([[0.0, 0.0], [128.0, 190.0], [255.0, 255.0]])
+        gui_thread = threading.get_ident()
+        seen = {}
+
+        def slow_render(*args, **kw):
+            seen["thread"] = threading.get_ident()
+            time.sleep(0.2)
+            return {"render": {"variant": "v1"}}
+        page.workspace.render_full = slow_render
+        page.keep()
+        self.assertEqual(page.keep_button.text(), "Exporting…")
+        self.assertFalse(page.keep_button.isEnabled())
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline \
+                and page.keep_button.text() != "Export":
+            QApplication.instance().processEvents()
+            time.sleep(0.01)
+        self.assertNotEqual(seen["thread"], gui_thread)
+        self.assertTrue(page.keep_button.isEnabled())
+        self.assertIn("Exported", page.status.text())
+
+    def test_an_adjusted_as_shot_export_is_its_own_variant(self):
+        import time
+
+        from PySide6.QtWidgets import QApplication
+
+        page = self.page()
+        page.show_photo(NAMES[0])
+        page.show_treatment("as-shot")
+        page.changes["+insert"] = [{"op": "tone.exposure", "value": 0.5}]
+        page._rebuild_mirror()
+        page.keep()
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline \
+                and page.keep_button.text() != "Export":
+            QApplication.instance().processEvents()
+            time.sleep(0.02)
+        # Registered as its own variant, never as the untouched JPEG --
+        # the untouched path once swallowed the adjustments silently.
+        self.assertIn("as-shot-adjusted", page.status.text())
 
     def test_a_colour_mask_layer_offers_its_own_geometry(self):
         page = self.page()
@@ -1018,6 +1077,18 @@ class FineTunePageTests(unittest.TestCase):
 
     # --- keeping one ------------------------------------------------------
 
+    def exported(self, page, deadline_s: float = 5.0) -> None:
+        """Pump events until the worker-thread export announces itself."""
+        import time
+
+        from PySide6.QtWidgets import QApplication
+
+        deadline = time.monotonic() + deadline_s
+        while time.monotonic() < deadline \
+                and page.keep_button.text() != "Export":
+            QApplication.instance().processEvents()
+            time.sleep(0.01)
+
     def test_keeping_renders_at_full_size_with_the_adjustments(self):
         page = self.page()
         exposure = self.control(page, "tone.exposure")
@@ -1027,6 +1098,7 @@ class FineTunePageTests(unittest.TestCase):
             return_value={"render": {"variant": "standard-adjusted"}},
         ) as rendered:
             page.keep()
+            self.exported(page)
         rendered.assert_called_once()
         self.assertEqual(
             rendered.call_args.kwargs["adjustments"], page.changes)
@@ -1047,6 +1119,7 @@ class FineTunePageTests(unittest.TestCase):
             return_value={"render": {"variant": "standard-adjusted"}},
         ):
             page.keep()
+            self.exported(page)
         self.assertIn("standard-adjusted", page.status.text())
 
     def test_a_failed_render_is_reported_rather_than_raised(self):
@@ -1057,6 +1130,7 @@ class FineTunePageTests(unittest.TestCase):
             page.workspace, "render_full", side_effect=RuntimeError("no decoder"),
         ):
             page.keep()
+            self.exported(page)
         self.assertIn("no decoder", page.status.text())
         self.assertTrue(page.keep_button.isEnabled())
 
