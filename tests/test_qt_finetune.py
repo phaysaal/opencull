@@ -635,6 +635,20 @@ class FineTunePageTests(unittest.TestCase):
         # the untouched path once swallowed the adjustments silently.
         self.assertIn("as-shot-adjusted", page.status.text())
 
+    def test_a_move_asked_for_twice_wears_its_count(self):
+        page = self.page()
+        page.recipe["operations"].append({
+            "id": "op-090", "op": "tone.shadow", "unit": "percent",
+            "mode": "delta", "value": -6.0, "enabled": True,
+            "source_instruction": "shadows -6 for the second thought"})
+        page._pristine = json.loads(json.dumps(page.recipe))
+        page._show_controls()
+        labels = [w.control["label"] for w in page.controls
+                  if w.control["op"] == "tone.shadow"]
+        self.assertEqual(len(labels), 2)
+        self.assertEqual(len(set(labels)), 2)      # tellable apart
+        self.assertTrue(any("· 2" in label for label in labels))
+
     def test_a_colour_mask_layer_offers_its_own_geometry(self):
         page = self.page()
         made = {"shape": "color", "geometry": {

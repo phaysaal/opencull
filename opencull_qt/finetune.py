@@ -2232,7 +2232,19 @@ class FineTunePage(QWidget):
             # Canonical order, whether a control is in the recipe or not:
             # ticking one in used to promote it to the top of its section,
             # which moved it out from under the hand that ticked it.
+            told: dict[str, int] = {}
             for control in members:
+                # A treatment may honestly ask for the same move twice
+                # -- "lift the shadows" here, "shadows -6" there -- and
+                # both are real and both render. Two identical labels
+                # are not readable, so the second and later wear their
+                # count; the (!) beside each still tells which sentence
+                # asked for it.
+                label = str(control["label"])
+                told[label] = told.get(label, 0) + 1
+                if told[label] > 1:
+                    control = dict(control)
+                    control["label"] = f"{label} · {told[label]}"
                 widget = Control(control, advice.get(control["op"]))
                 widget.changed.connect(self._control_changed)
                 widget.wanted.connect(self._control_wanted)
