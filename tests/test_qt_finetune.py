@@ -477,6 +477,55 @@ class FineTunePageTests(unittest.TestCase):
         page._show_controls()                # a rebuild must not evict it
         self.assertEqual(page.layer, 2)
 
+    def test_the_ab_button_holds_the_frame_as_shot(self):
+        from PySide6.QtCore import Qt
+        from PySide6.QtGui import QColor, QImage, QPixmap
+
+        page = self.page()
+        page.show_photo(NAMES[0])
+        def coloured(c):
+            image = QImage(80, 60, QImage.Format.Format_RGB888)
+            image.fill(QColor(*c))
+            return QPixmap.fromImage(image)
+        page._as_shot_pixmap = coloured((10, 10, 10))
+        page._plain_pixmap = coloured((200, 200, 200))
+        page.frame.set_source(page._plain_pixmap)
+        self.assertEqual(page.ab_button.focusPolicy(),
+                         Qt.FocusPolicy.NoFocus)   # Space cannot reach it
+        page.ab_button.setChecked(True)
+        self.assertEqual(page.caption.text(), "AS SHOT")
+        page.ab_button.setChecked(False)
+        self.assertIn(page.caption.text(),
+                      ("AS ADJUSTED", "AS SUGGESTED"))
+
+    def test_the_key_and_the_button_agree(self):
+        page = self.page()
+        page.show_photo(NAMES[0])
+        from PySide6.QtGui import QColor, QImage, QPixmap
+
+        image = QImage(80, 60, QImage.Format.Format_RGB888)
+        image.fill(QColor(10, 10, 10))
+        page._as_shot_pixmap = QPixmap.fromImage(image)
+        page._plain_pixmap = QPixmap.fromImage(image)
+        page.hold(True)                       # the key's road
+        self.assertTrue(page.ab_button.isChecked())
+        page.hold(False)
+        self.assertFalse(page.ab_button.isChecked())
+
+    def test_switching_frames_releases_a_pinned_comparison(self):
+        page = self.page(marked=(NAMES[0], NAMES[1]))
+        page.show_photo(NAMES[0])
+        from PySide6.QtGui import QColor, QImage, QPixmap
+
+        image = QImage(80, 60, QImage.Format.Format_RGB888)
+        image.fill(QColor(10, 10, 10))
+        page._as_shot_pixmap = QPixmap.fromImage(image)
+        page._plain_pixmap = QPixmap.fromImage(image)
+        page.ab_button.setChecked(True)
+        page.show_photo(NAMES[1])
+        self.assertFalse(page.ab_button.isChecked())
+        self.assertFalse(page._holding)
+
     def test_a_colour_mask_layer_offers_its_own_geometry(self):
         page = self.page()
         made = {"shape": "color", "geometry": {

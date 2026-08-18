@@ -1054,6 +1054,25 @@ class FineTunePage(QWidget):
             "shirt in shade. Temperature and tint move to make it so."))
         wb.clicked.connect(self._start_wb_pick)
         head.addWidget(wb)
+        # The comparison as a button, because the comparison as a key
+        # dies the moment a slider holds focus and eats the press. Press
+        # and hold to see the frame as shot; checkable, so a click can
+        # also pin the comparison while the eye travels.
+        self.ab_button = QPushButton("A|B")
+        self.ab_button.setObjectName("ghost")
+        self.ab_button.setFont(theme.body(9))
+        self.ab_button.setCheckable(True)
+        self.ab_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        # No focus: Space must never re-trigger it from the keyboard,
+        # which is exactly the disease it exists to cure.
+        self.ab_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.ab_button.setToolTip(tooltip(
+            "The frame as shot, for as long as this is down: A is the "
+            "camera's own rendering, B is your adjustment. Click to "
+            "pin, click again to release. Holding the B key does the "
+            "same when nothing has stolen the keyboard."))
+        self.ab_button.toggled.connect(self.hold)
+        head.addWidget(self.ab_button)
         hint = QLabel("hold B: as shot")
         hint.setObjectName("paneHint")
         hint.setFont(theme.body(9))
@@ -1389,6 +1408,8 @@ class FineTunePage(QWidget):
         self._plain_pixmap = None
 
     def show_photo(self, photo: str) -> None:
+        if getattr(self, "_holding", False):
+            self.hold(False)         # a new frame is not a comparison
         self.current = photo
         self.changes = {}
         self._forget_frame()
@@ -3010,6 +3031,11 @@ class FineTunePage(QWidget):
                 self._paint_overlay()
 
     def hold(self, holding: bool) -> None:
+        if getattr(self, "ab_button", None) is not None \
+                and self.ab_button.isChecked() != holding:
+            self.ab_button.blockSignals(True)
+            self.ab_button.setChecked(holding)
+            self.ab_button.blockSignals(False)
         """The frame as shot, for as long as the key is down.
 
         The judgement a slider asks for is "better than what the camera
