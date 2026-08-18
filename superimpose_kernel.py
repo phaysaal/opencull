@@ -332,6 +332,49 @@ def _capture_seconds(paths: list[Path]) -> list[float | None]:
     return [capture_time(path) for path in paths]
 
 
+def _median_of(folder: str, pattern: str,
+               demosaic: bool) -> np.ndarray | None:
+    """The middle of a folder of calibration frames, or None.
+
+    The median rather than the mean throughout: a calibration frame's
+    job is to describe what the camera does, and one cosmic ray should
+    not become part of that description.
+    """
+    if not str(folder).strip():
+        return None
+    frames = frames_of(folder, pattern)
+    if len(frames) < 2:
+        return None
+    return np.median(
+        np.stack([_frame(path, demosaic) for path in frames]),
+        axis=0).astype(np.float32)
+
+
+def _master_flat(folder: str, pattern: str, demosaic: bool,
+                 bias: np.ndarray | None = None) -> np.ndarray | None:
+    """What the lens and the sensor do to an evenly lit field.
+
+    A flat carries three things at once: the lens's vignetting, the
+    shadow of every speck on the sensor, and each pixel's own
+    sensitivity. Dividing by it takes all three out. It is normalised
+    per channel rather than overall, so it corrects the SHAPE of the
+    illumination and not its colour -- a flat shot on a warm panel
+    would otherwise cool every frame it touched.
+    """
+    flat = _median_of(folder, pattern, demosaic)
+    if flat is None:
+        return None
+    if bias is not None and bias.shape == flat.shape:
+        flat = flat - bias
+    for channel in range(flat.shape[2]):
+        middle = float(np.median(flat[..., channel]))
+        if middle > 1e-4:
+            flat[..., channel] /= middle
+    # A flat near zero somewhere would divide a light frame into
+    # nonsense there; the floor keeps the correction bounded.
+    return np.clip(flat, 0.2, 5.0).astype(np.float32)
+
+
 def _master_dark(folder: str, pattern: str,
                  demosaic: bool) -> np.ndarray | None:
     """The camera's own fixed pattern, from frames of the lens cap on.
@@ -340,13 +383,7 @@ def _master_dark(folder: str, pattern: str,
     what the sensor does with no light, and one cosmic ray should not
     become part of that description.
     """
-    if not str(folder).strip():
-        return None
-    darks = frames_of(folder, pattern)
-    if len(darks) < 2:
-        return None
-    held = np.stack([_frame(path, demosaic) for path in darks])
-    return np.median(held, axis=0).astype(np.float32)
+    return _median_of(folder, pattern, demosaic)
 
 
 def _warped(frame: np.ndarray, degrees: float,
@@ -452,12 +489,16 @@ def register(photos: str, pattern: str = "*.RAF", only: str = "",
     centre = ((width - 1) / 2.0, (height - 1) / 2.0)
     anchors = stars_in(reference_grey)
     placed = [{"name": paths[0].name, "dx": 0.0, "dy": 0.0,
-               "turn": 0.0, "agreed": int(len(anchors))}]
+               "turn": 0.0, "agreed": int(len(anchors)),
+               "stars": int(len(anchors)),
+               "sky": round(float(np.median(reference_grey)), 5)}]
     rate: tuple[float, float] | None = None
     for index, path in enumerate(paths[1:], start=1):
         _say(index * 45.0 / max(len(paths) - 1, 1),
              f"registering {index} of {len(paths) - 1}")
-        moving = stars_in(_grey(_frame(path, demosaic)))
+        grey = _grey(_frame(path, demosaic))
+        moving = stars_in(grey)
+        sky = float(np.median(grey))
         gap = ((taken[index] - taken[0])
                if taken[index] is not None and taken[0] is not None
                else None)
@@ -508,6 +549,12 @@ def register(photos: str, pattern: str = "*.RAF", only: str = "",
             "turn": round(float(degrees), 4),
             "agreed": int(agreed),
             "bound_px": round(float(radius), 1),
+            # What the sky was like while this frame was open: how many
+            # stars stood clear of it, and how bright it was. Both come
+            # free -- the pass that registers has already read them --
+            # and both are what cloud takes away and adds.
+            "stars": int(len(moving)),
+            "sky": round(sky, 5),
         })
     return json.dumps({
         "format": FORMAT, "photos": str(photos), "pattern": pattern,
@@ -537,7 +584,8 @@ def _hints_of(hints: str) -> dict[str, tuple[float, float]]:
 
 def superimpose(register_text: str, mode: str = "trails",
                 output: str = "", darks: str = "",
-                sigma: float = 2.5) -> str:
+                sigma: float = 2.5, flats: str = "",
+                bias: str = "") -> str:
     """Lay the frames on each other, the way the mode asks for.
 
     trails   -- keep whatever is brightest, frames unmoved. The sky's
@@ -559,8 +607,19 @@ def superimpose(register_text: str, mode: str = "trails",
             "format": FORMAT, "error": f"unknown mode {mode!r}; "
             f"one of {', '.join(MODES)}"})
     demosaic = bool(told.get("demosaic", True))
-    dark = _master_dark(darks, told.get("pattern", "*.RAF"), demosaic)
+    pattern = told.get("pattern", "*.RAF")
+    zero = _median_of(bias, pattern, demosaic)
+    dark = _master_dark(darks, pattern, demosaic)
+    flat = _master_flat(flats, pattern, demosaic, zero)
     aligned = mode != "trails"
+    # A frame the screen set aside is not in the stack at all: it was
+    # judged unusable, and averaging it in anyway would make the
+    # judgement decorative.
+    frames = [item for item in frames if item.get("keep", True)]
+    if not frames:
+        return json.dumps({
+            "format": FORMAT,
+            "error": "every frame was set aside; nothing to stack"})
     paths = [root / str(item["name"]) for item in frames]
     shifts = [(float(item.get("dx", 0.0)), float(item.get("dy", 0.0)))
               if aligned else (0.0, 0.0) for item in frames]
@@ -569,8 +628,16 @@ def superimpose(register_text: str, mode: str = "trails",
 
     def read(index: int) -> np.ndarray:
         held = _frame(paths[index], demosaic)
+        # The order calibration is done in is not a taste: the dark is
+        # what the sensor adds, so it comes off first; the flat is what
+        # the light was multiplied by, so it comes off after.
+        if zero is not None and zero.shape == held.shape:
+            held = held - zero
         if dark is not None and dark.shape == held.shape:
-            held = np.clip(held - dark, 0.0, None)
+            held = held - dark
+        held = np.clip(held, 0.0, None)
+        if flat is not None and flat.shape == held.shape:
+            held = np.clip(held / flat, 0.0, None)
         if not aligned:
             return held
         shift, turn = shifts[index], turns[index]
@@ -633,7 +700,11 @@ def superimpose(register_text: str, mode: str = "trails",
         "registered": sum(1 for count in agreed
                           if count >= LEAST_AGREEING) + 1,
         "kept_per_pixel": round(float(kept), 2),
+        "set_aside": [str(item["name"]) for item in told.get("frames", [])
+                      if not item.get("keep", True)],
         "dark_subtracted": dark is not None,
+        "flat_divided": flat is not None,
+        "bias_subtracted": zero is not None,
         "stack": str(tiff), "proof": str(proof),
     }, indent=2)
 
@@ -767,6 +838,107 @@ def hints_note(hints_json: str) -> str:
             "position from it, which narrows the registration. The "
             "stars themselves still settle it to a fraction of a "
             "pixel.")
+
+
+# --- which frames the sky ruined -----------------------------------------
+
+# A frame with this share of the sequence's usual star count is not a
+# frame of the same sky; below the doubtful line it is cloud.
+CLEARLY_CLOUDED = 0.45
+CLEARLY_CLEAR = 0.75
+
+
+def screen_frames(register_text: str, clouded: float = CLEARLY_CLOUDED,
+                  clear: float = CLEARLY_CLEAR) -> str:
+    """Set aside the frames the sky ruined, by what the stars say.
+
+    Cloud does two things at once and both are already measured: it
+    hides stars, and it brightens the background by scattering
+    whatever light is around. So the count of stars standing clear of
+    the sky, against what the sequence usually manages, is a free and
+    honest verdict -- no model, no extra pass.
+
+    Three bands rather than two. Well below the usual count is cloud
+    and is set aside; near the usual count is clear and is kept; the
+    band between is DOUBTFUL, kept but marked, because that is exactly
+    where a threshold is a coin toss and where asking something that
+    can actually look is worth the money.
+    """
+    told = json.loads(register_text)
+    frames = told.get("frames") or []
+    counts = [int(item.get("stars", 0)) for item in frames]
+    if not counts:
+        return register_text
+    usual = float(np.median(counts)) or 1.0
+    for item in frames:
+        share = int(item.get("stars", 0)) / usual
+        if share < clouded:
+            item["keep"] = False
+            item["verdict"] = "clouded"
+        elif share < clear:
+            item["keep"] = True
+            item["verdict"] = "doubtful"
+        else:
+            item["keep"] = True
+            item["verdict"] = "clear"
+        item["share"] = round(share, 3)
+    told["frames"] = frames
+    told["screened"] = True
+    return json.dumps(told)
+
+
+def doubtful(screened_text: str) -> list:
+    """The frames a threshold cannot honestly call, by name."""
+    told = json.loads(screened_text)
+    return [str(item["name"]) for item in (told.get("frames") or [])
+            if item.get("verdict") == "doubtful"]
+
+
+def screen_note(screened_text: str) -> str:
+    told = json.loads(screened_text)
+    frames = told.get("frames") or []
+    aside = [item for item in frames if not item.get("keep", True)]
+    unsure = [item for item in frames
+              if item.get("verdict") == "doubtful"]
+    if not aside and not unsure:
+        return (f"All {len(frames)} frames show the sky the sequence "
+                "usually shows; none set aside.")
+    parts = []
+    if aside:
+        parts.append(
+            f"{len(aside)} frame(s) set aside as clouded "
+            f"({', '.join(str(item['name']) for item in aside[:4])}"
+            + (", …" if len(aside) > 4 else "") + ")")
+    if unsure:
+        parts.append(f"{len(unsure)} doubtful, kept but marked")
+    return "; ".join(parts) + "."
+
+
+def cloud_prompt(proof: str) -> str:
+    return (
+        "This is one frame of a night-sky sequence being stacked. Is "
+        "its sky USABLE? Say usable=false when cloud, haze or a "
+        "brightening sky has taken the stars away or veiled them -- "
+        "such a frame poisons an average and is better left out. Say "
+        "usable=true for a clear sky, even a faint or noisy one, and "
+        "for thin high cloud that leaves the stars plainly visible. A "
+        "few passing clouds at one edge of an otherwise clear frame "
+        "are usable. In 'why', say in a few words what you saw, so a "
+        "wrong call is readable afterwards.")
+
+
+def judge_frame(screened_text: str, name: str, found: Any) -> str:
+    """One frame's second opinion, written where the stack will read it."""
+    told = json.loads(screened_text)
+    said = found if isinstance(found, dict) else {
+        key: getattr(found, key, None) for key in ("usable", "why")}
+    for item in told.get("frames") or []:
+        if str(item.get("name")) != str(name):
+            continue
+        item["keep"] = bool(said.get("usable"))
+        item["verdict"] = "kept by eye" if item["keep"] else "clouded by eye"
+        item["why"] = str(said.get("why") or "")[:120]
+    return json.dumps(told)
 
 
 def stack_valid(told: Any) -> bool:

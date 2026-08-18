@@ -175,6 +175,44 @@ class SuperimposeDialog(QDialog):
         darks_row.addWidget(pick_darks)
         asks.addRow("Dark frames", darks_row)
 
+        flats_row = QHBoxLayout()
+        flats_row.setSpacing(8)
+        self.flats = QLineEdit()
+        self.flats.setPlaceholderText("optional — a folder of flat frames")
+        self.flats.setFont(theme.body(9))
+        self.flats.setToolTip(tooltip(
+            "Frames of an evenly lit field -- a dawn sky, a white "
+            "screen -- shot at the same focus and aperture. A flat "
+            "carries the lens's vignetting, the shadow of every speck "
+            "on the sensor, and each pixel's own sensitivity, and "
+            "dividing by it takes all three out at once."))
+        flats_row.addWidget(self.flats, 1)
+        pick_flats = QPushButton("Choose…")
+        pick_flats.setObjectName("ghost")
+        pick_flats.setFont(theme.body(9))
+        pick_flats.clicked.connect(
+            lambda: self._choose_into(self.flats, "The flat frames"))
+        flats_row.addWidget(pick_flats)
+        asks.addRow("Flat frames", flats_row)
+
+        bias_row = QHBoxLayout()
+        bias_row.setSpacing(8)
+        self.bias = QLineEdit()
+        self.bias.setPlaceholderText("optional — a folder of bias frames")
+        self.bias.setFont(theme.body(9))
+        self.bias.setToolTip(tooltip(
+            "The shortest exposure the camera can make, with the cap "
+            "on: what the sensor reads before any light or any time. "
+            "It comes off the flats and the lights alike."))
+        bias_row.addWidget(self.bias, 1)
+        pick_bias = QPushButton("Choose…")
+        pick_bias.setObjectName("ghost")
+        pick_bias.setFont(theme.body(9))
+        pick_bias.clicked.connect(
+            lambda: self._choose_into(self.bias, "The bias frames"))
+        bias_row.addWidget(pick_bias)
+        asks.addRow("Bias frames", bias_row)
+
         where_row = QHBoxLayout()
         where_row.setSpacing(8)
         self.where = QLineEdit(str(
@@ -195,6 +233,18 @@ class SuperimposeDialog(QDialog):
         self.only_selected.setChecked(bool(self.selection))
         self.only_selected.setEnabled(bool(self.selection))
         column.addWidget(self.only_selected)
+
+        self.judge = QCheckBox(
+            "Ask about the frames the star count cannot call (paid, a "
+            "few calls)")
+        self.judge.setFont(theme.body(9))
+        self.judge.setToolTip(tooltip(
+            "Cloud hides stars and brightens the sky, and both are "
+            "already measured -- so most frames are judged for "
+            "nothing. What is left is the band where a threshold is a "
+            "coin toss: thin cloud, a brightening sky, haze. Those "
+            "frames, and only those, are shown to a model."))
+        column.addWidget(self.judge)
 
         self.demosaic = QCheckBox(
             "Demosaic every frame — slower, and the only honest way to "
@@ -243,12 +293,18 @@ class SuperimposeDialog(QDialog):
         held = registering and self.tripod.isChecked()
         self.focal.setEnabled(held)
         self.sensor.setEnabled(held)
+        # Trails average nothing, so a clouded frame cannot poison
+        # them; handheld already spends its calls on recognition.
+        self.judge.setEnabled(held)
 
     def _choose_darks(self) -> None:
+        self._choose_into(self.darks, "The dark frames")
+
+    def _choose_into(self, field, title: str) -> None:
         chosen = QFileDialog.getExistingDirectory(
-            self, "The dark frames", self.darks.text() or self.photos)
+            self, title, field.text() or self.photos)
         if chosen:
-            self.darks.setText(chosen)
+            field.setText(chosen)
 
     def _choose_where(self) -> None:
         chosen = QFileDialog.getExistingDirectory(
@@ -272,6 +328,8 @@ class SuperimposeDialog(QDialog):
             "mode": self.mode(),
             "only": "",
             "darks": self.darks.text().strip(),
+            "flats": self.flats.text().strip(),
+            "bias": self.bias.text().strip(),
             "sigma": "2.5",
             "output": str(home),
             "demosaic": "true" if self.demosaic.isChecked() else "false",
@@ -286,6 +344,8 @@ class SuperimposeDialog(QDialog):
         else:
             parameters["focal_mm"] = str(self.focal.value())
             parameters["sensor_mm"] = str(self.sensor.value())
+            if self.judge.isEnabled() and self.judge.isChecked():
+                parameters["proofs_dir"] = str(home / "keyframes")
         if self.only_selected.isChecked() and self.selection:
             # Three hundred names do not fit in a parameter; they ride
             # in a small file beside the run's own outputs.
@@ -299,6 +359,10 @@ class SuperimposeDialog(QDialog):
                     f"The selection could not be written: {exc}")
                 return None
             parameters["only"] = str(chosen)
-        program = ("handheld_stack.kim" if self.handheld.isChecked()
-                   else "superimpose.kim")
+        if self.handheld.isChecked():
+            program = "handheld_stack.kim"
+        elif self.judge.isEnabled() and self.judge.isChecked():
+            program = "clear_stack.kim"
+        else:
+            program = "superimpose.kim"
         return {"program": program, "parameters": parameters}

@@ -63,6 +63,8 @@ BUILT_INS = (
      "Lay many frames of one sky on each other: trails, or a stack."),
     ("handheld_stack.kim",
      "Stack a handheld sky: a model recognises, the stars register."),
+    ("clear_stack.kim",
+     "Stack a sky, asking about the frames a threshold cannot call."),
 )
 
 _PARAM_RE = re.compile(

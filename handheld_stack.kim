@@ -26,6 +26,8 @@ param mode: text = "clipped"
 param only: text = ""
 param every: num = 20
 param darks: text = ""
+param flats: text = ""
+param bias: text = ""
 param sigma: num = 2.5
 param proofs_dir: text = ""
 param output: text = ""
@@ -60,7 +62,10 @@ print(hints_note(hints))
 -- the search; the stars decide the answer.
 placed := register(photos, pattern, only, 0, 23.5, demosaic, true, hints)
 
-stacked := superimpose(placed, mode, output, darks, sigma)
+screened := screen_frames(placed)
+print(screen_note(screened))
+
+stacked := superimpose(screened, mode, output, darks, sigma, flats, bias)
 check stack_valid(stacked)
 print(stack_note(stacked))
 

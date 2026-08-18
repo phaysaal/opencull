@@ -26,6 +26,8 @@ param only: text = ""
 param focal_mm: num = 0
 param sensor_mm: num = 23.5
 param darks: text = ""
+param flats: text = ""
+param bias: text = ""
 param sigma: num = 2.5
 param output: text = ""
 param demosaic: bool = true
@@ -36,8 +38,15 @@ use python "superimpose_kernel.py"
 -- a stack cannot be honest without it.
 placed := register(photos, pattern, only, focal_mm, sensor_mm, demosaic)
 
+-- What the sky was doing while each frame was open. Cloud hides
+-- stars and brightens the background, and both were already measured
+-- by the pass that registered -- so setting aside the frames the sky
+-- ruined costs nothing and no model is asked.
+screened := screen_frames(placed)
+print(screen_note(screened))
+
 -- The frames laid on each other, the way the mode asks for.
-stacked := superimpose(placed, mode, output, darks, sigma)
+stacked := superimpose(screened, mode, output, darks, sigma, flats, bias)
 check stack_valid(stacked)
 print(stack_note(stacked))
 

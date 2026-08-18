@@ -409,6 +409,192 @@ class ModelAnchorTests(unittest.TestCase):
             self.assertEqual(len(told["seen"]), 2)
 
 
+class CalibrationTests(unittest.TestCase):
+    """Darks come off, flats divide out, and the order is not a taste."""
+
+    def calibration(self, folder: Path, name: str, level, count: int = 3):
+        home = folder / name
+        home.mkdir(parents=True, exist_ok=True)
+        for index in range(count):
+            field = np.asarray(level, np.float32)
+            if field.ndim == 0:
+                field = np.full((HEIGHT, WIDTH, 3), float(level),
+                                np.float32)
+            noisy = np.clip(field + np.random.default_rng(
+                900 + index).normal(0, 0.002, field.shape), 0, 1)
+            Image.fromarray(
+                (noisy * 255 + 0.5).astype(np.uint8)
+            ).save(home / f"{name}{index}.jpg", quality=99)
+        return str(home)
+
+    def vignetted(self):
+        """A flat that is bright in the middle and dark at the corners."""
+        grid_y, grid_x = np.mgrid[0:HEIGHT, 0:WIDTH]
+        away = np.sqrt(((grid_x - WIDTH / 2) / (WIDTH / 2)) ** 2
+                       + ((grid_y - HEIGHT / 2) / (HEIGHT / 2)) ** 2)
+        shape = np.clip(0.9 - 0.35 * away, 0.2, 1.0).astype(np.float32)
+        return np.stack([shape] * 3, -1)
+
+    def test_a_flat_takes_the_vignetting_out(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            lit = root / "lights"
+            lit.mkdir()
+            shape = self.vignetted()
+            # An even sky seen through a vignetting lens.
+            for index in range(3):
+                seen = np.clip(0.5 * shape + np.random.default_rng(
+                    950 + index).normal(0, 0.004, shape.shape), 0, 1)
+                Image.fromarray(
+                    (seen * 255 + 0.5).astype(np.uint8)
+                ).save(lit / f"L{index}.jpg", quality=99)
+            flats = self.calibration(root, "flats", shape)
+            placed = json.dumps({
+                "format": sk.FORMAT, "photos": str(lit),
+                "pattern": "*.jpg", "demosaic": False,
+                "frames": [{"name": f"L{i}.jpg", "dx": 0.0, "dy": 0.0,
+                            "turn": 0.0} for i in range(3)]})
+
+            def corner_against_middle(told):
+                held = np.asarray(Image.open(
+                    told["proof"]).convert("L"), float) / 255.0
+                return (float(held[20:40, 20:40].mean())
+                        / max(float(held[140:160, 190:210].mean()), 1e-6))
+            plain = json.loads(sk.superimpose(
+                placed, "average", output=str(root / "plain")))
+            flattened = json.loads(sk.superimpose(
+                placed, "average", output=str(root / "flat"),
+                flats=flats))
+            self.assertTrue(flattened["flat_divided"])
+            # Corners were far darker; after the flat they match.
+            self.assertLess(corner_against_middle(plain), 0.75)
+            self.assertGreater(corner_against_middle(flattened), 0.9)
+
+    def test_a_flat_corrects_shape_and_not_colour(self):
+        # A flat shot on a warm panel must not cool every frame it
+        # touches, so it is normalised per channel.
+        warm = np.zeros((HEIGHT, WIDTH, 3), np.float32)
+        warm[..., 0], warm[..., 1], warm[..., 2] = 0.8, 0.6, 0.4
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            flats = self.calibration(root, "flats", warm)
+            made = sk._master_flat(flats, "*.jpg", False)
+            for channel in range(3):
+                self.assertAlmostEqual(
+                    float(np.median(made[..., channel])), 1.0, places=2)
+
+    def test_a_dark_is_subtracted_and_a_bias_before_it(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            lit = root / "lights"
+            lit.mkdir()
+            for index in range(3):
+                seen = np.full((HEIGHT, WIDTH, 3), 0.30, np.float32)
+                Image.fromarray(
+                    (seen * 255 + 0.5).astype(np.uint8)
+                ).save(lit / f"L{index}.jpg", quality=99)
+            darks = self.calibration(root, "darks", 0.08)
+            placed = json.dumps({
+                "format": sk.FORMAT, "photos": str(lit),
+                "pattern": "*.jpg", "demosaic": False,
+                "frames": [{"name": f"L{i}.jpg", "dx": 0.0, "dy": 0.0,
+                            "turn": 0.0} for i in range(3)]})
+            told = json.loads(sk.superimpose(
+                placed, "average", output=str(root / "out"), darks=darks))
+            self.assertTrue(told["dark_subtracted"])
+            held = np.asarray(Image.open(
+                told["proof"]).convert("L"), float) / 255.0
+            self.assertAlmostEqual(float(held.mean()), 0.22, delta=0.02)
+
+    def test_one_calibration_frame_is_not_a_master(self):
+        with tempfile.TemporaryDirectory() as folder:
+            alone = self.calibration(Path(folder), "darks", 0.08, count=1)
+            self.assertIsNone(sk._median_of(alone, "*.jpg", False))
+
+
+class CloudScreenTests(unittest.TestCase):
+    """What the stars already said about the sky they stood in."""
+
+    def placed(self, counts):
+        return json.dumps({
+            "format": sk.FORMAT, "photos": ".", "pattern": "*.jpg",
+            "frames": [{"name": f"F{index}.jpg", "stars": count,
+                        "dx": 0.0, "dy": 0.0, "turn": 0.0}
+                       for index, count in enumerate(counts)]})
+
+    def test_three_bands_not_two(self):
+        told = json.loads(sk.screen_frames(
+            self.placed([80, 78, 20, 48, 82])))
+        verdicts = [item["verdict"] for item in told["frames"]]
+        self.assertEqual(verdicts,
+                         ["clear", "clear", "clouded", "doubtful",
+                          "clear"])
+        self.assertFalse(told["frames"][2]["keep"])
+        self.assertTrue(told["frames"][3]["keep"])   # doubtful is kept
+
+    def test_the_doubtful_are_named_for_a_second_opinion(self):
+        screened = sk.screen_frames(self.placed([80, 78, 20, 48, 82]))
+        self.assertEqual(sk.doubtful(screened), ["F3.jpg"])
+        self.assertIn("set aside", sk.screen_note(screened))
+
+    def test_a_clear_night_sets_nothing_aside(self):
+        screened = sk.screen_frames(self.placed([80, 78, 82, 79]))
+        self.assertEqual(sk.doubtful(screened), [])
+        self.assertIn("none set aside", sk.screen_note(screened))
+
+    def test_a_frame_set_aside_is_not_in_the_stack(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            night(root, [(0.0, 0.0)] * 4)
+            placed = json.loads(sk.register(
+                folder, "*.jpg", demosaic=False))
+            placed["frames"][1]["keep"] = False
+            told = json.loads(sk.superimpose(
+                json.dumps(placed), "average", output=str(root / "out")))
+            self.assertEqual(told["frames_used"], 3)
+            self.assertEqual(told["set_aside"], ["N001.jpg"])
+
+    def test_a_sky_nobody_could_use_refuses_rather_than_pretends(self):
+        with tempfile.TemporaryDirectory() as folder:
+            night(Path(folder), [(0.0, 0.0)] * 3)
+            placed = json.loads(sk.register(
+                folder, "*.jpg", demosaic=False))
+            for item in placed["frames"]:
+                item["keep"] = False
+            told = json.loads(sk.superimpose(
+                json.dumps(placed), "average"))
+            self.assertIn("set aside", told["error"])
+
+    def test_the_screen_reads_star_counts_the_registration_took(self):
+        with tempfile.TemporaryDirectory() as folder:
+            night(Path(folder), [(0.0, 0.0), (4.0, 1.0)])
+            placed = json.loads(sk.register(
+                folder, "*.jpg", demosaic=False))
+            for item in placed["frames"]:
+                self.assertGreater(item["stars"], 60)
+                self.assertGreater(item["sky"], 0.0)
+
+    def test_the_question_asked_is_about_use_not_beauty(self):
+        asked = sk.cloud_prompt("x.jpg")
+        self.assertIn("usable", asked)
+        self.assertIn("poisons an average", asked)
+        # Thin cloud that leaves stars visible is explicitly usable.
+        self.assertIn("plainly visible", asked)
+
+    def test_a_second_opinion_overrides_the_threshold(self):
+        screened = sk.screen_frames(self.placed([80, 78, 20, 48, 82]))
+        told = json.loads(sk.judge_frame(
+            screened, "F3.jpg", {"usable": False, "why": "hazed over"}))
+        doubted = told["frames"][3]
+        self.assertFalse(doubted["keep"])
+        self.assertEqual(doubted["verdict"], "clouded by eye")
+        self.assertIn("hazed", doubted["why"])
+        kept = json.loads(sk.judge_frame(
+            screened, "F3.jpg", {"usable": True, "why": "thin cloud"}))
+        self.assertTrue(kept["frames"][3]["keep"])
+        self.assertEqual(kept["frames"][3]["verdict"], "kept by eye")
+
+
 class ProgramTests(unittest.TestCase):
     def test_a_finished_stack_passes_its_check_and_says_so(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -428,12 +614,13 @@ class ProgramTests(unittest.TestCase):
         self.assertIn("no frames", sk.stack_note(
             sk.superimpose(told, "trails")))
 
-    def test_both_programs_are_in_the_catalogue(self):
+    def test_all_three_programs_are_in_the_catalogue(self):
         from opencull_gui.programs import BUILT_INS
 
         listed = [name for name, _purpose in BUILT_INS]
-        self.assertIn("superimpose.kim", listed)
-        self.assertIn("handheld_stack.kim", listed)
+        for name in ("superimpose.kim", "handheld_stack.kim",
+                     "clear_stack.kim"):
+            self.assertIn(name, listed)
 
 
 class DialogTests(unittest.TestCase):
@@ -507,6 +694,46 @@ class DialogTests(unittest.TestCase):
             self.assertIn("every", told)
             self.assertIn("proofs_dir", told)
             self.assertNotIn("focal_mm", told)
+
+    def test_asking_about_doubtful_frames_picks_its_own_program(self):
+        from opencull_qt.superimpose import SuperimposeDialog
+
+        with tempfile.TemporaryDirectory() as folder:
+            dialog = SuperimposeDialog(folder)
+            self.addCleanup(dialog.deleteLater)
+            dialog.clipped.setChecked(True)
+            dialog.tripod.setChecked(True)
+            dialog.judge.setChecked(True)
+            self.assertEqual(dialog.run_request()["program"],
+                             "clear_stack.kim")
+            dialog.judge.setChecked(False)
+            self.assertEqual(dialog.run_request()["program"],
+                             "superimpose.kim")
+
+    def test_trails_cannot_be_poisoned_so_are_not_offered_the_ask(self):
+        from opencull_qt.superimpose import SuperimposeDialog
+
+        with tempfile.TemporaryDirectory() as folder:
+            dialog = SuperimposeDialog(folder)
+            self.addCleanup(dialog.deleteLater)
+            dialog.trails.setChecked(True)
+            self.assertFalse(dialog.judge.isEnabled())
+            dialog.clipped.setChecked(True)
+            self.assertTrue(dialog.judge.isEnabled())
+
+    def test_the_calibration_folders_reach_the_program(self):
+        from opencull_qt.superimpose import SuperimposeDialog
+
+        with tempfile.TemporaryDirectory() as folder:
+            dialog = SuperimposeDialog(folder)
+            self.addCleanup(dialog.deleteLater)
+            dialog.darks.setText("/darks")
+            dialog.flats.setText("/flats")
+            dialog.bias.setText("/bias")
+            told = dialog.run_request()["parameters"]
+            self.assertEqual(told["darks"], "/darks")
+            self.assertEqual(told["flats"], "/flats")
+            self.assertEqual(told["bias"], "/bias")
 
     def test_the_three_pictures_are_the_three_modes(self):
         from opencull_qt.superimpose import SuperimposeDialog

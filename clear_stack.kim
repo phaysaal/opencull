@@ -1,0 +1,60 @@
+-- Stack a sky, asking about the frames a threshold cannot call.
+--
+-- Cloud hides stars and brightens the background, and both are already
+-- measured by the pass that registers -- so most frames are judged for
+-- nothing: well below the sequence's usual star count is cloud, near
+-- it is clear. What is left is the band between, where a threshold is
+-- a coin toss: thin cloud that veiled some stars, a brightening sky, a
+-- frame shot through haze. Those are the frames worth paying to look
+-- at, and only those.
+--
+-- So the model is asked one question about a handful of frames, not
+-- about all of them: is this sky usable? A clouded frame left in an
+-- average poisons it -- that is the whole reason to ask.
+
+param photos: text = "."
+param pattern: text = "*.RAF"
+param mode: text = "clipped"
+param only: text = ""
+param focal_mm: num = 0
+param sensor_mm: num = 23.5
+param darks: text = ""
+param flats: text = ""
+param bias: text = ""
+param sigma: num = 2.5
+param proofs_dir: text = ""
+param output: text = ""
+param demosaic: bool = true
+
+use "agents.kim"
+use python "superimpose_kernel.py"
+
+schema Sky:
+    usable: bool
+    why: text
+
+-- Where every frame sits, and what its sky was like.
+placed := register(photos, pattern, only, focal_mm, sensor_mm, demosaic)
+screened := screen_frames(placed)
+print(screen_note(screened))
+
+-- The band a threshold cannot honestly call, and only that band.
+unsure := doubtful(screened)
+forall name in unsure:
+    proof := sky_proof(photos, name, proofs_dir)
+    shown := observe image(proof)
+    check shown.exists
+    said := memo gen<Sky>(cloud_prompt(proof), images=[shown]) by A
+    screened := judge_frame(screened, name, said)
+
+print(screen_note(screened))
+
+stacked := superimpose(screened, mode, output, darks, sigma, flats, bias)
+check stack_valid(stacked)
+print(stack_note(stacked))
+
+where := stack_home(stacked)
+check stack_valid(stacked)
+act file.overwrite(where, stacked)
+settle until check file_exists(where) within 5
+commit(stacked)
