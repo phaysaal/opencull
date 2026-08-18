@@ -221,19 +221,9 @@ class FineTunePageTests(unittest.TestCase):
         self.assertEqual(page.list.item(row).text(), NAMES[0])
         page._curve_changed([[0.0, 0.0], [128.0, 190.0], [255.0, 255.0]])
         self.assertIn("●", page.list.item(row).text())
-        page.workspace.render_full = (
-            lambda *args, **kw: {"render": {"variant": "v1"}})
+        self.deliverable(page)
         page.keep()
-        # The export runs on a worker now; wait for it to announce.
-        import time
-
-        from PySide6.QtWidgets import QApplication
-
-        deadline = time.monotonic() + 5
-        while time.monotonic() < deadline \
-                and page.keep_button.text() != "Export":
-            QApplication.instance().processEvents()
-            time.sleep(0.01)
+        self.exported(page)
         self.assertEqual(page.list.item(row).text(), NAMES[0])
 
     def test_undoing_everything_settles_the_dot(self):
@@ -598,10 +588,13 @@ class FineTunePageTests(unittest.TestCase):
         gui_thread = threading.get_ident()
         seen = {}
 
+        outbox = self.deliverable(page)
+
         def slow_render(*args, **kw):
             seen["thread"] = threading.get_ident()
             time.sleep(0.2)
-            return {"render": {"variant": "v1"}}
+            return {"render": {"variant": "v1",
+                               "path": str(self.root / "render.jpg")}}
         page.workspace.render_full = slow_render
         page.keep()
         self.assertEqual(page.keep_button.text(), "Exporting…")
@@ -625,15 +618,15 @@ class FineTunePageTests(unittest.TestCase):
         page.show_treatment("as-shot")
         page.changes["+insert"] = [{"op": "tone.exposure", "value": 0.5}]
         page._rebuild_mirror()
+        outbox = self.root / "outbox"
+        outbox.mkdir(exist_ok=True)
+        page._ask_destination = lambda suggested: str(outbox / suggested)
         page.keep()
-        deadline = time.monotonic() + 30
-        while time.monotonic() < deadline \
-                and page.keep_button.text() != "Export":
-            QApplication.instance().processEvents()
-            time.sleep(0.02)
-        # Registered as its own variant, never as the untouched JPEG --
+        self.exported(page, deadline_s=30)
+        # Registered as its own variant, delivered under its own name --
         # the untouched path once swallowed the adjustments silently.
         self.assertIn("as-shot-adjusted", page.status.text())
+        self.assertTrue(list(outbox.glob("*as-shot-adjusted*.jpg")))
 
     def twice_asked(self):
         page = self.page()
@@ -1150,13 +1143,32 @@ class FineTunePageTests(unittest.TestCase):
             QApplication.instance().processEvents()
             time.sleep(0.01)
 
+    def deliverable(self, page):
+        """The dialog answered and the delivery mocked: keep() runs whole."""
+        outbox = self.root / "outbox"
+        outbox.mkdir(exist_ok=True)
+        page._ask_destination = lambda suggested: str(outbox / suggested)
+        rendered = self.root / "render.jpg"
+        if not rendered.is_file():
+            from PIL import Image as PILImage
+
+            PILImage.new("RGB", (8, 6), (90, 80, 70)).save(rendered)
+        page.workspace.render_full = (
+            lambda *args, **kw: {"render": {
+                "variant": "standard-adjusted", "path": str(rendered)}})
+        page.workspace.export_render = (
+            lambda path, destination: {"destination": destination})
+        return outbox
+
     def test_keeping_renders_at_full_size_with_the_adjustments(self):
         page = self.page()
         exposure = self.control(page, "tone.exposure")
         exposure.slider.setValue(exposure._tick(0.30))
+        self.deliverable(page)
         with mock.patch.object(
             page.workspace, "render_full",
-            return_value={"render": {"variant": "standard-adjusted"}},
+            return_value={"render": {"variant": "standard-adjusted",
+                                     "path": str(self.root / "render.jpg")}},
         ) as rendered:
             page.keep()
             self.exported(page)
@@ -1175,18 +1187,16 @@ class FineTunePageTests(unittest.TestCase):
         page = self.page()
         exposure = self.control(page, "tone.exposure")
         exposure.slider.setValue(exposure._tick(0.30))
-        with mock.patch.object(
-            page.workspace, "render_full",
-            return_value={"render": {"variant": "standard-adjusted"}},
-        ):
-            page.keep()
-            self.exported(page)
+        self.deliverable(page)
+        page.keep()
+        self.exported(page)
         self.assertIn("standard-adjusted", page.status.text())
 
     def test_a_failed_render_is_reported_rather_than_raised(self):
         page = self.page()
         exposure = self.control(page, "tone.exposure")
         exposure.slider.setValue(exposure._tick(0.30))
+        self.deliverable(page)
         with mock.patch.object(
             page.workspace, "render_full", side_effect=RuntimeError("no decoder"),
         ):

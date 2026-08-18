@@ -205,7 +205,8 @@ class _ExportSignals(QObject):
 class _ExportJob(QRunnable):
     def __init__(self, workspace: DevelopmentWorkspace, photo: str,
                  treatment: str, engine: str, demosaic: str,
-                 destination: str, signals: _ExportSignals):
+                 destination: str, signals: _ExportSignals,
+                 adjustments: dict | None = None):
         super().__init__()
         self.workspace = workspace
         self.photo = photo
@@ -214,14 +215,18 @@ class _ExportJob(QRunnable):
         self.demosaic = demosaic
         self.destination = destination
         self.signals = signals
+        self.adjustments = adjustments
         self.setAutoDelete(True)
 
     def run(self) -> None:
         try:
             # Full size, and registered in the manifest before it leaves, so
-            # what was delivered has a recorded provenance.
+            # what was delivered has a recorded provenance -- carrying the
+            # photographer's adjustments where the asking came from the
+            # fine-tune page.
             result = self.workspace.render_full(
                 self.photo, self.treatment, self.engine, self.demosaic,
+                adjustments=self.adjustments,
                 progress=lambda done, total, what: self.signals.stepped.emit(
                     self.photo, done, total, what))
             record = self.workspace.export_render(
@@ -262,13 +267,13 @@ class Exporter(QObject):
         self._pool.setMaxThreadCount(1)
 
     def export(self, photo: str, treatment: str, engine: str, demosaic: str,
-               destination: str) -> None:
+               destination: str, adjustments: dict | None = None) -> None:
         self.pending += 1
         self.asked += 1
         self.progressed.emit(self.asked - self.pending, self.asked)
         self._pool.start(_ExportJob(
             self.workspace, photo, treatment, engine, demosaic, destination,
-            self._signals))
+            self._signals, adjustments))
 
     def _finished(self, photo: str, requested: str, written: str) -> None:
         self._settle()

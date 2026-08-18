@@ -921,37 +921,6 @@ class CurvePanel(QWidget):
         painter.end()
 
 
-class _ExportSignals(QObject):
-    done = Signal(str, dict)
-    failed = Signal(str, str)
-
-
-class _ExportJob(QRunnable):
-    """One full-size render, off the interface thread."""
-
-    def __init__(self, workspace, photo: str, treatment: str, engine: str,
-                 demosaic: str, changes: dict, signals: _ExportSignals):
-        super().__init__()
-        self.workspace = workspace
-        self.photo = photo
-        self.treatment = treatment
-        self.engine = engine
-        self.demosaic = demosaic
-        self.changes = changes
-        self.signals = signals
-        self.setAutoDelete(True)
-
-    def run(self) -> None:
-        try:
-            record = self.workspace.render_full(
-                self.photo, self.treatment, self.engine, self.demosaic,
-                adjustments=self.changes)
-        except Exception as exc:                     # noqa: BLE001 - reported
-            self.signals.failed.emit(self.photo, str(exc))
-            return
-        self.signals.done.emit(self.photo, record or {})
-
-
 class FineTunePage(QWidget):
     """The operations behind one treatment, and the proof of moving them."""
 
@@ -1011,12 +980,14 @@ class FineTunePage(QWidget):
         # stale proof as a sharp patch until the full render lands.
         self.fast = Renderer(workspace, PROOF_EDGE, None, self)
         self.fast.done.connect(self._fast_rendered)
-        # Exports run one at a time, off the interface thread.
-        self._export_pool = QThreadPool(self)
-        self._export_pool.setMaxThreadCount(1)
-        self._export_signals = _ExportSignals()
-        self._export_signals.done.connect(self._exported)
-        self._export_signals.failed.connect(self._export_failed)
+        # Exports ride the same road the develop page's do: the save
+        # dialog first, then a full-size render and delivery on the
+        # exporter's own thread, never abandoned mid-copy.
+        from .develop import Exporter
+        self.exporter = Exporter(workspace, self)
+        self.exporter.done.connect(self._exported)
+        self.exporter.failed.connect(self._export_failed)
+        self.exporter.stepped.connect(self._export_stepped)
         self._fast_window: dict | None = None
         # Thumbnails for the filmstrip, at the develop page's own edge so
         # the two pages share one cache and the icons are usually free.
@@ -3210,12 +3181,13 @@ class FineTunePage(QWidget):
         self._report(f"{photo} could not be rendered: {reason}", "alarm")
 
     def keep(self) -> None:
-        """Record this version at full size, beside the one it came from.
+        """Export this version: the same door the develop page opens.
 
-        On a worker, never on the interface thread: a full-size X-Trans
-        render is a minute of work, and a minute of frozen window is a
-        crash as far as anyone watching it can tell -- the desktop
-        offers to force-quit, and the offer gets taken.
+        The save dialog first -- where the file will land is the
+        photographer's first question, not an afterthought -- and only
+        then the full-size render and the copy, on the exporter's own
+        thread. The page stays usable throughout; a minute of frozen
+        window reads as a crash to anyone watching it.
         """
         if not self.current or not self.treatment:
             return
@@ -3224,31 +3196,54 @@ class FineTunePage(QWidget):
                 "Nothing has been moved, so this is the treatment as "
                 "suggested. Develop it from the development page.", "alarm")
             return
+        from opencull_gui.development import suggested_filename
+        chosen = self._ask_destination(suggested_filename(
+            self.current, f"{self.treatment}-adjusted"))
+        if not chosen:
+            return
         self.keep_button.setEnabled(False)
         self.keep_button.setText("Exporting…")
         self._report(
-            f"Rendering {self.current} at full size with your adjustments. "
-            "The page stays usable; the export announces itself when it "
-            "lands.")
-        self._export_pool.start(_ExportJob(
-            self.workspace, self.current, self.treatment, self.engine(),
-            self._demosaic(), json.loads(json.dumps(self.changes)),
-            self._export_signals))
+            f"Exporting {self.current} at full size with your "
+            "adjustments. The page stays usable; the export announces "
+            "itself when the file is written.")
+        self.exporter.export(
+            self.current, self.treatment, self.engine(), self._demosaic(),
+            chosen, adjustments=json.loads(json.dumps(self.changes)))
 
-    def _exported(self, photo: str, record: dict) -> None:
+    def _ask_destination(self, suggested: str) -> str:
+        """Where the export should land; empty means the ask was closed."""
+        from PySide6.QtWidgets import QFileDialog
+
+        directory = Path(str(
+            self.workspace.project.get("export_directory")
+            or Path.home() / "Pictures")).expanduser()
+        directory.mkdir(parents=True, exist_ok=True)
+        chosen, _filter = QFileDialog.getSaveFileName(
+            self, "Export this version", str(directory / suggested),
+            "JPEG image (*.jpg *.jpeg)",
+            options=QFileDialog.Option.DontConfirmOverwrite)
+        return chosen
+
+    def _export_stepped(self, photo: str, done: int, total: int,
+                        _what: str) -> None:
+        if photo == self.current and total > 0:
+            self.keep_button.setText(
+                f"Exporting… {int(done * 100 / total)}%")
+
+    def _exported(self, photo: str, _requested: str, written: str) -> None:
         self.keep_button.setEnabled(True)
         self.keep_button.setText("Export")
         self._ledger.mark_exported(photo)
         self._dress_rows()
-        variant = str((record.get("render") or {}).get("variant") or "")
         self._report(
-            f"Exported {photo} as {variant}. It is on the export page "
-            "beside the treatment it came from.", "ok")
+            f"Exported {photo} to {Path(written).name}. The render is "
+            "also on the export page with its provenance.", "ok")
 
     def _export_failed(self, photo: str, reason: str) -> None:
         self.keep_button.setEnabled(True)
         self.keep_button.setText("Export")
-        self._report(f"{photo} could not be rendered: {reason}", "alarm")
+        self._report(f"{photo} could not be exported: {reason}", "alarm")
 
     # --- keeping a look ---------------------------------------------------
 
@@ -3366,3 +3361,4 @@ class FineTunePage(QWidget):
     def shutdown(self) -> None:
         self.renderer.shutdown()
         self.fast.shutdown()
+        self.exporter.shutdown()

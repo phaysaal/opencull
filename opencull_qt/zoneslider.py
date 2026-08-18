@@ -55,6 +55,14 @@ class ZoneSlider(QSlider):
         # this frame's own pixels will do.
         self._ramp: list[tuple[float, QColor]] = []
         self.setMinimumHeight(26)
+        # The wheel belongs to the panel. A column of thirty sliders is
+        # scrolled with the wheel, and any slider under the passing
+        # pointer that grabs it changes a value nobody meant to change.
+        # Adjusting is the drag and the keyboard; scrolling is the wheel.
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+    def wheelEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        event.ignore()
 
     def set_ramp(self, stops: list[tuple[float, tuple[int, int, int]]]) -> None:
         """A left-to-right colour ramp; empty paints nothing."""
