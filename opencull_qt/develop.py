@@ -1181,10 +1181,32 @@ class DevelopPage(QWidget):
         self.treating.setVisible(False)
         layout.addWidget(self.treating)
 
+        # The treatment's story, folded. A Kimiya intent runs to a
+        # paragraph, and a paragraph always on screen reads as scaffolding
+        # left up. One elided line says what it is; the (!) unfolds the
+        # whole of it for whoever asks, the same dot the controls wear.
+        told = QHBoxLayout()
+        told.setContentsMargins(0, 0, 0, 0)
+        told.setSpacing(6)
+        self.intent_line = QLabel("")
+        self.intent_line.setObjectName("hint")
+        self.intent_line.setFont(theme.body(9))
+        told.addWidget(self.intent_line, 1)
+        self.intent_dot = QPushButton("!")
+        self.intent_dot.setObjectName("aboutDot")
+        self.intent_dot.setCheckable(True)
+        self.intent_dot.setFixedSize(16, 16)
+        self.intent_dot.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.intent_dot.setToolTip(tooltip(
+            "The whole of what this treatment says it is doing."))
+        self.intent_dot.toggled.connect(self._unfold_intent)
+        told.addWidget(self.intent_dot)
+        layout.addLayout(told)
         self.intent = QLabel("")
         self.intent.setObjectName("hint")
         self.intent.setWordWrap(True)
         self.intent.setFont(theme.body(9))
+        self.intent.setVisible(False)
         layout.addWidget(self.intent)
 
         self.verdict = QLabel("")
@@ -1504,8 +1526,7 @@ class DevelopPage(QWidget):
             self._chose_treatment(max(row, 0))
         else:
             self.treatment = ""
-            self.intent.setText(
-                "This photograph has no treatment available.")
+            self._say_intent("This photograph has no treatment available.")
             self.finetune_button.setEnabled(False)
 
     def _treatment_row(self, item: dict) -> QListWidgetItem:
@@ -1774,6 +1795,31 @@ class DevelopPage(QWidget):
         if self.treatments.count():
             self._size_treatments()
 
+    def _say_intent(self, text: str) -> None:
+        """One elided line of the story; the whole stays behind the dot."""
+        settled = " ".join(str(text).split())
+        self.intent.setText(str(text))
+        from PySide6.QtCore import Qt as QtFlags
+        from PySide6.QtGui import QFontMetrics
+
+        metrics = QFontMetrics(self.intent_line.font())
+        room = max(self.intent_line.width(), 120)
+        self.intent_line.setText(metrics.elidedText(
+            settled, QtFlags.TextElideMode.ElideRight, room))
+        self.intent_line.setToolTip(tooltip(str(text)) if settled else "")
+        self.intent_line.setVisible(bool(settled))
+        self.intent_dot.setVisible(
+            bool(settled) and metrics.horizontalAdvance(settled) > room)
+        # A new treatment folds the story again.
+        if self.intent_dot.isChecked():
+            self.intent_dot.setChecked(False)
+        else:
+            self.intent.setVisible(False)
+
+    def _unfold_intent(self, on: bool) -> None:
+        self.intent.setVisible(on and bool(self.intent.text()))
+        self._size_treatments()
+
     def _clicked_treatment(self, item: QListWidgetItem) -> None:
         """A click on a treatment asks to see it; a click on the heading folds."""
         if item.data(Qt.ItemDataRole.UserRole) == PRESETS_ROW:
@@ -1790,7 +1836,7 @@ class DevelopPage(QWidget):
         if chosen is None:
             return
         self.treatment = str(chosen["id"])
-        self.intent.setText(str(chosen.get("intent") or ""))
+        self._say_intent(str(chosen.get("intent") or ""))
         # The intent's height just changed; the list's ceiling is what
         # the panel can spare after it, so it must be asked again.
         self._size_treatments()

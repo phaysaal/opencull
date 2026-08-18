@@ -813,6 +813,71 @@ class TimelapseDoorTests(FinetuneDoorTests):
         self.assertEqual(heard[0][0], "eclipse_timelapse.kim")
 
 
+class FoldedIntentTests(unittest.TestCase):
+    """A paragraph of AI intent stays behind the dot, not on the wall."""
+
+    @classmethod
+    def setUpClass(cls):
+        from PySide6.QtWidgets import QApplication
+
+        cls.application = QApplication.instance() or QApplication([])
+
+    def page_with_intent(self, root: Path):
+        report_path, photos = build_shoot(root)
+        assess_and_suggest(root, report_path, photos)
+        from opencull_gui.report import load_report
+        from opencull_qt.develop import DevelopPage, workspace_for
+        from opencull_qt.previews import PreviewLoader
+
+        report = load_report(report_path)
+        workspace = workspace_for(report, photos, decoders=set())
+        from opencull_gui.photos import PhotoStore
+
+        store = PhotoStore(photos, root / "cache")
+        loader = PreviewLoader(store, None)
+        self.addCleanup(loader.shutdown)
+        page = DevelopPage(report, workspace, loader)
+        self.addCleanup(page.shutdown)
+        self.addCleanup(page.deleteLater)
+        return page
+
+    def test_the_intent_shows_one_line_and_folds_the_rest(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as folder:
+            page = self.page_with_intent(Path(folder))
+            page.resize(1200, 800)
+            page._say_intent(
+                "A very long story about dusk being held back " * 8)
+            self.assertFalse(page.intent.isVisible())
+            self.assertIn("…", page.intent_line.text())
+            page.intent_dot.setChecked(True)
+            self.assertTrue(page.intent.text().startswith(
+                "A very long story"))
+
+    def test_a_short_intent_needs_no_dot(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as folder:
+            page = self.page_with_intent(Path(folder))
+            page.resize(1200, 800)
+            page.intent_line.resize(300, 20)
+            page._say_intent("Short.")
+            self.assertFalse(page.intent_dot.isVisibleTo(page))
+
+    def test_switching_treatments_folds_the_story_again(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as folder:
+            page = self.page_with_intent(Path(folder))
+            page.resize(1200, 800)
+            page._say_intent("A long story " * 30)
+            page.intent_dot.setChecked(True)
+            page._say_intent("Another story " * 30)
+            self.assertFalse(page.intent_dot.isChecked())
+            self.assertFalse(page.intent.isVisible())
+
+
 class TreatmentMarkerTests(unittest.TestCase):
     """The page says a frame is being treated, and notices the arrival."""
 
