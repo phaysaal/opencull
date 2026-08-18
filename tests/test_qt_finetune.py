@@ -270,6 +270,74 @@ class FineTunePageTests(unittest.TestCase):
         self.assertAlmostEqual(
             page.frame.magnification(), before, places=2)
 
+    def test_copied_settings_paste_onto_another_frame(self):
+        page = self.page(marked=(NAMES[0], NAMES[1]))
+        page.show_photo(NAMES[0])
+        page._curve_changed([[0.0, 0.0], [128.0, 190.0], [255.0, 255.0]])
+        told = page._settings_of(NAMES[0])
+        self.assertIsNotNone(told)
+        self.assertTrue(page._paste_onto(NAMES[1], told))
+        page.show_photo(NAMES[1])
+        self.assertEqual(page.changes["curve"]["points"][1],
+                         [128.0, 190.0])
+        applied = [op["op"] for op in page.recipe.get("operations", [])]
+        self.assertIn("tone.curve", applied)
+
+    def test_scene_mates_receive_the_settings_together(self):
+        from unittest import mock
+
+        page = self.page(marked=(NAMES[0], NAMES[1], NAMES[2]))
+        page.show_photo(NAMES[0])
+        page._curve_changed([[0.0, 0.0], [128.0, 190.0], [255.0, 255.0]])
+        one_scene = [{"id": "scene-0001", "photos": list(NAMES)}]
+        with mock.patch("opencull_gui.scenes.scene_groups",
+                        return_value=one_scene):
+            mates = [m for m in page._scene_mates(NAMES[0])
+                     if m != NAMES[0]]
+            told = page._settings_of(NAMES[0])
+            landed = [m for m in mates if page._paste_onto(m, told)]
+        self.assertEqual(sorted(landed), [NAMES[1], NAMES[2]])
+        self.assertTrue(page._ledger.unexported(NAMES[1]))
+        self.assertTrue(page._ledger.unexported(NAMES[2]))
+
+    def test_presets_wait_behind_the_more_styles_door(self):
+        page = self.page()
+        page.show_photo(NAMES[0])
+        shown = [str(item.get("id")) for item in page.treatments]
+        self.assertFalse(any(str(item.get("kind")) == "preset"
+                             for item in page.treatments))
+        self.assertTrue(page._more)
+        door = page.treatment_list.item(len(page.treatments))
+        self.assertIn("More styles", door.text())
+        # And no thumbnail was asked for a style behind the door.
+        self.assertNotIn(
+            str(page._more[0]["id"]), shown)
+
+    def test_an_invited_style_joins_the_strip(self):
+        page = self.page()
+        page.show_photo(NAMES[0])
+        style = str(page._more[0]["id"])
+        page._invited.setdefault(NAMES[0], set()).add(style)
+        page.show_photo(NAMES[0])
+        self.assertIn(style,
+                      [str(item.get("id")) for item in page.treatments])
+
+    def test_a_scene_mates_customised_preset_is_shown_here_too(self):
+        from unittest import mock
+
+        page = self.page(marked=(NAMES[0], NAMES[1]))
+        page.show_photo(NAMES[0])
+        style = str(page._more[0]["id"])
+        page._ledger.save(NAMES[1], style, {"curve": {
+            "points": [[0.0, 0.0], [90.0, 120.0], [255.0, 255.0]]}}, 0)
+        one_scene = [{"id": "scene-0001",
+                      "photos": [NAMES[0], NAMES[1]]}]
+        with mock.patch("opencull_gui.scenes.scene_groups",
+                        return_value=one_scene):
+            page.show_photo(NAMES[0])
+        self.assertIn(style,
+                      [str(item.get("id")) for item in page.treatments])
+
     def test_a_colour_mask_layer_offers_its_own_geometry(self):
         page = self.page()
         made = {"shape": "color", "geometry": {

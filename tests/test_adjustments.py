@@ -490,3 +490,48 @@ class CleanColourControlTests(unittest.TestCase):
         self.assertEqual(found["section"], "Detail")
         self.assertEqual(found["label"], "Clean colour")
         self.assertEqual((found["low"], found["high"]), (0.0, 100.0))
+
+
+class TransplantTests(unittest.TestCase):
+    """Moves travel by what they do, not what their compile called them."""
+
+    SOURCE = {"operations": [
+        {"id": "op-001", "op": "tone.exposure", "unit": "EV",
+         "mode": "delta", "value": 0.3},
+        {"id": "op-002", "op": "tone.contrast", "unit": "percent",
+         "mode": "delta", "value": 5.0}]}
+    TARGET = {"operations": [
+        {"id": "op-009", "op": "tone.contrast", "unit": "percent",
+         "mode": "delta", "value": 2.0}]}
+
+    def test_a_move_lands_on_the_targets_own_id(self):
+        moved = adjustments.transplant(
+            {"op-002": {"value": 12.0}}, self.SOURCE, self.TARGET)
+        self.assertEqual(moved, {"op-009": {"value": 12.0}})
+
+    def test_an_operation_the_target_never_compiled_is_inserted(self):
+        moved = adjustments.transplant(
+            {"op-001": {"value": 0.8}}, self.SOURCE, self.TARGET)
+        self.assertEqual(moved["+insert"],
+                         [{"op": "tone.exposure", "value": 0.8}])
+
+    def test_structure_travels_verbatim(self):
+        changes = {"curve": {"points": [[0, 0], [255, 255]]},
+                   "+mask": [{"shape": "radial", "geometry": {},
+                              "effects": []}],
+                   "+hsl": [{"channel": "red", "component": "hue",
+                             "value": 5.0}]}
+        moved = adjustments.transplant(changes, self.SOURCE, self.TARGET)
+        for key in changes:
+            self.assertEqual(moved[key], changes[key])
+
+    def test_the_transplanted_set_folds_into_the_target(self):
+        moved = adjustments.transplant(
+            {"op-001": {"value": 0.8}, "op-002": {"value": 12.0}},
+            self.SOURCE, self.TARGET)
+        out = adjustments.apply(
+            {"operations": [dict(op) for op in
+                            self.TARGET["operations"]]}, moved)
+        held = {op["op"]: op["value"] for op in out["operations"]}
+        self.assertEqual(held["tone.contrast"], 12.0)
+        self.assertEqual(held["tone.exposure"], 0.8)

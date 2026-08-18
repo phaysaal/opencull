@@ -1002,6 +1002,14 @@ class FineTunePage(QWidget):
         self.list.setObjectName("clusterList")
         self.list.setFixedWidth(200)
         self.list.currentRowChanged.connect(self._chose_photo)
+        self.list.setContextMenuPolicy(
+            Qt.ContextMenuPolicy.CustomContextMenu)
+        self.list.customContextMenuRequested.connect(self._photo_menu)
+        # The settings clipboard: one frame's tuning, held to be laid
+        # on another. Page-lifetime; copying again replaces it.
+        self._copied: dict | None = None
+        # Styles the hand asked into the strip beyond the shown set.
+        self._invited: dict[str, set] = {}
         split.addWidget(self.list)
 
         stage = QFrame()
@@ -1381,9 +1389,29 @@ class FineTunePage(QWidget):
         self.progress.setText(photo)
         # The baseline compiles to no operations at all, so there is nothing
         # in it to move: it is left out rather than offered and found empty.
-        self.treatments = [
+        offered = [
             item for item in self.workspace.treatments(photo)
             if item.get("id") != "calibrated"]
+        # The strip earns its thumbnails. What was suggested for THIS
+        # frame renders on sight; a preset renders only once somebody
+        # in this scene is actually using it, or the hand asks it in
+        # through "More styles..." -- a wall of unasked renders is paid
+        # for in minutes on an X-Trans folder.
+        profile = self._ledger.get(photo)
+        invited = self._invited.setdefault(photo, set())
+        if profile:
+            invited.add(str(profile.get("treatment")))
+        worn = set(invited)
+        for mate in self._scene_mates(photo):
+            near = self._ledger.get(mate)
+            if near:
+                worn.add(str(near.get("treatment")))
+        self.treatments = [
+            item for item in offered
+            if item.get("kind") != "preset"
+            or str(item.get("id")) in worn]
+        self._more = [item for item in offered
+                      if item not in self.treatments]
         self.treatment_list.blockSignals(True)
         self.treatment_list.clear()
         wanted: list[tuple[str, str]] = []
@@ -1399,6 +1427,15 @@ class FineTunePage(QWidget):
             else:
                 wanted.append((photo, str(item.get("id"))))
             self.treatment_list.addItem(entry)
+        if self._more:
+            door = QListWidgetItem(f"More styles… ({len(self._more)})")
+            door.setFont(theme.body(8))
+            door.setToolTip(tooltip(
+                "Every style not shown -- presets nobody in this scene "
+                "is using yet. Choosing one invites it in, renders its "
+                "thumbnail, and applies it."))
+            door.setSizeHint(QSize(STRIP_TILE, STRIP_HEIGHT - 14))
+            self.treatment_list.addItem(door)
         self.treatment_list.blockSignals(False)
         if wanted:
             self.thumbs.want(
@@ -1448,6 +1485,31 @@ class FineTunePage(QWidget):
     def _chose_treatment(self, row: int) -> None:
         if 0 <= row < len(self.treatments):
             self.show_treatment(str(self.treatments[row].get("id")))
+        elif row == len(self.treatments) and getattr(self, "_more", []):
+            self._more_styles()
+
+    def _more_styles(self) -> None:
+        """The styles held back, offered by name; choosing one applies it."""
+        from PySide6.QtGui import QCursor
+        from PySide6.QtWidgets import QMenu
+
+        menu = QMenu(self)
+        menu.setFont(theme.body(10))
+        for item in self._more:
+            action = menu.addAction(str(item.get("name")
+                                        or item.get("id")))
+            action.setData(str(item.get("id")))
+        chosen = menu.exec(QCursor.pos())
+        if chosen is None:
+            return
+        style = str(chosen.data())
+        photo = self.current
+        self._invited.setdefault(photo, set()).add(style)
+        self.show_photo(photo)
+        ids = [str(item.get("id")) for item in self.treatments]
+        if style in ids:
+            self.treatment_list.setCurrentRow(ids.index(style))
+            self.show_treatment(style)
 
     def engine(self) -> str:
         return str(self.workspace.decoder_for(self.current).get("engine")
@@ -2709,6 +2771,104 @@ class FineTunePage(QWidget):
         self._render_pending = True
         self._prepare_timer.start()
         self._profile_moved()
+
+    def _photo_menu(self, where) -> None:
+        from PySide6.QtWidgets import QMenu
+
+        item = self.list.itemAt(where)
+        if item is None:
+            return
+        row = self.list.row(item)
+        if not 0 <= row < len(self.photos):
+            return
+        photo = self.photos[row]
+        menu = QMenu(self)
+        menu.setFont(theme.body(10))
+        copy = menu.addAction("Copy settings")
+        copy.setEnabled(self._settings_of(photo) is not None)
+        paste = menu.addAction("Paste settings")
+        paste.setEnabled(self._copied is not None)
+        menu.addSeparator()
+        mates = [name for name in self._scene_mates(photo)
+                 if name != photo]
+        spread = menu.addAction(
+            f"Apply to the rest of this scene ({len(mates)})")
+        spread.setEnabled(bool(mates)
+                          and self._settings_of(photo) is not None)
+        chosen = menu.exec(self.list.mapToGlobal(where))
+        if chosen is copy:
+            self._copied = self._settings_of(photo)
+            self._report(
+                f"Copied the settings of {photo}. Right-click another "
+                "frame to paste them, moves and masks alike.", "ok")
+        elif chosen is paste and self._copied is not None:
+            if self._paste_onto(photo, self._copied):
+                self._report(
+                    f"Pasted onto {photo}: the same moves, re-addressed "
+                    "to its own recipe.", "ok")
+        elif chosen is spread:
+            told = self._settings_of(photo)
+            landed = [mate for mate in mates
+                      if told is not None
+                      and self._paste_onto(mate, told)]
+            self._report(
+                f"Applied {photo}'s settings to {len(landed)} other "
+                f"frame(s) of its scene.", "ok" if landed else "alarm")
+
+    def _settings_of(self, photo: str) -> dict | None:
+        """One frame's tuning, with the recipe its changes refer to."""
+        if photo == self.current and self.changes:
+            return {"treatment": self.treatment,
+                    "changes": json.loads(json.dumps(self.changes)),
+                    "recipe": self._pristine}
+        held = self._ledger.get(photo)
+        if not held:
+            return None
+        try:
+            recipe = self.workspace.compiled_recipe(
+                photo, str(held["treatment"]), self.engine())
+        except Exception:                            # noqa: BLE001 - no copy
+            return None
+        return {"treatment": str(held["treatment"]),
+                "changes": held.get("changes") or {}, "recipe": recipe}
+
+    def _paste_onto(self, photo: str, told: dict) -> bool:
+        """Lay one frame's settings on another, re-addressed."""
+        wanted = str(told["treatment"])
+        offered = {str(item.get("id"))
+                   for item in self.workspace.treatments(photo)}
+        if wanted not in offered:
+            self._report(
+                f"{photo} does not offer the {wanted} treatment, so "
+                "these settings have nowhere to land.", "alarm")
+            return False
+        try:
+            recipe = self.workspace.compiled_recipe(
+                photo, wanted, self.engine())
+        except Exception as exc:                     # noqa: BLE001 - reported
+            self._report(f"{photo}: {exc}", "alarm")
+            return False
+        moved = adjustments.transplant(
+            told["changes"], told["recipe"], recipe)
+        self._ledger.save(photo, wanted, moved, 0)
+        self._dress_rows()
+        if photo == self.current:
+            # The pasted settings are the room now: walk back in.
+            self.show_photo(photo)
+        return True
+
+    def _scene_mates(self, photo: str) -> list:
+        """Every frame of this photograph's scene that this page holds."""
+        from opencull_gui.scenes import scene_groups
+
+        root = Path(str(
+            self.workspace.payload().get("source_folder") or "."))
+        groups = scene_groups(
+            [{"photo": name} for name in self.photos], root)
+        for group in groups:
+            if photo in group["photos"]:
+                return list(group["photos"])
+        return [photo]
 
     def _magnified(self) -> None:
         if self.current and self.treatment:

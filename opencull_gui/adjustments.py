@@ -886,3 +886,42 @@ def compile_words(text: str) -> tuple[list[dict[str, Any]], list[str]]:
         else:
             unheard.append(phrase)
     return heard, unheard
+
+
+def transplant(changes: dict[str, Any], source: dict[str, Any],
+               target: dict[str, Any]) -> dict[str, Any]:
+    """The same moves, re-addressed to another photograph's recipe.
+
+    A change that moved a compiled control references that control by
+    its id, and ids belong to one compile: "op-003" is Exposure on this
+    frame and Contrast on the next. So a move travels by what it DOES:
+    the source control's operation name is looked up in the target, and
+    the change lands on the target's own id for it. An operation the
+    target never compiled is inserted instead, so the move still lands.
+    Structural changes -- masks, curves, colour bands, added controls --
+    carry no foreign ids and travel verbatim; only a hand-move of a
+    model-made mask rides by position, the one address masks have.
+    """
+    settled = json.loads(json.dumps(changes))
+    from_source = {item["id"]: item for item in controls(source)}
+    to_target: dict[str, str] = {}
+    for item in controls(target):
+        to_target.setdefault(item["op"], item["id"])
+    moved: dict[str, Any] = {}
+    inserts = list(settled.pop("+insert", []) or [])
+    for key, change in settled.items():
+        told = from_source.get(key)
+        if told is None or not isinstance(change, dict):
+            moved[key] = change
+            continue
+        landing = to_target.get(told["op"])
+        if landing is not None:
+            held = moved.get(landing)
+            moved[landing] = (dict(change) if held is None
+                              else {**held, **change})
+        elif "value" in change and change.get("enabled", True) is not False:
+            inserts.append({"op": told["op"],
+                            "value": float(change["value"])})
+    if inserts:
+        moved["+insert"] = inserts
+    return moved
