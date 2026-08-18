@@ -2207,7 +2207,7 @@ class RendererCoalescingTests(unittest.TestCase):
 
         class Workspace:
             def recipe_preview(self, photo, style, engine, demosaic,
-                               maximum, adjustments=None):
+                               maximum, adjustments=None, window=None):
                 time.sleep(0.05)
                 rendered.append(adjustments)
                 return Path("/nonexistent.jpg")   # unreadable: fails cleanly
@@ -2239,7 +2239,7 @@ class RendererCoalescingTests(unittest.TestCase):
 
         class Workspace:
             def recipe_preview(self, photo, style, engine, demosaic,
-                               maximum, adjustments=None):
+                               maximum, adjustments=None, window=None):
                 time.sleep(0.05)
                 rendered.append(photo)
                 return Path("/nonexistent.jpg")

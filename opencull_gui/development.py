@@ -865,6 +865,7 @@ class DevelopmentWorkspace:
         self, photo: str, style: str, engine: str, demosaic: str,
         maximum: int, adjustments: dict | None = None,
         progress: Any = None, recipe: dict | None = None,
+        window: dict | None = None,
     ) -> Path:
         """Render one bounded local proof without registering an export artifact.
 
@@ -894,6 +895,11 @@ class DevelopmentWorkspace:
         identity = hashlib.sha256(json.dumps({
             "photo": photo, "style": style, "engine": engine,
             "demosaic": demosaic, "maximum": maximum,
+            # A windowed render is its own picture: the same recipe
+            # over a different set of pixels.
+            "window": ({key: round(float(window[key]), 4)
+                        for key in ("x", "y", "w", "h")}
+                       if window else None),
             "recipe": recipe, "source": str(source),
             "mtime": source_stat.st_mtime_ns, "size": source_stat.st_size,
             "renderer": RECIPE_ENGINE_REVISION,
@@ -978,7 +984,8 @@ class DevelopmentWorkspace:
                     None if self.infrared() else small_reference)
             result = render_recipe(
                 baseline, recipe, work / "render", allow_incomplete=True,
-                reference_jpeg=calibration_reference, progress=progress)
+                reference_jpeg=calibration_reference, progress=progress,
+                window=window)
             temporary_output = destination.with_name(
                 f".{destination.name}.{secrets.token_hex(4)}.tmp")
             shutil.copy2(Path(result["output"]["path"]), temporary_output)

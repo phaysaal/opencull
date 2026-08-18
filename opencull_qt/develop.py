@@ -19,6 +19,7 @@ import json
 from pathlib import Path
 
 from PySide6.QtCore import (
+    QRectF,
     QEasingCurve,
     QObject,
     QRunnable,
@@ -112,7 +113,8 @@ class _RenderJob(QRunnable):
     def __init__(self, workspace: DevelopmentWorkspace, photo: str,
                  treatment: str, engine: str, demosaic: str,
                  signals: _Signals, generation: int,
-                 maximum: int = 0, adjustments: dict | None = None):
+                 maximum: int = 0, adjustments: dict | None = None,
+                 window: dict | None = None):
         super().__init__()
         self.workspace = workspace
         self.photo = photo
@@ -123,13 +125,14 @@ class _RenderJob(QRunnable):
         self.generation = generation
         self.maximum = maximum or PROOF_EDGE
         self.adjustments = adjustments
+        self.window = window
         self.setAutoDelete(True)
 
     def run(self) -> None:
         try:
             path = self.workspace.recipe_preview(
                 self.photo, self.treatment, self.engine, self.demosaic,
-                self.maximum, self.adjustments)
+                self.maximum, self.adjustments, window=self.window)
         except Exception as exc:
             self.signals.failed.emit(self.generation, self.photo, str(exc))
             return
@@ -393,15 +396,17 @@ class Renderer(QObject):
 
     def render(self, photo: str, treatment: str, engine: str,
                demosaic: str, adjustments: dict | None = None,
-               maximum: int = 0) -> None:
+               maximum: int = 0, window: dict | None = None) -> None:
         """``maximum`` overrides the proof edge for this one render.
 
         A caller that knows how many pixels will actually be shown --
         the fine-tune page, re-rendering on every slider move -- passes
         the screen's own size and pays for nothing it cannot display.
+        ``window`` renders only that part of the frame, fast, with every
+        frame-coordinate operation behaving as if the whole were here.
         """
         request = (photo, treatment, engine, demosaic, adjustments,
-                   maximum or self.maximum)
+                   maximum or self.maximum, window)
         if self._inflight > 0:
             # The running render is left to land -- its picture is still
             # fresher than what is on screen, so the drag reads as
@@ -411,12 +416,14 @@ class Renderer(QObject):
         self._start(request)
 
     def _start(self, request: tuple) -> None:
-        photo, treatment, engine, demosaic, adjustments, maximum = request
+        (photo, treatment, engine, demosaic, adjustments, maximum,
+         window) = request
         self._generation += 1
         self._inflight += 1
         self._pool.start(_RenderJob(
             self.workspace, photo, treatment, engine, demosaic,
-            self._signals, self._generation, maximum, adjustments))
+            self._signals, self._generation, maximum, adjustments,
+            window))
 
     def _settle(self) -> None:
         self._inflight = max(0, self._inflight - 1)
@@ -616,6 +623,11 @@ class PhotoLabel(QLabel):
         self._zoom = 0.0
         self._centre = [0.5, 0.5]
         self._pan_from = None
+        # The fast pass: a freshly rendered piece of the frame, drawn
+        # over the stale proof at its own place until the full render
+        # lands and replaces both.
+        self._patch: QPixmap | None = None
+        self._patch_window: dict | None = None
 
     def set_source(self, pixmap: QPixmap | None) -> None:
         # The same photograph at a different resolution must show the
@@ -627,12 +639,48 @@ class PhotoLabel(QLabel):
                 and pixmap.width() > 0
                 and pixmap.width() != self._source.width()):
             self._zoom *= self._source.width() / pixmap.width()
+        self._patch = None
+        self._patch_window = None
         self._source = pixmap
         if pixmap is None:
             self.setPixmap(QPixmap())
             return
         self.setText("")
         self._redraw()
+
+    def set_patch(self, pixmap: QPixmap | None,
+                  window: dict | None) -> None:
+        """A fast render of one part of the frame, worn over the proof."""
+        self._patch = pixmap
+        self._patch_window = dict(window) if window else None
+        self._redraw()
+
+    def visible_window(self, margin: float = 0.25) -> dict | None:
+        """What part of the source the eye is on, with shoulders.
+
+        Fractions of the source frame, widened by ``margin`` of the view
+        on every side so a small pan does not walk off the fast pass.
+        None at fit -- the whole frame is the window.
+        """
+        if self._source is None or self._zoom <= 0:
+            return None
+        source_w = self._source.width()
+        source_h = self._source.height()
+        if not source_w or not source_h:
+            return None
+        view_w = min(source_w, max(self.width(), 1) / self._zoom)
+        view_h = min(source_h, max(self.height(), 1) / self._zoom)
+        cx = min(max(self._centre[0], view_w / 2 / source_w),
+                 1 - view_w / 2 / source_w)
+        cy = min(max(self._centre[1], view_h / 2 / source_h),
+                 1 - view_h / 2 / source_h)
+        wide = view_w * (1 + 2 * margin) / source_w
+        tall = view_h * (1 + 2 * margin) / source_h
+        x0 = min(max(cx - wide / 2, 0.0), max(1.0 - wide, 0.0))
+        y0 = min(max(cy - tall / 2, 0.0), max(1.0 - tall, 0.0))
+        return {"x": round(x0, 4), "y": round(y0, 4),
+                "w": round(min(wide, 1.0), 4),
+                "h": round(min(tall, 1.0), 4)}
 
     def magnification(self) -> float:
         """How far past fit the eye is: 1 at fit, 8 at the deep end."""
@@ -736,8 +784,27 @@ class PhotoLabel(QLabel):
         top = int(self._centre[1] * source_h - view_h / 2)
         piece = self._source.copy(QRect(left, top,
                                         int(view_w), int(view_h)))
-        self.setPixmap(scaled(
-            piece, max(self.width(), 1), max(self.height(), 1)))
+        shown = scaled(piece, max(self.width(), 1), max(self.height(), 1))
+        if self._patch is not None and self._patch_window is not None:
+            # The fast pass, drawn where it belongs over the stale
+            # proof: the sharp window rides the coarse frame until the
+            # full render lands and set_source clears both.
+            ratio = float(shown.devicePixelRatio() or 1.0)
+            scale_x = (shown.width() / ratio) / max(view_w, 1e-6)
+            scale_y = (shown.height() / ratio) / max(view_h, 1e-6)
+            held = self._patch_window
+            target = QRectF(
+                (held["x"] * source_w - left) * scale_x,
+                (held["y"] * source_h - top) * scale_y,
+                held["w"] * source_w * scale_x,
+                held["h"] * source_h * scale_y)
+            painter = QPainter(shown)
+            painter.setRenderHint(
+                QPainter.RenderHint.SmoothPixmapTransform)
+            painter.drawPixmap(target, self._patch,
+                               QRectF(self._patch.rect()))
+            painter.end()
+        self.setPixmap(shown)
 
     def wheelEvent(self, event) -> None:  # noqa: N802 - Qt naming
         if self._source is None:

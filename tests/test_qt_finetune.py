@@ -338,6 +338,106 @@ class FineTunePageTests(unittest.TestCase):
         self.assertIn(style,
                       [str(item.get("id")) for item in page.treatments])
 
+    def test_the_visible_window_follows_the_zoomed_eye(self):
+        from PySide6.QtGui import QColor, QImage, QPixmap
+
+        page = self.page()
+        page.frame.resize(400, 300)
+        image = QImage(800, 600, QImage.Format.Format_RGB888)
+        image.fill(QColor(90, 80, 70))
+        page.frame.set_source(QPixmap.fromImage(image))
+        self.assertIsNone(page.frame.visible_window())   # fit: no window
+        page.frame._zoom = page.frame._fit_scale() * 4.0
+        page.frame._centre = [0.5, 0.5]
+        window = page.frame.visible_window()
+        self.assertLess(window["w"], 0.5)                # a real crop
+        self.assertGreater(window["w"], 0.1)
+        self.assertLessEqual(window["x"] + window["w"], 1.0)
+        self.assertLessEqual(window["y"] + window["h"], 1.0)
+
+    def test_the_fast_patch_rides_the_proof_and_a_new_source_clears_it(self):
+        from PySide6.QtGui import QColor, QImage, QPixmap
+
+        page = self.page()
+        page.frame.resize(400, 300)
+        def coloured(w, h, c):
+            image = QImage(w, h, QImage.Format.Format_RGB888)
+            image.fill(QColor(*c))
+            return QPixmap.fromImage(image)
+        page.frame.set_source(coloured(800, 600, (40, 40, 40)))
+        page.frame._zoom = page.frame._fit_scale() * 4.0
+        window = page.frame.visible_window()
+        page.frame.set_patch(coloured(200, 150, (250, 60, 60)), window)
+        shown = page.frame.pixmap().toImage()
+        centre = shown.pixelColor(shown.width() // 2, shown.height() // 2)
+        self.assertGreater(centre.red(), 200)      # the patch is on screen
+        page.frame.set_source(coloured(800, 600, (40, 40, 40)))
+        self.assertIsNone(page.frame._patch)       # a new proof clears it
+
+    def test_zoomed_edits_ask_the_fast_channel_first(self):
+        from PySide6.QtGui import QColor, QImage, QPixmap
+
+        page = self.page()
+        page.frame.resize(400, 300)
+        image = QImage(800, 600, QImage.Format.Format_RGB888)
+        image.fill(QColor(90, 80, 70))
+        page.frame.set_source(QPixmap.fromImage(image))
+        asked = []
+        page.fast.render = lambda *args, **kw: asked.append(kw)
+        page.render()
+        self.assertEqual(asked, [])                # at fit: one pass only
+        page.frame._zoom = page.frame._fit_scale() * 4.0
+        page.render()
+        self.assertEqual(len(asked), 1)
+        self.assertIsNotNone(asked[0].get("window"))
+
+    def test_a_cropped_recipe_takes_the_one_pass_road(self):
+        from PySide6.QtGui import QColor, QImage, QPixmap
+
+        page = self.page()
+        page.frame.resize(400, 300)
+        image = QImage(800, 600, QImage.Format.Format_RGB888)
+        image.fill(QColor(90, 80, 70))
+        page.frame.set_source(QPixmap.fromImage(image))
+        page.frame._zoom = page.frame._fit_scale() * 4.0
+        page.changes["crop"] = {"rect": [0.1, 0.1, 0.8, 0.8]}
+        asked = []
+        page.fast.render = lambda *args, **kw: asked.append(kw)
+        page.render()
+        self.assertEqual(asked, [])
+
+    def test_a_late_fast_patch_never_covers_a_newer_full_render(self):
+        from PySide6.QtGui import QColor, QImage, QPixmap
+
+        page = self.page()
+        page.frame.resize(400, 300)
+        image = QImage(800, 600, QImage.Format.Format_RGB888)
+        image.fill(QColor(90, 80, 70))
+        page.frame.set_source(QPixmap.fromImage(image))
+        page.frame._zoom = page.frame._fit_scale() * 4.0
+        page._fast_window = page.frame.visible_window()
+        page._render_pending = False               # the full one landed
+        page._fast_rendered(page.current, page.treatment,
+                            QPixmap.fromImage(image))
+        self.assertIsNone(page.frame._patch)
+
+    def test_a_windowed_preview_is_the_windows_own_size(self):
+        page = self.page()
+        path = page.workspace.recipe_preview(
+            NAMES[0], "standard", "default", "markesteijn-3-pass",
+            640, window={"x": 0.25, "y": 0.25, "w": 0.5, "h": 0.5})
+        from PIL import Image as PILImage
+
+        with PILImage.open(path) as out:
+            width, height = out.size
+        full = page.workspace.recipe_preview(
+            NAMES[0], "standard", "default", "markesteijn-3-pass", 640)
+        with PILImage.open(full) as out:
+            full_w, full_h = out.size
+        self.assertAlmostEqual(width / full_w, 0.5, delta=0.02)
+        self.assertAlmostEqual(height / full_h, 0.5, delta=0.02)
+        self.assertNotEqual(str(path), str(full))
+
     def test_a_colour_mask_layer_offers_its_own_geometry(self):
         page = self.page()
         made = {"shape": "color", "geometry": {

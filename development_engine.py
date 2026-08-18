@@ -123,33 +123,8 @@ def _calibrate_to_jpeg(linear: np.ndarray, reference: Path) -> tuple[np.ndarray,
     except (OSError, ValueError) as exc:
         raise DevelopmentError(f"cannot read calibration JPEG {reference}: {exc}") from exc
     source_display = _linear_rec2020_to_srgb(np.clip(linear, 0, 1))
-    sample_source = source_display[::16, ::16]
-    sample_target = target[::16, ::16]
-    quantiles = np.linspace(0.0, 1.0, 33)
-    calibrated = np.empty_like(source_display)
-    knots: list[dict[str, list[float]]] = []
-    for channel in range(3):
-        source_knots = np.quantile(sample_source[..., channel], quantiles)
-        target_knots = np.quantile(sample_target[..., channel], quantiles)
-        source_knots, unique = np.unique(source_knots, return_index=True)
-        target_knots = target_knots[unique]
-        calibrated[..., channel] = np.interp(
-            source_display[..., channel], source_knots, target_knots)
-        knots.append({"source": source_knots.tolist(), "target": target_knots.tolist()})
-    # The match is what the photographer wanted from the camera: its tones
-    # and its colour. What they did not want is its clipping. A camera
-    # rendering has already spent the highlights the raw still holds, so
-    # matching it all the way to white throws that headroom away --
-    # measured at 12.9% of one frame blown rising to 21.2%. The match
-    # therefore holds through the shadows and midtones and fades out
-    # towards the top, leaving the brightest tones where the decode put
-    # them, with detail still in them to be worked on.
-    luminance = source_display @ _LUMA
-    weight = 1.0 - _ramp(
-        (luminance - CALIBRATION_HOLD) /
-        max(CALIBRATION_RELEASE - CALIBRATION_HOLD, 1e-6))
-    calibrated = source_display + (
-        calibrated - source_display) * weight[..., None]
+    knots = _calibration_knots(source_display, target)
+    calibrated = _apply_calibration(source_display, knots)
     return _srgb_to_linear_rec2020(calibrated), {
         "reference_path": str(reference), "reference_sha256": _sha256(reference),
         "method": "per-channel-srgb-quantile-lut-with-highlight-rolloff",
@@ -157,6 +132,56 @@ def _calibrate_to_jpeg(linear: np.ndarray, reference: Path) -> tuple[np.ndarray,
                     "released_above": CALIBRATION_RELEASE},
         "knots": knots,
     }
+
+
+def _calibration_knots(source_display: np.ndarray,
+                       target: np.ndarray) -> list[dict[str, list[float]]]:
+    """The per-channel quantile LUT, fitted from sampled pixels.
+
+    Split from the application so a windowed render can fit the LUT on
+    the WHOLE frame and apply it to the crop: quantiles of a crop are a
+    different match, and the seam would show the moment the full render
+    swapped in.
+    """
+    sample_source = source_display[::16, ::16]
+    sample_target = target[::16, ::16]
+    quantiles = np.linspace(0.0, 1.0, 33)
+    knots: list[dict[str, list[float]]] = []
+    for channel in range(3):
+        source_knots = np.quantile(sample_source[..., channel], quantiles)
+        target_knots = np.quantile(sample_target[..., channel], quantiles)
+        source_knots, unique = np.unique(source_knots, return_index=True)
+        target_knots = target_knots[unique]
+        knots.append({"source": source_knots.tolist(),
+                      "target": target_knots.tolist()})
+    return knots
+
+
+def _apply_calibration(source_display: np.ndarray,
+                       knots: list[dict[str, list[float]]]) -> np.ndarray:
+    """The fitted LUT laid on pixels, held in tone, released in light.
+
+    The match is what the photographer wanted from the camera: its tones
+    and its colour. What they did not want is its clipping. A camera
+    rendering has already spent the highlights the raw still holds, so
+    matching it all the way to white throws that headroom away --
+    measured at 12.9% of one frame blown rising to 21.2%. The match
+    therefore holds through the shadows and midtones and fades out
+    towards the top, leaving the brightest tones where the decode put
+    them, with detail still in them to be worked on.
+    """
+    calibrated = np.empty_like(source_display)
+    for channel in range(3):
+        calibrated[..., channel] = np.interp(
+            source_display[..., channel],
+            np.asarray(knots[channel]["source"]),
+            np.asarray(knots[channel]["target"]))
+    luminance = source_display @ _LUMA
+    weight = 1.0 - _ramp(
+        (luminance - CALIBRATION_HOLD) /
+        max(CALIBRATION_RELEASE - CALIBRATION_HOLD, 1e-6))
+    return source_display + (
+        calibrated - source_display) * weight[..., None]
 
 
 def _load_linear(path: Path) -> np.ndarray:
@@ -308,16 +333,27 @@ def active(operations: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _apply_global(rgb: np.ndarray, operations: list[dict[str, Any]],
-                  progress: Any = None) -> np.ndarray:
+                  progress: Any = None,
+                  window: dict[str, float] | None = None) -> np.ndarray:
     """Apply a recipe's adjustments in order.
 
     ``progress`` is called with (done, total, what) after each one. A
     treatment is twenty-odd named adjustments and the photographer is
     entitled to watch them arrive rather than watch a bar that cannot say
     anything until the whole thing is finished.
+
+    ``window`` says these pixels are a crop of a larger frame -- x, y,
+    w, h as fractions -- so everything that speaks in frame coordinates
+    (masks, spots, the vignette, detail radii) behaves as if the whole
+    photograph were here. Blur-based detail work differs slightly at
+    the crop's border, where the context it would have read is absent.
     """
     result = np.array(rgb, dtype=np.float32, copy=True)
-    detail_scale = max(max(result.shape[:2]) / DETAIL_REFERENCE_EDGE, 0.25)
+    frame_edge = float(max(result.shape[:2]))
+    if window:
+        frame_edge = max(result.shape[0] / max(float(window["h"]), 1e-6),
+                         result.shape[1] / max(float(window["w"]), 1e-6))
+    detail_scale = max(frame_edge / DETAIL_REFERENCE_EDGE, 0.25)
     operations = active(operations)
     total = len(operations)
     for done, item in enumerate(operations, start=1):
@@ -371,7 +407,7 @@ def _apply_global(rgb: np.ndarray, operations: list[dict[str, Any]],
             # repair has no edge. Coordinates are fractions of the frame
             # -- the same words at proof size and at full size -- and a
             # frame with no listed spots is untouched.
-            result = _heal_spots(result, value)
+            result = _heal_spots(result, value, window)
             if progress is not None:
                 progress(done, total, _named(item))
             continue
@@ -427,7 +463,7 @@ def _apply_global(rgb: np.ndarray, operations: list[dict[str, Any]],
                 progress(done, total, _named(item))
             continue
         if op.startswith("mask.") and isinstance(value, dict):
-            mask = _spatial_mask(result, op[5:], value)
+            mask = _spatial_mask(result, op[5:], value, window)
             opacity = float(value.get("opacity", 1.0))
             blend = np.clip(mask * opacity, 0, 1)[..., None]
             for effect in value.get("effects", []):
@@ -563,15 +599,14 @@ def _apply_global(rgb: np.ndarray, operations: list[dict[str, Any]],
             result = lum + chroma + (
                 _blur(chroma, DENOISE_RADIUS * detail_scale) - chroma) * weight
         elif op == "detail.clean_colour":
-            result = _clean_colour(result, value, detail_scale)
+            result = _clean_colour(result, value, detail_scale, window)
         elif op == "levels.midpoint":
             # The levels midpoint is a gamma about the middle of the scale.
             if value > 0:
                 result = np.clip(result, 0.0, None) ** (1.0 / max(value, 0.1))
         elif op == "finish.vignette":
-            yy, xx = np.indices(result.shape[:2], dtype=np.float32)
-            yy /= max(result.shape[0] - 1, 1)
-            xx /= max(result.shape[1] - 1, 1)
+            yy, xx = _frame_grid(
+                result.shape[0], result.shape[1], window)
             edge = np.minimum.reduce([xx, 1 - xx, yy, 1 - yy])
             fall = np.clip(1.0 - edge * 4.0, 0.0, 1.0)[..., None]
             result = result * (1.0 + (value / 100.0) * VIGNETTE_DEPTH * fall)
@@ -693,11 +728,36 @@ def _curve_lut(points: list) -> np.ndarray:
     return np.clip(out / 255.0, 0.0, 1.0).astype(np.float32)
 
 
-def _spatial_mask(rgb: np.ndarray, shape: str, value: dict[str, Any]) -> np.ndarray:
-    height, width = rgb.shape[:2]
+def _frame_grid(height: int, width: int,
+                window: dict[str, float] | None) -> tuple:
+    """Normalized coordinates -- of the WHOLE frame, window or not.
+
+    A windowed render sees a crop, but a mask's geometry speaks in
+    fractions of the photograph. Mapping the grid, rather than every
+    mask, is what lets one change serve them all.
+    """
     yy, xx = np.indices((height, width), dtype=np.float32)
-    yy /= max(height - 1, 1)
-    xx /= max(width - 1, 1)
+    if window:
+        # The same arithmetic as the full frame -- (index)/(edge-1) --
+        # with the crop's indices shifted into the frame's own. Mapping
+        # fractions instead left one-ULP drifts that moved a mask edge
+        # a pixel between the fast pass and the full one.
+        full_w = width / max(float(window["w"]), 1e-6)
+        full_h = height / max(float(window["h"]), 1e-6)
+        xx = (np.float32(window["x"] * full_w) + xx) \
+            / np.float32(max(full_w - 1.0, 1.0))
+        yy = (np.float32(window["y"] * full_h) + yy) \
+            / np.float32(max(full_h - 1.0, 1.0))
+    else:
+        yy /= max(height - 1, 1)
+        xx /= max(width - 1, 1)
+    return yy, xx
+
+
+def _spatial_mask(rgb: np.ndarray, shape: str, value: dict[str, Any],
+                  window: dict[str, float] | None = None) -> np.ndarray:
+    height, width = rgb.shape[:2]
+    yy, xx = _frame_grid(height, width, window)
     anchor = str(value.get("anchor", "")).casefold()
     if shape == "linear":
         if "bottom" in anchor:
@@ -758,8 +818,13 @@ def _spatial_mask(rgb: np.ndarray, shape: str, value: dict[str, Any]) -> np.ndar
         stated = re.search(r"(?i)radius\s*(\d+(?:\.\d+)?)\s*%", anchor)
         if stated:
             reach = max(float(stated.group(1)) / 100.0, 0.01)
-        # Circular on the photograph, not on the unit square.
-        aspect = width / max(height, 1)
+        # Circular on the photograph, not on the unit square -- the
+        # WHOLE photograph, when these pixels are only a window of it.
+        if window:
+            aspect = round(width / max(float(window["w"]), 1e-6)) \
+                / max(round(height / max(float(window["h"]), 1e-6)), 1)
+        else:
+            aspect = width / max(height, 1)
         distance = np.sqrt(
             ((xx - centre_x) * aspect) ** 2 + (yy - centre_y) ** 2) / reach
         # Feather: what fraction of the radius the falloff occupies. At
@@ -817,6 +882,14 @@ def _spatial_mask(rgb: np.ndarray, shape: str, value: dict[str, Any]) -> np.ndar
         if radius >= 0.5:
             sheet = sheet.filter(ImageFilter.GaussianBlur(radius))
         height, width = rgb.shape[:2]
+        if window:
+            mw, mh = sheet.size
+            sheet = sheet.crop((
+                int(window["x"] * mw), int(window["y"] * mh),
+                max(int((window["x"] + window["w"]) * mw),
+                    int(window["x"] * mw) + 1),
+                max(int((window["y"] + window["h"]) * mh),
+                    int(window["y"] * mh) + 1)))
         sheet = sheet.resize((width, height), PILImage.Resampling.BILINEAR)
         weights = np.asarray(sheet, dtype=np.float32) / 255.0
         if "invert" in anchor or "outside" in anchor or "except" in anchor:
@@ -890,7 +963,8 @@ _HEAL_MOST = 64          # spots a single operation may carry
 _HEAL_WIDEST = 0.05      # radius cap, as a fraction of the short edge
 
 
-def _heal_spots(rgb: np.ndarray, value: dict[str, Any]) -> np.ndarray:
+def _heal_spots(rgb: np.ndarray, value: dict[str, Any],
+                window: dict[str, float] | None = None) -> np.ndarray:
     """Rebuild each listed disc from the ring around it.
 
     For every pixel inside a spot, the healed colour is the inverse-
@@ -903,23 +977,32 @@ def _heal_spots(rgb: np.ndarray, value: dict[str, Any]) -> np.ndarray:
     if not isinstance(spots, list) or not spots:
         return rgb
     height, width = rgb.shape[:2]
-    short = float(min(height, width))
+    # All arithmetic runs in the FULL frame's coordinates and only the
+    # indexing is local: the same numbers with a different offset drift
+    # by one ULP, and one ULP at a ring sample is a different pixel.
+    full_w = round(width / max(float(window["w"]), 1e-6)) if window \
+        else width
+    full_h = round(height / max(float(window["h"]), 1e-6)) if window \
+        else height
+    off_x = round(float(window["x"]) * full_w) if window else 0
+    off_y = round(float(window["y"]) * full_h) if window else 0
+    short = float(min(full_h, full_w))
     healed = rgb.copy()
     for spot in spots[:_HEAL_MOST]:
         if not isinstance(spot, dict):
             continue
         try:
-            cx = float(spot["x"]) * width
-            cy = float(spot["y"]) * height
+            cx = float(spot["x"]) * full_w
+            cy = float(spot["y"]) * full_h
             radius = min(max(float(spot["r"]), 0.0), _HEAL_WIDEST) * short
         except (KeyError, TypeError, ValueError):
             continue
         if radius < 0.75:
             continue
-        left = max(int(cx - radius) - 1, 0)
-        right = min(int(cx + radius) + 2, width)
-        top = max(int(cy - radius) - 1, 0)
-        bottom = min(int(cy + radius) + 2, height)
+        left = max(int(cx - radius) - 1, off_x)
+        right = min(int(cx + radius) + 2, off_x + width)
+        top = max(int(cy - radius) - 1, off_y)
+        bottom = min(int(cy + radius) + 2, off_y + height)
         if right <= left or bottom <= top:
             continue
         ys, xs = np.mgrid[top:bottom, left:right].astype(np.float32)
@@ -929,10 +1012,10 @@ def _heal_spots(rgb: np.ndarray, value: dict[str, Any]) -> np.ndarray:
             continue
         angles = np.linspace(0.0, 2.0 * np.pi, 16, endpoint=False)
         ring_x = np.clip(cx + np.cos(angles) * radius * 1.35,
-                         0, width - 1).astype(np.int32)
+                         off_x, off_x + width - 1).astype(np.int32)
         ring_y = np.clip(cy + np.sin(angles) * radius * 1.35,
-                         0, height - 1).astype(np.int32)
-        ring = healed[ring_y, ring_x]                       # (16, 3)
+                         off_y, off_y + height - 1).astype(np.int32)
+        ring = healed[ring_y - off_y, ring_x - off_x]        # (16, 3)
         px = xs[inside][:, None]
         py = ys[inside][:, None]
         reach = ((px - ring_x[None, :].astype(np.float32)) ** 2
@@ -943,9 +1026,10 @@ def _heal_spots(rgb: np.ndarray, value: dict[str, Any]) -> np.ndarray:
         blend = np.clip((radius - away[inside]) / max(radius * 0.25, 0.5),
                         0.0, 1.0)
         blend = blend * blend * (3.0 - 2.0 * blend)
-        window = healed[top:bottom, left:right]
-        window[inside] = (window[inside] * (1.0 - blend[:, None])
-                          + patch * blend[:, None])
+        piece = healed[top - off_y:bottom - off_y,
+                       left - off_x:right - off_x]
+        piece[inside] = (piece[inside] * (1.0 - blend[:, None])
+                         + patch * blend[:, None])
     return healed
 
 
@@ -1018,7 +1102,8 @@ def _box_mean(plane: np.ndarray, radius: int) -> np.ndarray:
 
 
 def _clean_colour(rgb: np.ndarray, strength: float,
-                  detail_scale: float) -> np.ndarray:
+                  detail_scale: float,
+                  window: dict[str, float] | None = None) -> np.ndarray:
     """Colour cleaned by what the green channel knows.
 
     Phase One's old moiré patent, done the modern fast way: red and
@@ -1033,7 +1118,11 @@ def _clean_colour(rgb: np.ndarray, strength: float,
     if k <= 0.0:
         return rgb
     height, width = rgb.shape[:2]
-    radius = max(2, int(round(min(height, width) * 0.008 * detail_scale)))
+    virtual_min = min(height, width)
+    if window:
+        virtual_min = min(height / max(float(window["h"]), 1e-6),
+                          width / max(float(window["w"]), 1e-6))
+    radius = max(2, int(round(virtual_min * 0.008 * detail_scale)))
     guide = rgb[..., 1].astype(np.float32)
     mean_guide = _box_mean(guide, radius)
     variance = _box_mean(guide * guide, radius) - mean_guide * mean_guide
@@ -1229,10 +1318,30 @@ def _geometry(image: Image.Image, operations: list[dict[str, Any]]) -> Image.Ima
     return result
 
 
+def _window_crop(rgb: np.ndarray, window: dict[str, float]
+                 ) -> tuple[np.ndarray, dict[str, float]]:
+    """The crop, and the window recomputed from the integer cut.
+
+    The grid the ops build must describe exactly the pixels kept, so
+    the fractions are re-derived from the rounded pixel box -- a
+    half-pixel drift at 4x magnification is a visible seam.
+    """
+    height, width = rgb.shape[:2]
+    x0 = min(max(int(round(float(window["x"]) * width)), 0), width - 8)
+    y0 = min(max(int(round(float(window["y"]) * height)), 0), height - 8)
+    x1 = min(max(int(round((float(window["x"]) + float(window["w"]))
+                           * width)), x0 + 8), width)
+    y1 = min(max(int(round((float(window["y"]) + float(window["h"]))
+                           * height)), y0 + 8), height)
+    exact = {"x": x0 / width, "y": y0 / height,
+             "w": (x1 - x0) / width, "h": (y1 - y0) / height}
+    return rgb[y0:y1, x0:x1], exact
+
+
 def render_recipe(
     baseline_tiff: Path, recipe: dict[str, Any], output_dir: Path,
     allow_incomplete: bool = False, reference_jpeg: Path | None = None,
-    progress: Any = None,
+    progress: Any = None, window: dict[str, float] | None = None,
 ) -> dict[str, Any]:
     source = baseline_tiff.expanduser().resolve()
     if not source.is_file():
@@ -1267,13 +1376,24 @@ def render_recipe(
             raise DevelopmentError(f"calibration JPEG is unavailable: {reference}")
         stage(1, steps, "matching the camera")
         rgb, calibration = _calibrate_to_jpeg(rgb, reference)
+    if window is not None:
+        # A windowed render is a fast look at one part of the frame:
+        # the LUT above was fitted on the whole picture, so the crop
+        # wears exactly the colour the full render will, and every op
+        # below reads coordinates through the window.
+        rgb, window = _window_crop(rgb, window)
     rgb = _apply_global(
         rgb, operations,
-        progress=lambda done, _total, what: stage(done + 2, steps, what))
+        progress=lambda done, _total, what: stage(done + 2, steps, what),
+        window=window)
     stage(len(wanted) + 2, steps, "writing the photograph")
     display = _linear_rec2020_to_srgb(np.clip(rgb, 0, 1))
     image = Image.fromarray(np.uint8(np.clip(display * 255 + 0.5, 0, 255)), "RGB")
-    image = _geometry(image, operations)
+    if window is None:
+        # Geometry frames the whole photograph; a window is already a
+        # framing, and the caller only asks for one when the recipe
+        # carries no geometry of its own.
+        image = _geometry(image, operations)
     image = ImageEnhance.Sharpness(image).enhance(1.0)
     stem = Path(str(recipe.get("source_photo", source.stem))).stem
     style = str(recipe.get("style", "render"))

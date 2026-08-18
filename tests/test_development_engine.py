@@ -381,6 +381,118 @@ class CurveColourHoldTests(unittest.TestCase):
         self.assertTrue(np.allclose(filmed, plain, atol=1e-5))
 
 
+class WindowedRenderTests(unittest.TestCase):
+    """A windowed render is the full render, cropped -- bit for bit."""
+
+    OPS = [
+        {"op": "tone.exposure", "unit": "EV", "mode": "delta",
+         "value": 0.4, "enabled": True},
+        {"op": "tone.contrast", "unit": "percent", "mode": "delta",
+         "value": 15.0, "enabled": True},
+        {"op": "finish.vignette", "unit": "percent", "mode": "delta",
+         "value": -40.0, "enabled": True},
+        {"op": "mask.radial", "unit": "mask", "enabled": True,
+         "value": {"anchor": "radial gradient, at 30%, 40%, radius 25%",
+                   "opacity": 1.0, "feather": 1.0,
+                   "effects": [{"op": "tone.exposure", "value": 1.0}]}},
+        {"op": "mask.linear", "unit": "mask", "enabled": True,
+         "value": {"anchor": "linear gradient, from the bottom, "
+                             "up to 40%",
+                   "opacity": 1.0, "feather": 1.0,
+                   "effects": [{"op": "tone.exposure", "value": -0.5}]}},
+        {"op": "heal.spots", "unit": "spots", "mode": "absolute",
+         "enabled": True,
+         "value": {"spots": [{"x": 0.3, "y": 0.42, "r": 0.03}]}},
+        {"op": "tone.curve", "unit": "curve", "mode": "absolute",
+         "enabled": True,
+         "value": {"points": [[0, 0], [96, 80], [255, 255]],
+                   "preserve": 40}},
+    ]
+
+    def field(self):
+        rng = np.random.default_rng(9)
+        return np.clip(
+            rng.random((240, 320, 3)).astype(np.float32) * 0.8, 0, 1)
+
+    def test_the_window_is_the_full_render_cropped_exactly(self):
+        from development_engine import _apply_global
+
+        full = self.field()
+        x0, y0 = 80, 60
+        crop = full[y0:y0 + 100, x0:x0 + 120].copy()
+        window = {"x": x0 / 320, "y": y0 / 240,
+                  "w": 120 / 320, "h": 100 / 240}
+        whole = _apply_global(full, self.OPS)
+        part = _apply_global(crop, self.OPS, window=window)
+        self.assertEqual(float(np.abs(
+            part - whole[y0:y0 + 100, x0:x0 + 120]).max()), 0.0)
+
+    def test_a_brush_stroke_lands_in_the_same_place(self):
+        import base64
+        import io as io_module
+
+        from PIL import Image as PILImage
+        from PIL import ImageDraw
+
+        from development_engine import _apply_global
+
+        sheet = PILImage.new("L", (96, 72), 0)
+        ImageDraw.Draw(sheet).ellipse((30, 25, 60, 50), fill=255)
+        buffer = io_module.BytesIO()
+        sheet.save(buffer, "PNG")
+        ops = [{"op": "mask.brush", "unit": "mask", "enabled": True,
+                "value": {"anchor": "painted by hand",
+                          "map": base64.b64encode(
+                              buffer.getvalue()).decode(),
+                          "opacity": 1.0, "feather": 0.4,
+                          "effects": [{"op": "tone.exposure",
+                                       "value": 1.0}]}}]
+        full = self.field()
+        x0, y0 = 80, 60
+        crop = full[y0:y0 + 100, x0:x0 + 120].copy()
+        window = {"x": x0 / 320, "y": y0 / 240,
+                  "w": 120 / 320, "h": 100 / 240}
+        whole = _apply_global(full, ops)
+        part = _apply_global(crop, ops, window=window)
+        diff = np.abs(part - whole[y0:y0 + 100, x0:x0 + 120])
+        # The map is resampled through a different pixel grid, so the
+        # stroke's soft edge may differ by a shade -- but the stroke
+        # itself must land in the same place at the same strength.
+        self.assertLess(float(diff.mean()), 0.01)
+
+    def test_the_windowed_recipe_skips_geometry(self):
+        from development_engine import render_recipe
+
+        # Guarded by the caller; the engine simply never reframes a
+        # frame that is already a window. Exercised at the API level:
+        import tempfile
+
+        import tifffile as tf
+
+        with tempfile.TemporaryDirectory() as folder:
+            work = Path(folder)
+            field = self.field()
+            tf.imwrite(work / "base.tiff",
+                       np.uint16(field * 65535))
+            recipe = {
+                "format": "opencull-development-recipe-v1",
+                "source_photo": "A.JPG", "style": "standard",
+                "operations": [
+                    {"op": "tone.exposure", "unit": "EV",
+                     "mode": "delta", "value": 0.4, "enabled": True}],
+                "guardrails": [], "diagnostics": [],
+            }
+            told = render_recipe(
+                work / "base.tiff", recipe, work / "out",
+                allow_incomplete=True,
+                window={"x": 0.25, "y": 0.25, "w": 0.375, "h": 0.417})
+            from PIL import Image as PILImage
+
+            with PILImage.open(told["output"]["path"]) as out:
+                width, height = out.size
+            self.assertEqual((width, height), (120, 100))
+
+
 class HealSpotsTests(unittest.TestCase):
     """Each disc rebuilt from its own ring: no spot, no edge, no drift."""
 

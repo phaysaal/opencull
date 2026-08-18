@@ -975,6 +975,12 @@ class FineTunePage(QWidget):
         self._suspend_profile = False
         self.renderer.done.connect(self._rendered)
         self.renderer.failed.connect(self._render_failed)
+        # The fast channel: while the full frame cooks, the part being
+        # looked at renders first, on its own thread, and rides the
+        # stale proof as a sharp patch until the full render lands.
+        self.fast = Renderer(workspace, PROOF_EDGE, None, self)
+        self.fast.done.connect(self._fast_rendered)
+        self._fast_window: dict | None = None
         # Thumbnails for the filmstrip, at the develop page's own edge so
         # the two pages share one cache and the icons are usually free.
         self.thumbs = PreviewQueue(
@@ -2770,6 +2776,19 @@ class FineTunePage(QWidget):
             adjustments=asked or None, maximum=self.proof_edge())
         self._render_pending = True
         self._prepare_timer.start()
+        # Two passes when zoomed in: the window under the eye first --
+        # a fraction of the pixels, a fraction of the wait -- then the
+        # whole frame silently replaces it when it lands.
+        window = (self.frame.visible_window()
+                  if self.frame.magnification() > 1.2 else None)
+        if window is not None and self._window_honest():
+            self._fast_window = window
+            self.fast.render(
+                self.current, self.treatment, self.engine(),
+                self._demosaic(), adjustments=asked or None,
+                maximum=self.proof_edge(), window=window)
+        else:
+            self._fast_window = None
         self._profile_moved()
 
     def _photo_menu(self, where) -> None:
@@ -2873,6 +2892,43 @@ class FineTunePage(QWidget):
     def _magnified(self) -> None:
         if self.current and self.treatment:
             self.render()
+
+    def _window_honest(self) -> bool:
+        """Whether a windowed render of this recipe tells the truth.
+
+        Geometry reframes the whole photograph, and a sun-anchored mask
+        finds its centre in whatever pixels it is shown -- both would
+        put the fast pass somewhere the full render is not. Those
+        recipes take the one-pass road.
+        """
+        for item in self.recipe.get("operations", []) or []:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("op", ""))
+            if name.startswith("geometry."):
+                return False
+            if name == "mask.radial":
+                anchor = str((item.get("value") or {}).get(
+                    "anchor", "")).casefold()
+                if ("sun" in anchor or "bright" in anchor) \
+                        and "at " not in anchor:
+                    return False
+        if "crop" in self.changes:
+            return False
+        return True
+
+    def _fast_rendered(self, photo: str, treatment: str, pixmap) -> None:
+        """The window under the eye, arrived ahead of the whole frame."""
+        if photo != self.current or treatment != self.treatment:
+            return
+        if not self._render_pending or self._fast_window is None:
+            # The full render has already landed -- the patch would be
+            # laying an older picture over a newer one.
+            return
+        if self.frame.magnification() <= 1.0:
+            return
+        self._preparing.hide()
+        self.frame.set_patch(pixmap, self._fast_window)
 
     def _profile_moved(self) -> None:
         """The ledger follows the hand; a restore is not a move."""
@@ -3121,3 +3177,4 @@ class FineTunePage(QWidget):
 
     def shutdown(self) -> None:
         self.renderer.shutdown()
+        self.fast.shutdown()
