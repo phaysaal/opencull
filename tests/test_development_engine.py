@@ -381,6 +381,76 @@ class CurveColourHoldTests(unittest.TestCase):
         self.assertTrue(np.allclose(filmed, plain, atol=1e-5))
 
 
+class ColourWarpTests(unittest.TestCase):
+    """The lattice: neighbouring colours receive neighbouring words."""
+
+    SIZE = 9
+
+    def op(self, lattice, **extra):
+        import base64
+
+        return [{"op": "color.warp", "unit": "warp", "mode": "absolute",
+                 "enabled": True,
+                 "value": {"size": self.SIZE,
+                           "lattice": base64.b64encode(
+                               lattice.tobytes()).decode(), **extra}}]
+
+    def zeros(self):
+        return np.zeros((self.SIZE,) * 3 + (3,), np.float16)
+
+    def test_a_lattice_of_zeros_is_a_perfect_no_op(self):
+        from development_engine import _apply_global
+
+        img = np.random.default_rng(1).random((8, 8, 3)).astype(np.float32)
+        self.assertTrue(np.allclose(
+            _apply_global(img, self.op(self.zeros())), img, atol=2e-3))
+
+    def test_an_unreadable_lattice_is_treated_as_one(self):
+        from development_engine import _apply_global
+
+        img = np.random.default_rng(2).random((4, 4, 3)).astype(np.float32)
+        broken = [{"op": "color.warp", "unit": "warp", "mode": "absolute",
+                   "enabled": True,
+                   "value": {"size": 9, "lattice": "!!not base64!!"}}]
+        self.assertTrue(np.allclose(_apply_global(img, broken), img))
+
+    def test_a_push_lands_on_its_region_and_nowhere_else(self):
+        from development_engine import _apply_global
+
+        push = self.zeros()
+        push[7:, 0:3, 0:3, 1] = 0.1        # saturated reds gain green
+        red = _apply_global(
+            np.full((2, 2, 3), (0.7, 0.05, 0.05), np.float32),
+            self.op(push))
+        grey = _apply_global(
+            np.full((2, 2, 3), 0.4, np.float32), self.op(push))
+        self.assertGreater(float(red[0, 0, 1]), 0.05)
+        self.assertTrue(np.allclose(grey, 0.4, atol=2e-3))
+
+    def test_neighbouring_colours_move_together(self):
+        from development_engine import _apply_global
+
+        push = self.zeros()
+        push[7:, 0:3, 0:3, 1] = 0.1
+        one = _apply_global(np.full(
+            (1, 1, 3), (0.70, 0.05, 0.05), np.float32), self.op(push))
+        two = _apply_global(np.full(
+            (1, 1, 3), (0.72, 0.06, 0.05), np.float32), self.op(push))
+        self.assertLess(abs(float(one[0, 0, 1] - two[0, 0, 1])), 0.02)
+
+    def test_strength_scales_the_walk(self):
+        from development_engine import _apply_global
+
+        push = self.zeros()
+        push[7:, 0:3, 0:3, 1] = 0.1
+        patch = np.full((1, 1, 3), (0.7, 0.05, 0.05), np.float32)
+        full = _apply_global(patch, self.op(push))
+        half = _apply_global(patch, self.op(push, strength=50.0))
+        moved_full = float(full[0, 0, 1] - patch[0, 0, 1])
+        moved_half = float(half[0, 0, 1] - patch[0, 0, 1])
+        self.assertAlmostEqual(moved_half, moved_full / 2.0, delta=0.02)
+
+
 class CleanColourTests(unittest.TestCase):
     """Colour cleaned by what green knows: speckle goes, edges stay."""
 

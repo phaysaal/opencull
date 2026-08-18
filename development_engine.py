@@ -365,6 +365,17 @@ def _apply_global(rgb: np.ndarray, operations: list[dict[str, Any]],
             if progress is not None:
                 progress(done, total, _named(item))
             continue
+        if op == "color.warp" and isinstance(value, dict):
+            # A smooth warp of colour space itself: a coarse lattice of
+            # deltas, trilinearly interpolated, applied in the encoded
+            # domain where colour is judged. This is the shape of a
+            # camera look -- the profile idea from the Capture One
+            # study -- and its smoothness is by construction: a 9-cubed
+            # lattice cannot hold a cliff, only slopes.
+            result = _colour_warp(result, value)
+            if progress is not None:
+                progress(done, total, _named(item))
+            continue
         if op == "tone.curve" and isinstance(value, dict):
             # The curve is a display-referred instrument: it is drawn
             # against the picture as shown, so it runs on the encoded
@@ -395,13 +406,13 @@ def _apply_global(rgb: np.ndarray, operations: list[dict[str, Any]],
                             + shown[..., 2] * 0.0722)
                     lifted = np.interp(
                         luma * 255.0, np.arange(256), lut
-                    ).astype(np.float32) / 255.0
+                    ).astype(np.float32)
                     ratio = lifted / np.maximum(luma, 1e-4)
                     held = np.clip(
-                        shown * ratio[..., None] * 255.0, 0.0, 255.0)
+                        shown * ratio[..., None], 0.0, 1.0)
                     curved = (held if curved is None
                               else curved * (1.0 - keep) + held * keep)
-                result = _decoded(np.clip(curved, 0.0, 255.0))
+                result = _decoded(np.clip(curved, 0.0, 1.0))
             if progress is not None:
                 progress(done, total, _named(item))
             continue
@@ -863,6 +874,59 @@ def _spatial_mask(rgb: np.ndarray, shape: str, value: dict[str, Any]) -> np.ndar
             return (1.0 - weight).astype(np.float32)
         return weight.astype(np.float32)
     return _hue_mask(rgb, anchor)
+
+
+def _warp_lattice(value: dict[str, Any]) -> tuple[np.ndarray, int] | None:
+    """The lattice a warp carries: (size^3, 3) float32 deltas, or None."""
+    try:
+        size = int(value.get("size", 9))
+    except (TypeError, ValueError):
+        return None
+    if not 2 <= size <= 33:
+        return None
+    encoded = str(value.get("lattice") or "")
+    if not encoded:
+        return None
+    try:
+        raw = np.frombuffer(base64.b64decode(encoded), dtype=np.float16)
+        lattice = raw.astype(np.float32).reshape(size, size, size, 3)
+    except (ValueError, TypeError):
+        return None
+    return lattice, size
+
+
+def _colour_warp(rgb: np.ndarray, value: dict[str, Any]) -> np.ndarray:
+    """Move every colour by the lattice's word for it, smoothly.
+
+    The lattice is indexed by encoded R, G, B; between nodes the delta
+    is the trilinear blend of the eight corners, so neighbouring
+    colours always receive neighbouring corrections -- the smoothness
+    doctrine as arithmetic. A lattice of zeros is a perfect no-op, and
+    anything unreadable is treated as one.
+    """
+    held = _warp_lattice(value)
+    if held is None:
+        return rgb
+    lattice, size = held
+    shown = np.clip(_encoded(np.clip(rgb, 0.0, None)), 0.0, 1.0)
+    pos = shown * (size - 1)
+    base = np.minimum(np.floor(pos).astype(np.int32), size - 2)
+    frac = (pos - base).astype(np.float32)
+    r0, g0, b0 = base[..., 0], base[..., 1], base[..., 2]
+    fr, fg, fb = (frac[..., i][..., None] for i in range(3))
+    delta = np.zeros_like(shown)
+    for dr in (0, 1):
+        wr = fr if dr else (1.0 - fr)
+        for dg in (0, 1):
+            wg = fg if dg else (1.0 - fg)
+            for db in (0, 1):
+                wb = fb if db else (1.0 - fb)
+                corner = lattice[r0 + dr, g0 + dg, b0 + db]
+                delta = delta + corner * (wr * wg * wb)
+    strength = float(value.get("strength", 100.0) or 0.0) / 100.0
+    strength = min(max(strength, 0.0), 1.0)
+    walked = np.clip(shown + delta * strength, 0.0, 1.0)
+    return _decoded(walked).astype(np.float32)
 
 
 def _box_mean(plane: np.ndarray, radius: int) -> np.ndarray:
