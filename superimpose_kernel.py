@@ -134,6 +134,79 @@ def drift_bound(seconds: float, focal_mm: float, width_px: int,
     return abs(float(seconds)) * SIDEREAL_ARCSEC / arcsec_per_px
 
 
+def sky_rotation(seconds: float) -> float:
+    """Degrees the sky turns in that time, about the celestial pole.
+
+    On a fixed tripod the whole transformation between two frames IS
+    this rotation -- and its angle is not searched for, it is read off
+    the clock. Where the pole sits in the frame is unknown, but a
+    rotation about an unknown centre is a rotation about a known one
+    followed by a translation, and the translation is what the vote
+    was already finding. So rotation costs nothing but a pre-turn.
+    """
+    return float(seconds) * 360.0 / 86164.0905
+
+
+def turned(points: np.ndarray, degrees: float,
+           centre: tuple[float, float]) -> np.ndarray:
+    """Star positions rotated about a point, in the image's own axes."""
+    if not len(points) or abs(degrees) < 1e-9:
+        return points
+    angle = np.radians(degrees)
+    cos, sin = np.cos(angle), np.sin(angle)
+    x = points[:, 0] - centre[0]
+    y = points[:, 1] - centre[1]
+    return np.stack([centre[0] + x * cos - y * sin,
+                     centre[1] + x * sin + y * cos], axis=1).astype(
+        np.float32)
+
+
+def vote_rotation(reference: np.ndarray, moving: np.ndarray,
+                  most: int = 30, bin_degrees: float = 0.5,
+                  tolerance: float = 3.0) -> tuple[float, int]:
+    """The turn many star PAIRS agree on, at any angle at all.
+
+    A hand does not obey the sidereal rate: between two frames the sky
+    can have moved anywhere and turned any amount, so nothing bounds
+    the search and the clock says nothing. What survives is shape. The
+    distance between two stars does not change when the camera moves
+    or rolls, so pairs of the same length in both frames are probably
+    the same pair -- and the angle between those two pairs is the
+    roll. Wrong pairings scatter across the circle; right ones pile up
+    on one answer, which is the same argument the shift vote makes,
+    one dimension down.
+    """
+    ref, mov = reference[:most], moving[:most]
+    if len(ref) < 3 or len(mov) < 3:
+        return 0.0, 0
+    ri, rj = np.triu_indices(len(ref), k=1)
+    mi, mj = np.triu_indices(len(mov), k=1)
+    rdx = ref[rj, 0] - ref[ri, 0]
+    rdy = ref[rj, 1] - ref[ri, 1]
+    mdx = mov[mj, 0] - mov[mi, 0]
+    mdy = mov[mj, 1] - mov[mi, 1]
+    ref_len, mov_len = np.hypot(rdx, rdy), np.hypot(mdx, mdy)
+    ref_ang = np.degrees(np.arctan2(rdy, rdx))
+    mov_ang = np.degrees(np.arctan2(mdy, mdx))
+    # Only pairs that could be the same pair: the same length, within
+    # what centroiding and a little scale error can explain.
+    gap = np.abs(ref_len[:, None] - mov_len[None, :])
+    allow = tolerance + ref_len[:, None] * 0.01
+    near = (gap < allow) & (ref_len[:, None] > 12.0)
+    if not near.any():
+        return 0.0, 0
+    turns = (ref_ang[:, None] - mov_ang[None, :])[near]
+    # A pair has no head or tail, so every answer has a twin half a
+    # turn away; folding them together doubles the pile.
+    turns = (turns + 180.0) % 180.0
+    bins: dict[int, int] = {}
+    for value in np.round(turns / bin_degrees).astype(int):
+        bins[int(value)] = bins.get(int(value), 0) + 1
+    best = max(bins, key=lambda key: bins[key])
+    inside = np.round(turns / bin_degrees).astype(int) == best
+    return float(turns[inside].mean()), int(bins[best])
+
+
 # --- finding stars --------------------------------------------------------
 
 def stars_in(grey: np.ndarray, wanted: int = STARS_WANTED,
@@ -276,6 +349,41 @@ def _master_dark(folder: str, pattern: str,
     return np.median(held, axis=0).astype(np.float32)
 
 
+def _warped(frame: np.ndarray, degrees: float,
+            shift: tuple[float, float]) -> np.ndarray:
+    """The frame turned and moved, sampled between its own pixels.
+
+    Bilinear rather than nearest: a star landing half a pixel off in
+    every frame is a stack of smeared stars, and rounding the shift
+    away throws out exactly the subpixel accuracy the centroids were
+    computed to have. What falls outside is left black, and the stack
+    sees it as the black it is.
+    """
+    height, width = frame.shape[:2]
+    cx, cy = (width - 1) / 2.0, (height - 1) / 2.0
+    yy, xx = np.mgrid[0:height, 0:width].astype(np.float32)
+    # Where each output pixel came from: undo the move, then the turn.
+    px = xx - shift[0] - cx
+    py = yy - shift[1] - cy
+    angle = np.radians(-degrees)
+    cos, sin = np.cos(angle), np.sin(angle)
+    sx = cx + px * cos - py * sin
+    sy = cy + px * sin + py * cos
+    x0 = np.floor(sx).astype(np.int32)
+    y0 = np.floor(sy).astype(np.int32)
+    fx = (sx - x0)[..., None]
+    fy = (sy - y0)[..., None]
+    inside = ((x0 >= 0) & (x0 < width - 1)
+              & (y0 >= 0) & (y0 < height - 1))
+    x0c = np.clip(x0, 0, width - 2)
+    y0c = np.clip(y0, 0, height - 2)
+    top = (frame[y0c, x0c] * (1 - fx) + frame[y0c, x0c + 1] * fx)
+    low = (frame[y0c + 1, x0c] * (1 - fx)
+           + frame[y0c + 1, x0c + 1] * fx)
+    out = top * (1 - fy) + low * fy
+    return np.where(inside[..., None], out, 0.0).astype(np.float32)
+
+
 def _shifted(frame: np.ndarray, shift: tuple[float, float]) -> np.ndarray:
     """The frame moved by whole pixels, with what leaves it left black."""
     dx, dy = int(round(shift[0])), int(round(shift[1]))
@@ -292,10 +400,44 @@ def _shifted(frame: np.ndarray, shift: tuple[float, float]) -> np.ndarray:
     return out
 
 
+def _best_placement(anchors: np.ndarray, moving: np.ndarray,
+                    angles: list[float], centre: tuple[float, float],
+                    radius: float, guess: tuple[float, float] | None
+                    ) -> tuple[float, tuple[float, float], int]:
+    """Of the angles worth trying, the one whose stars agree most.
+
+    Every candidate turn is settled by asking the same question the
+    translation vote already answers -- how many stars land on stars
+    -- so a wrong angle is not argued about, it simply scores badly.
+    """
+    best = (0.0, (0.0, 0.0), 0)
+    for degrees in angles:
+        spun = turned(moving, degrees, centre)
+        if guess is not None:
+            shift, agreed = vote_shift(
+                anchors, spun, REFINE_PX, centre=guess)
+            if agreed >= LEAST_AGREEING:
+                if agreed > best[2]:
+                    best = (degrees, shift, agreed)
+                continue
+        shift, agreed = vote_shift(anchors, spun, radius)
+        if agreed > best[2]:
+            best = (degrees, shift, agreed)
+    return best
+
+
 def register(photos: str, pattern: str = "*.RAF", only: str = "",
              focal_mm: float = 0.0, sensor_mm: float = DEFAULT_SENSOR_MM,
-             demosaic: bool = True) -> str:
-    """Where every frame sits relative to the first, in pixels."""
+             demosaic: bool = True, handheld: bool = False,
+             hints: str = "") -> str:
+    """Where every frame sits relative to the first, in pixels.
+
+    On a tripod the turn is read off the clock and only the shift is
+    searched for. Handheld, nothing is bounded: the turn is voted on
+    by star pairs -- shape survives what a hand does -- and the shift
+    is voted on afterwards, over the whole frame. Coarse hints, where
+    a program has any, narrow that unbounded search back down.
+    """
     paths = frames_of(photos, pattern, only)
     if len(paths) < 2:
         return json.dumps({
@@ -304,11 +446,13 @@ def register(photos: str, pattern: str = "*.RAF", only: str = "",
                         "agreed": 0} for path in paths],
             "note": "one frame or none: nothing to register"})
     taken = _capture_seconds(paths)
+    coarse = _hints_of(hints)
     reference_grey = _grey(_frame(paths[0], demosaic))
     height, width = reference_grey.shape
+    centre = ((width - 1) / 2.0, (height - 1) / 2.0)
     anchors = stars_in(reference_grey)
     placed = [{"name": paths[0].name, "dx": 0.0, "dy": 0.0,
-               "agreed": int(len(anchors))}]
+               "turn": 0.0, "agreed": int(len(anchors))}]
     rate: tuple[float, float] | None = None
     for index, path in enumerate(paths[1:], start=1):
         _say(index * 45.0 / max(len(paths) - 1, 1),
@@ -317,33 +461,78 @@ def register(photos: str, pattern: str = "*.RAF", only: str = "",
         gap = ((taken[index] - taken[0])
                if taken[index] is not None and taken[0] is not None
                else None)
-        bound = (drift_bound(gap, focal_mm, width, sensor_mm)
-                 if gap is not None and focal_mm > 0 else 0.0)
-        # The sky's own bound where it is knowable; otherwise a
-        # generous fraction of the frame, which is still a disc.
-        radius = bound if bound > 0 else min(height, width) * 0.15
-        shift, agreed = (0.0, 0.0), 0
-        if rate is not None and gap is not None:
-            # Constant rate: the shift is predicted, and only a small
-            # window around the prediction is examined.
-            guess = (rate[0] * gap, rate[1] * gap)
-            shift, agreed = vote_shift(
-                anchors, moving, REFINE_PX, centre=guess)
-        if agreed < LEAST_AGREEING:
-            shift, agreed = vote_shift(anchors, moving, radius)
-        if agreed >= LEAST_AGREEING and gap:
+        if handheld:
+            # Nothing is bounded: shape decides the turn, and the
+            # shift is looked for across the whole frame -- unless a
+            # program has said roughly where the sky went.
+            spun, agreeing = vote_rotation(anchors, moving)
+            angles = [spun, spun - 180.0]
+            radius = float(max(height, width))
+            guess = coarse.get(path.name)
+            if guess is not None:
+                radius = min(radius, max(height, width) * 0.25)
+        else:
+            bound = (drift_bound(gap, focal_mm, width, sensor_mm)
+                     if gap is not None and focal_mm > 0 else 0.0)
+            # The sky's own bound where it is knowable; otherwise a
+            # generous fraction of the frame, which is still a disc.
+            radius = bound if bound > 0 else min(height, width) * 0.15
+            # The clock says how far the sky turned; which way depends
+            # on where the camera looked, so both ways are tried and
+            # the stars settle it.
+            spun = sky_rotation(gap) if gap is not None else 0.0
+            angles = [0.0] if abs(spun) < 0.02 else [-spun, spun, 0.0]
+            guess = None
+            if rate is not None and gap is not None:
+                guess = (rate[0] * gap, rate[1] * gap)
+        degrees, shift, agreed = _best_placement(
+            anchors, moving, angles, centre, radius, guess)
+        if agreed < LEAST_AGREEING and not handheld:
+            # The bound is only as good as the focal length it was
+            # told, and a wrong lens is a search that cannot reach the
+            # answer. Widening costs one more vote and is the
+            # difference between a stack and a smear.
+            wider = max(radius * 4.0, min(height, width) * 0.25)
+            spread = list(angles)
+            if abs(spun) >= 0.02:
+                spread += [-spun * 2, spun * 2]
+            degrees, shift, agreed = _best_placement(
+                anchors, moving, spread, centre, wider, None)
+            radius = wider
+        if agreed >= LEAST_AGREEING and gap and not handheld:
             rate = (shift[0] / gap, shift[1] / gap)
         placed.append({
             "name": path.name,
             "dx": round(float(shift[0]), 3),
             "dy": round(float(shift[1]), 3),
+            "turn": round(float(degrees), 4),
             "agreed": int(agreed),
             "bound_px": round(float(radius), 1),
         })
     return json.dumps({
         "format": FORMAT, "photos": str(photos), "pattern": pattern,
         "only": only, "focal_mm": focal_mm, "sensor_mm": sensor_mm,
-        "demosaic": bool(demosaic), "frames": placed})
+        "demosaic": bool(demosaic), "handheld": bool(handheld),
+        "frames": placed})
+
+
+def _hints_of(hints: str) -> dict[str, tuple[float, float]]:
+    """Coarse per-frame shifts a program worked out, if any."""
+    told = str(hints or "").strip()
+    if not told:
+        return {}
+    try:
+        value = json.loads(told if told.startswith("{")
+                           else Path(told).read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        return {}
+    found: dict[str, tuple[float, float]] = {}
+    for name, where in (value.get("shifts") or {}).items():
+        try:
+            found[str(name)] = (float(where[0]), float(where[1]))
+        except (TypeError, ValueError, IndexError):
+            continue
+    return found
 
 
 def superimpose(register_text: str, mode: str = "trails",
@@ -375,12 +564,21 @@ def superimpose(register_text: str, mode: str = "trails",
     paths = [root / str(item["name"]) for item in frames]
     shifts = [(float(item.get("dx", 0.0)), float(item.get("dy", 0.0)))
               if aligned else (0.0, 0.0) for item in frames]
+    turns = [float(item.get("turn", 0.0)) if aligned else 0.0
+             for item in frames]
 
     def read(index: int) -> np.ndarray:
         held = _frame(paths[index], demosaic)
         if dark is not None and dark.shape == held.shape:
             held = np.clip(held - dark, 0.0, None)
-        return _shifted(held, shifts[index]) if aligned else held
+        if not aligned:
+            return held
+        shift, turn = shifts[index], turns[index]
+        whole = (abs(turn) < 1e-6
+                 and abs(shift[0] - round(shift[0])) < 1e-6
+                 and abs(shift[1] - round(shift[1])) < 1e-6)
+        return (_shifted(held, shift) if whole
+                else _warped(held, turn, shift))
 
     total = len(paths)
     stack = read(0).astype(np.float32)
@@ -444,6 +642,131 @@ def _write_tiff(path: Path, shown: np.ndarray) -> None:
     import tifffile
 
     tifffile.imwrite(path, (shown * 65535.0 + 0.5).astype(np.uint16))
+
+
+# --- what a model can say about a sky ------------------------------------
+#
+# Handheld, nothing is bounded: between two frames the sky can have
+# gone anywhere and turned any amount, and the clock says nothing
+# because the hand moved further than the sky did. The star-pair vote
+# still works -- shape survives what a hand does -- but it searches the
+# whole frame, and on a poor sky it can settle on a wrong pile.
+#
+# What a model is genuinely good at, and arithmetic is not, is
+# RECOGNITION: it knows what Orion's Belt looks like. It is not asked
+# to register anything, only to say roughly where a group it knows sits
+# in each frame. That coarse answer bounds the search back down, and
+# the deterministic vote does the actual registering to a tenth of a
+# pixel -- the same division of labour the named-subject timelapse
+# makes, and for the same reason.
+
+def sky_keyframes(photos: str, pattern: str = "*.RAF",
+                  every: float = 20, only: str = "") -> list:
+    from timelapse_kernel import keyframes
+
+    return keyframes(photos, pattern, every, only)
+
+
+def sky_proof(photos: str, name: str, directory: str,
+              edge: float = 1400) -> str:
+    from timelapse_kernel import keyframe_proof
+
+    return keyframe_proof(photos, name, directory, edge)
+
+
+def group_prompt(proof: str) -> str:
+    with Image.open(str(proof)) as opened:
+        width, height = opened.size
+    return (
+        f"This is a {width}x{height} photograph of the night sky. Name "
+        "ONE star pattern you actually recognise in it -- a "
+        "constellation, an asterism, a distinctive bright pair or "
+        "triangle -- and box it. Answer x0, y0, x1, y1 in pixels of "
+        "THIS image, origin top-left, and put the pattern's usual name "
+        "in 'group'. Prefer the same pattern you would pick in any "
+        "other frame of the same sky, because the answer is used to "
+        "line the frames up with each other. If you recognise nothing "
+        "with confidence, answer visible=false and zeros -- a guess is "
+        "worse than nothing here.")
+
+
+def collect_group(hints_json: str, photos: str, name: str, proof: str,
+                  found: Any) -> str:
+    """One frame's recognised group, gathered into coarse shifts.
+
+    The model answers in the proof's pixels; the frames are larger, so
+    the box's middle is scaled back to the frame's own. Shifts are
+    taken against the first frame that showed the SAME group -- two
+    frames agreeing about Orion say something, and a frame that saw
+    Orion compared against one that saw Cassiopeia says nothing.
+    """
+    held = json.loads(hints_json or '{"seen": {}, "shifts": {}}')
+    told = found if isinstance(found, dict) else {
+        key: getattr(found, key, None)
+        for key in ("group", "x0", "y0", "x1", "y1", "visible")}
+    if not told.get("visible"):
+        return json.dumps(held)
+    try:
+        box = [float(told["x0"]), float(told["y0"]),
+               float(told["x1"]), float(told["y1"])]
+    except (KeyError, TypeError, ValueError):
+        return json.dumps(held)
+    if box[2] <= box[0] or box[3] <= box[1]:
+        return json.dumps(held)
+    with Image.open(str(proof)) as opened:
+        proof_w, proof_h = opened.size
+    frame = Path(str(photos)).expanduser().resolve() / str(name)
+    try:
+        full = _frame(frame, demosaic=False)
+        full_h, full_w = full.shape[:2]
+    except Exception:                        # noqa: BLE001 - proof's own
+        full_w, full_h = proof_w, proof_h
+    scale_x = full_w / max(proof_w, 1)
+    scale_y = full_h / max(proof_h, 1)
+    middle = [((box[0] + box[2]) / 2.0) * scale_x,
+              ((box[1] + box[3]) / 2.0) * scale_y]
+    # A model writes "Orion's Belt" once and "Orions Belt" the next
+    # time; the same pattern under two spellings must still be one
+    # anchor, so only letters and digits are kept.
+    import re
+
+    group = re.sub(r"[^a-z0-9]+", "",
+                   str(told.get("group") or "a group").casefold())
+    seen = held.setdefault("seen", {})
+    if group not in seen:
+        seen[group] = {"name": str(name), "at": middle}
+        held.setdefault("shifts", {})
+        return json.dumps(held)
+    first = seen[group]
+    # The correction that would carry this frame back onto that one.
+    held.setdefault("shifts", {})[str(name)] = [
+        round(first["at"][0] - middle[0], 1),
+        round(first["at"][1] - middle[1], 1)]
+    return json.dumps(held)
+
+
+def hints_usable(hints_json: str) -> bool:
+    """Whether anything was recognised well enough to bound a search."""
+    try:
+        held = json.loads(hints_json or "{}")
+    except ValueError:
+        return False
+    return bool(held.get("seen"))
+
+
+def hints_note(hints_json: str) -> str:
+    held = json.loads(hints_json or "{}")
+    seen = held.get("seen") or {}
+    shifts = held.get("shifts") or {}
+    if not seen:
+        return ("No star pattern was recognised in any keyframe, so "
+                "nothing bounds the search; the star-pair vote will "
+                "work over the whole frame on its own.")
+    return (f"Recognised {', '.join(sorted(seen))} across the "
+            f"keyframes; {len(shifts)} frame(s) carry a coarse "
+            "position from it, which narrows the registration. The "
+            "stars themselves still settle it to a fraction of a "
+            "pixel.")
 
 
 def stack_valid(told: Any) -> bool:

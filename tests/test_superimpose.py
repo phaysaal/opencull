@@ -15,6 +15,67 @@ import superimpose_kernel as sk
 HEIGHT, WIDTH = 300, 400
 
 
+def spun(px, py, degrees, cx, cy):
+    """Star positions turned about a point, for a synthetic sky."""
+    angle = np.radians(degrees)
+    cos, sin = np.cos(angle), np.sin(angle)
+    dx, dy = px - cx, py - cy
+    return cx + dx * cos - dy * sin, cy + dx * sin + dy * cos
+
+
+def turning_night(folder: Path, turns: list[float],
+                  pole: tuple[float, float] = (120.0, 480.0),
+                  step: float = 240.0, stamped: bool = True) -> None:
+    """A sky that turns about a pole, with the clock to prove it."""
+    rng = np.random.default_rng(5)
+    xs = rng.uniform(40, WIDTH - 40, 80)
+    ys = rng.uniform(40, HEIGHT - 40, 80)
+    brightness = rng.uniform(0.35, 0.95, 80)
+    grid_y, grid_x = np.mgrid[0:HEIGHT, 0:WIDTH]
+    for index, turn in enumerate(turns):
+        px, py = spun(xs, ys, turn, *pole)
+        field = np.zeros((HEIGHT, WIDTH), np.float32) + 0.04
+        for x, y, bright in zip(px, py, brightness):
+            if 0 <= x < WIDTH and 0 <= y < HEIGHT:
+                field += bright * np.exp(
+                    -(((grid_x - x) ** 2 + (grid_y - y) ** 2)
+                      / (2 * 1.6 ** 2)))
+        field = np.clip(field + np.random.default_rng(
+            600 + index).normal(0, 0.04, (HEIGHT, WIDTH)), 0, 1)
+        image = Image.fromarray(
+            (np.stack([field] * 3, -1) * 255 + 0.5).astype(np.uint8))
+        exif = Image.Exif()
+        if stamped:
+            seconds = int(index * step)
+            exif[36867] = (f"2026:08:18 22:{10 + seconds // 60:02d}:"
+                           f"{seconds % 60:02d}")
+            exif[306] = exif[36867]
+        image.save(folder / f"S{index:03d}.jpg", quality=98, exif=exif)
+
+
+def handheld_night(folder: Path,
+                   held: list[tuple[float, float, float]]) -> None:
+    """A sky a hand held: rolled and moved, arbitrarily."""
+    rng = np.random.default_rng(5)
+    xs = rng.uniform(40, WIDTH - 40, 80)
+    ys = rng.uniform(40, HEIGHT - 40, 80)
+    brightness = rng.uniform(0.35, 0.95, 80)
+    grid_y, grid_x = np.mgrid[0:HEIGHT, 0:WIDTH]
+    for index, (degrees, dx, dy) in enumerate(held):
+        px, py = spun(xs, ys, degrees, WIDTH / 2, HEIGHT / 2)
+        field = np.zeros((HEIGHT, WIDTH), np.float32) + 0.04
+        for x, y, bright in zip(px + dx, py + dy, brightness):
+            if 0 <= x < WIDTH and 0 <= y < HEIGHT:
+                field += bright * np.exp(
+                    -(((grid_x - x) ** 2 + (grid_y - y) ** 2)
+                      / (2 * 1.6 ** 2)))
+        field = np.clip(field + np.random.default_rng(
+            700 + index).normal(0, 0.04, (HEIGHT, WIDTH)), 0, 1)
+        Image.fromarray(
+            (np.stack([field] * 3, -1) * 255 + 0.5).astype(np.uint8)
+        ).save(folder / f"H{index:03d}.jpg", quality=98)
+
+
 def night(folder: Path, drifts: list[tuple[float, float]],
           noise: float = 0.045, streak_on: int | None = None) -> None:
     """A synthetic sky: fixed stars, a stated drift, honest noise."""
@@ -191,6 +252,163 @@ class StackingTests(unittest.TestCase):
             self.assertFalse(sk.stack_valid(json.dumps(told)))
 
 
+class RotationTests(unittest.TestCase):
+    """The sky's turn read off the clock, and a hand's voted on."""
+
+    TURNS = [0.0, 1.003, 2.005, 3.008, 4.011, 5.014]
+
+    def test_the_clock_gives_the_angle_without_searching_for_it(self):
+        self.assertAlmostEqual(sk.sky_rotation(86164.0905), 360.0,
+                               places=6)
+        self.assertAlmostEqual(sk.sky_rotation(600), 2.507, places=3)
+
+    def test_a_turning_sky_is_registered_by_its_timestamps(self):
+        with tempfile.TemporaryDirectory() as folder:
+            turning_night(Path(folder), self.TURNS)
+            told = json.loads(sk.register(
+                folder, "*.jpg", demosaic=False, focal_mm=24.0))
+            for index, item in enumerate(told["frames"]):
+                self.assertAlmostEqual(
+                    abs(item["turn"]), self.TURNS[index], delta=0.1)
+                self.assertGreaterEqual(
+                    item["agreed"], sk.LEAST_AGREEING)
+
+    def test_rotation_keeps_the_stars_as_points(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            turning_night(root, self.TURNS)
+            placed = json.loads(sk.register(
+                folder, "*.jpg", demosaic=False, focal_mm=24.0))
+            flattened = {**placed, "frames": [
+                {**item, "turn": 0.0} for item in placed["frames"]]}
+
+            def peak(told):
+                held = np.asarray(Image.open(
+                    told["proof"]).convert("L"), float) / 255.0
+                return float(held.max())
+            turned = json.loads(sk.superimpose(
+                json.dumps(placed), "average", output=str(root / "a")))
+            flat = json.loads(sk.superimpose(
+                json.dumps(flattened), "average", output=str(root / "b")))
+            # Ignoring the turn smears every star into an arc.
+            self.assertGreater(peak(turned), peak(flat) * 1.3)
+
+    def test_a_hand_roll_is_voted_on_by_star_pairs(self):
+        held = [(0.0, 0, 0), (7.0, 60, -40), (-11.0, -80, 55),
+                (16.0, 120, 90)]
+        with tempfile.TemporaryDirectory() as folder:
+            handheld_night(Path(folder), held)
+            told = json.loads(sk.register(
+                folder, "*.jpg", demosaic=False, handheld=True))
+            for item, (degrees, _dx, _dy) in zip(told["frames"], held):
+                self.assertAlmostEqual(
+                    abs(item["turn"]), abs(degrees), delta=0.2)
+                self.assertGreaterEqual(
+                    item["agreed"], sk.LEAST_AGREEING)
+
+    def test_the_turn_vote_folds_at_half_a_circle(self):
+        # A pair of stars has no head and no tail, so an answer and
+        # its opposite are the same evidence; the caller scores both.
+        points = np.random.default_rng(3).uniform(
+            20, 380, (40, 2)).astype(np.float32)
+        rolled = sk.turned(points, 12.0, (200.0, 150.0))
+        angle, agreed = sk.vote_rotation(points, rolled)
+        self.assertAlmostEqual(angle % 180.0, (-12.0) % 180.0, delta=0.3)
+        self.assertGreater(agreed, 100)
+
+    def test_a_wrong_lens_widens_rather_than_failing(self):
+        with tempfile.TemporaryDirectory() as folder:
+            turning_night(Path(folder), self.TURNS)
+            # 200mm on a sky shot at 24: the bound is far too tight,
+            # and without the widening every frame would come back
+            # unregistered.
+            told = json.loads(sk.register(
+                folder, "*.jpg", demosaic=False, focal_mm=200.0))
+            agreed = [item["agreed"] for item in told["frames"][1:]]
+            self.assertTrue(all(
+                count >= sk.LEAST_AGREEING for count in agreed))
+
+
+class WarpTests(unittest.TestCase):
+    def test_a_turn_and_a_fraction_land_where_they_should(self):
+        frame = np.zeros((60, 80, 3), np.float32)
+        frame[30, 40] = 1.0                      # one lit pixel, centred
+        moved = sk._warped(frame, 0.0, (3.0, 2.0))
+        self.assertAlmostEqual(float(moved[32, 43, 0]), 1.0, places=3)
+
+    def test_half_a_pixel_is_shared_between_two(self):
+        frame = np.zeros((60, 80, 3), np.float32)
+        frame[30, 40] = 1.0
+        moved = sk._warped(frame, 0.0, (0.5, 0.0))
+        self.assertAlmostEqual(float(moved[30, 40, 0]), 0.5, places=3)
+        self.assertAlmostEqual(float(moved[30, 41, 0]), 0.5, places=3)
+
+    def test_what_falls_outside_is_black_not_wrapped(self):
+        frame = np.ones((40, 40, 3), np.float32)
+        moved = sk._warped(frame, 0.0, (10.0, 0.0))
+        self.assertEqual(float(moved[20, 2, 0]), 0.0)
+        self.assertAlmostEqual(float(moved[20, 20, 0]), 1.0, places=3)
+
+
+class ModelAnchorTests(unittest.TestCase):
+    """What a model is asked, and what is done with the answer."""
+
+    def test_the_prompt_asks_for_recognition_not_registration(self):
+        with tempfile.TemporaryDirectory() as folder:
+            night(Path(folder), [(0.0, 0.0)])
+            asked = sk.group_prompt(str(Path(folder) / "N000.jpg"))
+            self.assertIn("recognise", asked)
+            self.assertIn(f"{WIDTH}x{HEIGHT}", asked)
+            # A guess is worse than nothing, and it says so.
+            self.assertIn("visible=false", asked)
+
+    def test_two_frames_seeing_one_group_give_a_coarse_shift(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            night(root, [(0.0, 0.0), (0.0, 0.0)])
+            first = str(root / "N000.jpg")
+            second = str(root / "N001.jpg")
+            hints = sk.collect_group("", folder, "N000.jpg", first, {
+                "group": "Orion's Belt", "x0": 100, "y0": 100,
+                "x1": 140, "y1": 140, "visible": True})
+            hints = sk.collect_group(hints, folder, "N001.jpg", second, {
+                "group": "orions belt", "x0": 150, "y0": 130,
+                "x1": 190, "y1": 170, "visible": True})
+            told = json.loads(hints)
+            self.assertTrue(sk.hints_usable(hints))
+            self.assertAlmostEqual(
+                told["shifts"]["N001.jpg"][0], -50.0, delta=1.0)
+            self.assertAlmostEqual(
+                told["shifts"]["N001.jpg"][1], -30.0, delta=1.0)
+
+    def test_a_frame_recognising_nothing_says_nothing(self):
+        with tempfile.TemporaryDirectory() as folder:
+            night(Path(folder), [(0.0, 0.0)])
+            hints = sk.collect_group(
+                "", folder, "N000.jpg", str(Path(folder) / "N000.jpg"),
+                {"group": "", "x0": 0, "y0": 0, "x1": 0, "y1": 0,
+                 "visible": False})
+            self.assertFalse(sk.hints_usable(hints))
+            self.assertIn("No star pattern", sk.hints_note(hints))
+
+    def test_different_groups_are_not_compared_with_each_other(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            night(root, [(0.0, 0.0), (0.0, 0.0)])
+            hints = sk.collect_group(
+                "", folder, "N000.jpg", str(root / "N000.jpg"),
+                {"group": "Orion", "x0": 100, "y0": 100, "x1": 140,
+                 "y1": 140, "visible": True})
+            hints = sk.collect_group(
+                hints, folder, "N001.jpg", str(root / "N001.jpg"),
+                {"group": "Cassiopeia", "x0": 300, "y0": 40, "x1": 340,
+                 "y1": 80, "visible": True})
+            told = json.loads(hints)
+            # Two different patterns are two anchors, not one shift.
+            self.assertEqual(told["shifts"], {})
+            self.assertEqual(len(told["seen"]), 2)
+
+
 class ProgramTests(unittest.TestCase):
     def test_a_finished_stack_passes_its_check_and_says_so(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -210,11 +428,12 @@ class ProgramTests(unittest.TestCase):
         self.assertIn("no frames", sk.stack_note(
             sk.superimpose(told, "trails")))
 
-    def test_the_program_is_in_the_catalogue(self):
+    def test_both_programs_are_in_the_catalogue(self):
         from opencull_gui.programs import BUILT_INS
 
-        self.assertIn("superimpose.kim",
-                      [name for name, _purpose in BUILT_INS])
+        listed = [name for name, _purpose in BUILT_INS]
+        self.assertIn("superimpose.kim", listed)
+        self.assertIn("handheld_stack.kim", listed)
 
 
 class DialogTests(unittest.TestCase):
@@ -246,6 +465,48 @@ class DialogTests(unittest.TestCase):
             self.assertEqual(
                 json.loads(Path(told["only"]).read_text())["names"],
                 ["N000.jpg"])
+
+    def test_the_two_questions_do_not_fight_over_one_slot(self):
+        from opencull_qt.superimpose import SuperimposeDialog
+
+        with tempfile.TemporaryDirectory() as folder:
+            dialog = SuperimposeDialog(folder)
+            self.addCleanup(dialog.deleteLater)
+            dialog.clipped.setChecked(True)
+            dialog.handheld.setChecked(True)
+            # Choosing how it was held must not un-choose the picture.
+            self.assertEqual(dialog.mode(), "clipped")
+            self.assertEqual(dialog.run_request()["program"],
+                             "handheld_stack.kim")
+            dialog.tripod.setChecked(True)
+            self.assertEqual(dialog.mode(), "clipped")
+            self.assertEqual(dialog.run_request()["program"],
+                             "superimpose.kim")
+
+    def test_trails_need_no_holding_and_say_so(self):
+        from opencull_qt.superimpose import SuperimposeDialog
+
+        with tempfile.TemporaryDirectory() as folder:
+            dialog = SuperimposeDialog(folder)
+            self.addCleanup(dialog.deleteLater)
+            dialog.trails.setChecked(True)
+            self.assertFalse(dialog.tripod.isEnabled())
+            self.assertFalse(dialog.handheld.isEnabled())
+            dialog.clipped.setChecked(True)
+            self.assertTrue(dialog.tripod.isEnabled())
+
+    def test_a_handheld_run_carries_keyframes_not_a_focal_length(self):
+        from opencull_qt.superimpose import SuperimposeDialog
+
+        with tempfile.TemporaryDirectory() as folder:
+            dialog = SuperimposeDialog(folder)
+            self.addCleanup(dialog.deleteLater)
+            dialog.clipped.setChecked(True)
+            dialog.handheld.setChecked(True)
+            told = dialog.run_request()["parameters"]
+            self.assertIn("every", told)
+            self.assertIn("proofs_dir", told)
+            self.assertNotIn("focal_mm", told)
 
     def test_the_three_pictures_are_the_three_modes(self):
         from opencull_qt.superimpose import SuperimposeDialog

@@ -61,6 +61,8 @@ BUILT_INS = (
      "teacher."),
     ("superimpose.kim",
      "Lay many frames of one sky on each other: trails, or a stack."),
+    ("handheld_stack.kim",
+     "Stack a handheld sky: a model recognises, the stars register."),
 )
 
 _PARAM_RE = re.compile(

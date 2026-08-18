@@ -1,0 +1,71 @@
+-- Stack a handheld sky: a model recognises, the stars register.
+--
+-- On a tripod the sky's own turning rate bounds everything, and
+-- superimpose.kim needs no model at all. Handheld it does not: between
+-- two frames the sky can have gone anywhere and turned any amount,
+-- because the hand moved further than the sky did, and the clock has
+-- nothing to say about a hand.
+--
+-- What survives a hand is SHAPE. The distance between two stars does
+-- not change when the camera moves or rolls, so pairs of the same
+-- length in both frames are probably the same pair, and the angle
+-- between them is the roll -- which is how this registers with no
+-- model at all. But that vote searches the whole frame, and on a poor
+-- sky it can settle on a wrong pile.
+--
+-- So a model is asked the one thing arithmetic cannot do: recognition.
+-- It knows what Orion's Belt looks like. It is not asked to register
+-- anything, only to say roughly where a pattern it recognises sits in
+-- a handful of keyframes. That coarse answer narrows the search, and
+-- the deterministic vote still does the registering, to a fraction of
+-- a pixel. A few calls for the whole run, not one per frame.
+
+param photos: text = "."
+param pattern: text = "*.RAF"
+param mode: text = "clipped"
+param only: text = ""
+param every: num = 20
+param darks: text = ""
+param sigma: num = 2.5
+param proofs_dir: text = ""
+param output: text = ""
+param demosaic: bool = true
+
+use "agents.kim"
+use python "superimpose_kernel.py"
+
+schema Group:
+    group: text
+    x0: num
+    y0: num
+    x1: num
+    y1: num
+    visible: bool
+
+-- A handful of frames, not all of them: recognition is asked for
+-- once per keyframe and carries the rest.
+chosen := sky_keyframes(photos, pattern, every, only)
+
+hints := ""
+forall name in chosen:
+    proof := sky_proof(photos, name, proofs_dir)
+    shown := observe image(proof)
+    check shown.exists
+    found := memo gen<Group>(group_prompt(proof), images=[shown]) by A
+    hints := collect_group(hints, photos, name, proof, found)
+
+print(hints_note(hints))
+
+-- Where every frame sits and how far it is rolled. The hints bound
+-- the search; the stars decide the answer.
+placed := register(photos, pattern, only, 0, 23.5, demosaic, true, hints)
+
+stacked := superimpose(placed, mode, output, darks, sigma)
+check stack_valid(stacked)
+print(stack_note(stacked))
+
+where := stack_home(stacked)
+check stack_valid(stacked)
+act file.overwrite(where, stacked)
+settle until check file_exists(where) within 5
+commit(stacked)

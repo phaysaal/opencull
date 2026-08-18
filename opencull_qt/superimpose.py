@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QCheckBox,
     QDialog,
     QDoubleSpinBox,
@@ -90,6 +91,46 @@ class SuperimposeDialog(QDialog):
             "The same registration, with nothing rejected. Honest for "
             "a clean sequence, and it keeps a meteor."))
         column.addWidget(self.average)
+
+        # Two questions, two groups. Radio buttons sharing a parent are
+        # one exclusive group as far as Qt is concerned, so choosing
+        # "handheld" silently un-chose "clipped" -- two answers fighting
+        # over one slot.
+        self._picture = QButtonGroup(self)
+        for choice in (self.trails, self.clipped, self.average):
+            self._picture.addButton(choice)
+
+        held_title = QLabel("HOW IT WAS HELD")
+        held_title.setObjectName("eyebrow")
+        held_title.setFont(theme.display(8))
+        column.addWidget(held_title)
+
+        self.tripod = QRadioButton(
+            "A tripod — the sky's own turning rate does the work, free")
+        self.tripod.setChecked(True)
+        self.tripod.setFont(theme.body(10))
+        self.tripod.setToolTip(tooltip(
+            "On a tripod the only thing moving is the sky, and it "
+            "turns at a rate the clock knows. The angle is read off "
+            "the timestamps and the shift is searched inside a disc "
+            "of known size. No model is asked for anything."))
+        column.addWidget(self.tripod)
+        self.handheld = QRadioButton(
+            "Handheld — a model names a star group to narrow the "
+            "search (paid, a handful of calls)")
+        self.handheld.setFont(theme.body(10))
+        self.handheld.setToolTip(tooltip(
+            "A hand moves further than the sky does, so nothing is "
+            "bounded and the clock says nothing. Star pairs still "
+            "give the roll -- shape survives what a hand does -- and "
+            "a model naming a pattern it recognises on a few "
+            "keyframes narrows where to look. The stars still settle "
+            "it to a fraction of a pixel."))
+        column.addWidget(self.handheld)
+
+        self._holding = QButtonGroup(self)
+        for choice in (self.tripod, self.handheld):
+            self._holding.addButton(choice)
 
         asks = QFormLayout()
         self.focal = QDoubleSpinBox()
@@ -187,7 +228,21 @@ class SuperimposeDialog(QDialog):
         buttons.addWidget(self.go)
         column.addLayout(buttons)
 
+        for choice in (self.trails, self.clipped, self.average,
+                       self.tripod, self.handheld):
+            choice.toggled.connect(self._retell)
+        self._retell()
+
     # --- small mechanics ---------------------------------------------------
+
+    def _retell(self) -> None:
+        """Trails register nothing, so how it was held cannot matter."""
+        registering = not self.trails.isChecked()
+        self.tripod.setEnabled(registering)
+        self.handheld.setEnabled(registering)
+        held = registering and self.tripod.isChecked()
+        self.focal.setEnabled(held)
+        self.sensor.setEnabled(held)
 
     def _choose_darks(self) -> None:
         chosen = QFileDialog.getExistingDirectory(
@@ -216,13 +271,21 @@ class SuperimposeDialog(QDialog):
             "pattern": self.pattern,
             "mode": self.mode(),
             "only": "",
-            "focal_mm": str(self.focal.value()),
-            "sensor_mm": str(self.sensor.value()),
             "darks": self.darks.text().strip(),
             "sigma": "2.5",
             "output": str(home),
             "demosaic": "true" if self.demosaic.isChecked() else "false",
         }
+        if self.handheld.isChecked():
+            # A different program: the deterministic one has nothing to
+            # bound its search with, and asking a model is a decision
+            # the photographer makes rather than a fallback taken
+            # quietly on their behalf.
+            parameters["every"] = "20"
+            parameters["proofs_dir"] = str(home / "keyframes")
+        else:
+            parameters["focal_mm"] = str(self.focal.value())
+            parameters["sensor_mm"] = str(self.sensor.value())
         if self.only_selected.isChecked() and self.selection:
             # Three hundred names do not fit in a parameter; they ride
             # in a small file beside the run's own outputs.
@@ -236,4 +299,6 @@ class SuperimposeDialog(QDialog):
                     f"The selection could not be written: {exc}")
                 return None
             parameters["only"] = str(chosen)
-        return {"program": "superimpose.kim", "parameters": parameters}
+        program = ("handheld_stack.kim" if self.handheld.isChecked()
+                   else "superimpose.kim")
+        return {"program": program, "parameters": parameters}
