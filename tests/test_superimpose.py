@@ -595,6 +595,140 @@ class CloudScreenTests(unittest.TestCase):
         self.assertEqual(kept["frames"][3]["verdict"], "kept by eye")
 
 
+class DrizzleTests(unittest.TestCase):
+    """Drops on a finer grid: what it buys, and what it costs."""
+
+    def dithered(self, folder: Path, count: int = 16,
+                 sigma: float = 0.75):
+        """An UNDERSAMPLED sky, shifted by fractions of a pixel."""
+        rng = np.random.default_rng(9)
+        xs = rng.uniform(25, WIDTH - 25, 40)
+        ys = rng.uniform(25, HEIGHT - 25, 40)
+        bright = rng.uniform(0.5, 0.9, 40)
+        grid_y, grid_x = np.mgrid[0:HEIGHT, 0:WIDTH]
+        offsets = [(round(rng.uniform(-3, 3), 3),
+                    round(rng.uniform(-3, 3), 3)) for _ in range(count)]
+        for index, (dx, dy) in enumerate(offsets):
+            field = np.zeros((HEIGHT, WIDTH), np.float32) + 0.03
+            for x, y, level in zip(xs + dx, ys + dy, bright):
+                field += level * np.exp(
+                    -(((grid_x - x) ** 2 + (grid_y - y) ** 2)
+                      / (2 * sigma ** 2)))
+            field = np.clip(field + np.random.default_rng(
+                1200 + index).normal(0, 0.02, (HEIGHT, WIDTH)), 0, 1)
+            Image.fromarray(
+                (np.stack([field] * 3, -1) * 255 + 0.5).astype(np.uint8)
+            ).save(folder / f"D{index:03d}.jpg", quality=99)
+        return offsets
+
+    def star_sigma(self, path, scale: float) -> float:
+        """Intensity-weighted width of the stars, in INPUT pixels."""
+        held = np.asarray(
+            Image.open(path).convert("L"), float) / 255.0
+        base = float(np.median(held))
+        reach = int(round(4 * scale))
+        widths = []
+        for x, y in sk.stars_in(held.astype(np.float32), wanted=30):
+            xi, yi = int(round(x)), int(round(y))
+            if not (reach < xi < held.shape[1] - reach
+                    and reach < yi < held.shape[0] - reach):
+                continue
+            patch = np.clip(
+                held[yi - reach:yi + reach + 1,
+                     xi - reach:xi + reach + 1] - base, 0, None)
+            if patch.sum() <= 0:
+                continue
+            grid_y, grid_x = np.mgrid[-reach:reach + 1, -reach:reach + 1]
+            share = patch / patch.sum()
+            mx = float((grid_x * share).sum())
+            my = float((grid_y * share).sum())
+            spread = float(((((grid_x - mx) ** 2 + (grid_y - my) ** 2))
+                            * share).sum() / 2)
+            widths.append(np.sqrt(spread))
+        return float(np.median(widths)) / scale
+
+    def test_the_grid_really_is_finer(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            self.dithered(root, count=6)
+            placed = sk.register(folder, "*.jpg", demosaic=False)
+            told = json.loads(sk.superimpose(
+                placed, "drizzle", output=str(root / "out"), scale=2.0))
+            with Image.open(told["stack"]) as opened:
+                self.assertEqual(opened.size, (WIDTH * 2, HEIGHT * 2))
+            self.assertEqual(told["drizzle"]["scale"], 2.0)
+
+    def test_dithered_drops_beat_an_interpolated_average(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            self.dithered(root, count=20)
+            placed = sk.register(folder, "*.jpg", demosaic=False)
+            plain = json.loads(sk.superimpose(
+                placed, "average", output=str(root / "avg")))
+            drizzled = json.loads(sk.superimpose(
+                placed, "drizzle", output=str(root / "dz"),
+                scale=2.0, pixfrac=0.8))
+            upsampled = root / "up.jpg"
+            with Image.open(plain["proof"]) as opened:
+                opened.resize((WIDTH * 2, HEIGHT * 2),
+                              Image.Resampling.BICUBIC).save(
+                    upsampled, quality=99)
+            blunt = self.star_sigma(upsampled, 2.0)
+            sharp = self.star_sigma(drizzled["proof"], 2.0)
+            # Nothing is interpolated, so nothing is blurred.
+            self.assertLess(sharp, blunt * 0.97)
+
+    def test_the_finer_grid_is_filled_by_enough_frames(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            self.dithered(root, count=16)
+            placed = sk.register(folder, "*.jpg", demosaic=False)
+            told = json.loads(sk.superimpose(
+                placed, "drizzle", output=str(root / "out"),
+                scale=2.0, pixfrac=0.8))
+            self.assertLess(told["drizzle"]["unfilled"], 0.01)
+
+    def test_a_drop_cannot_be_larger_than_a_pixel_or_smaller_than_a_speck(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            self.dithered(root, count=4)
+            placed = sk.register(folder, "*.jpg", demosaic=False)
+            wide = json.loads(sk.superimpose(
+                placed, "drizzle", output=str(root / "a"),
+                scale=9.0, pixfrac=8.0))
+            self.assertEqual(wide["drizzle"]["pixfrac"], 1.0)
+            self.assertEqual(wide["drizzle"]["scale"], 4.0)
+
+    def test_drizzle_honours_the_calibration_and_the_screen(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            self.dithered(root, count=6)
+            placed = json.loads(sk.register(
+                folder, "*.jpg", demosaic=False))
+            placed["frames"][1]["keep"] = False
+            told = json.loads(sk.superimpose(
+                json.dumps(placed), "drizzle",
+                output=str(root / "out"), scale=2.0))
+            self.assertEqual(told["frames_used"], 5)
+            self.assertEqual(told["set_aside"], ["D001.jpg"])
+
+    def test_a_drop_lands_where_the_transform_says(self):
+        # One lit pixel, no turn, a shift of exactly one input pixel:
+        # at twice the grid it must land two output pixels along.
+        frame = np.zeros((20, 20, 3), np.float32)
+        frame[10, 10] = 1.0
+        values = np.zeros((40, 40, 3), np.float64)
+        weights = np.zeros((40, 40), np.float64)
+        sk._drizzle_frame(frame, values, weights, 0.0, (1.0, 0.0),
+                          2.0, 1.0)
+        lit = values[..., 0] / np.maximum(weights, 1e-9)
+        found = np.argwhere(lit > 0.4)
+        self.assertTrue(len(found))
+        # centre of the drop: (10 + 1 + 0.5) * 2 = 23
+        self.assertAlmostEqual(float(found[:, 1].mean()), 22.5, delta=1.0)
+        self.assertAlmostEqual(float(found[:, 0].mean()), 20.5, delta=1.0)
+
+
 class ProgramTests(unittest.TestCase):
     def test_a_finished_stack_passes_its_check_and_says_so(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -735,19 +869,35 @@ class DialogTests(unittest.TestCase):
             self.assertEqual(told["flats"], "/flats")
             self.assertEqual(told["bias"], "/bias")
 
-    def test_the_three_pictures_are_the_three_modes(self):
+    def test_every_picture_offered_is_a_mode_the_kernel_has(self):
         from opencull_qt.superimpose import SuperimposeDialog
 
         with tempfile.TemporaryDirectory() as folder:
             dialog = SuperimposeDialog(folder)
             self.addCleanup(dialog.deleteLater)
             self.assertEqual(dialog.mode(), "trails")
+            for choice, name in ((dialog.clipped, "clipped"),
+                                 (dialog.drizzle, "drizzle"),
+                                 (dialog.average, "average")):
+                choice.setChecked(True)
+                self.assertEqual(dialog.mode(), name)
+                self.assertIn(name, sk.MODES)
+            self.assertEqual(len(sk.MODES), 4)
+
+    def test_the_drizzle_numbers_are_idle_until_drizzling(self):
+        from opencull_qt.superimpose import SuperimposeDialog
+
+        with tempfile.TemporaryDirectory() as folder:
+            dialog = SuperimposeDialog(folder)
+            self.addCleanup(dialog.deleteLater)
             dialog.clipped.setChecked(True)
-            self.assertEqual(dialog.mode(), "clipped")
-            dialog.average.setChecked(True)
-            self.assertEqual(dialog.mode(), "average")
-            self.assertEqual(sorted(sk.MODES),
-                             sorted(("trails", "clipped", "average")))
+            self.assertFalse(dialog.scale.isEnabled())
+            dialog.drizzle.setChecked(True)
+            self.assertTrue(dialog.scale.isEnabled())
+            self.assertTrue(dialog.pixfrac.isEnabled())
+            told = dialog.run_request()["parameters"]
+            self.assertEqual(told["scale"], "2.0")
+            self.assertEqual(told["pixfrac"], "0.8")
 
 
 if __name__ == "__main__":

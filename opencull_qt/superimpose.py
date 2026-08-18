@@ -84,6 +84,19 @@ class SuperimposeDialog(QDialog):
             "it -- which is what a satellite, an aeroplane and a "
             "cosmic ray all are."))
         column.addWidget(self.clipped)
+        self.drizzle = QRadioButton(
+            "Drizzle — a finer grid, for frames that dithered")
+        self.drizzle.setFont(theme.body(10))
+        self.drizzle.setToolTip(tooltip(
+            "Each input pixel is shrunk and dropped on to a finer "
+            "grid, sharing its light with whatever output pixels it "
+            "actually lands on -- nothing is interpolated, so nothing "
+            "is blurred. It repays two things and nothing else: "
+            "frames that shifted by FRACTIONS of a pixel between "
+            "exposures, and stars so small the sensor could not "
+            "sample them properly. On a wide lens with well-sampled "
+            "stars it costs four times the memory and buys nothing."))
+        column.addWidget(self.drizzle)
         self.average = QRadioButton(
             "Stack, plain average — registered, everything kept")
         self.average.setFont(theme.body(10))
@@ -97,7 +110,8 @@ class SuperimposeDialog(QDialog):
         # "handheld" silently un-chose "clipped" -- two answers fighting
         # over one slot.
         self._picture = QButtonGroup(self)
-        for choice in (self.trails, self.clipped, self.average):
+        for choice in (self.trails, self.clipped, self.drizzle,
+                       self.average):
             self._picture.addButton(choice)
 
         held_title = QLabel("HOW IT WAS HELD")
@@ -156,6 +170,30 @@ class SuperimposeDialog(QDialog):
             "medium-format back is larger. Only used with the focal "
             "length, to turn the sky's turning rate into pixels."))
         asks.addRow("Sensor width", self.sensor)
+
+        self.scale = QDoubleSpinBox()
+        self.scale.setRange(1.0, 4.0)
+        self.scale.setDecimals(1)
+        self.scale.setSingleStep(0.5)
+        self.scale.setValue(2.0)
+        self.scale.setSuffix(" ×")
+        self.scale.setToolTip(tooltip(
+            "How much finer the output grid is. Two is the usual "
+            "answer and costs four times the memory; more than that "
+            "wants hundreds of frames to fill honestly."))
+        asks.addRow("Drizzle grid", self.scale)
+        self.pixfrac = QDoubleSpinBox()
+        self.pixfrac.setRange(0.05, 1.0)
+        self.pixfrac.setDecimals(2)
+        self.pixfrac.setSingleStep(0.05)
+        self.pixfrac.setValue(0.8)
+        self.pixfrac.setToolTip(tooltip(
+            "How far each input pixel is shrunk before it is dropped. "
+            "Smaller drops recover more detail in theory and need far "
+            "more frames in practice: measured on twenty, 0.5 came "
+            "back both noisier and blunter than 0.8, because each "
+            "output pixel heard from too few drops."))
+        asks.addRow("Drop size", self.pixfrac)
 
         darks_row = QHBoxLayout()
         darks_row.setSpacing(8)
@@ -296,6 +334,9 @@ class SuperimposeDialog(QDialog):
         # Trails average nothing, so a clouded frame cannot poison
         # them; handheld already spends its calls on recognition.
         self.judge.setEnabled(held)
+        drizzling = self.drizzle.isChecked()
+        self.scale.setEnabled(drizzling)
+        self.pixfrac.setEnabled(drizzling)
 
     def _choose_darks(self) -> None:
         self._choose_into(self.darks, "The dark frames")
@@ -313,9 +354,12 @@ class SuperimposeDialog(QDialog):
             self.where.setText(chosen)
 
     def mode(self) -> str:
-        if self.trails.isChecked():
-            return "trails"
-        return "clipped" if self.clipped.isChecked() else "average"
+        for choice, name in ((self.trails, "trails"),
+                             (self.clipped, "clipped"),
+                             (self.drizzle, "drizzle")):
+            if choice.isChecked():
+                return name
+        return "average"
 
     # --- the run -----------------------------------------------------------
 
@@ -331,6 +375,8 @@ class SuperimposeDialog(QDialog):
             "flats": self.flats.text().strip(),
             "bias": self.bias.text().strip(),
             "sigma": "2.5",
+            "scale": str(self.scale.value()),
+            "pixfrac": str(self.pixfrac.value()),
             "output": str(home),
             "demosaic": "true" if self.demosaic.isChecked() else "false",
         }

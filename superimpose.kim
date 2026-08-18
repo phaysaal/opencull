@@ -29,6 +29,8 @@ param darks: text = ""
 param flats: text = ""
 param bias: text = ""
 param sigma: num = 2.5
+param scale: num = 2
+param pixfrac: num = 0.8
 param output: text = ""
 param demosaic: bool = true
 
@@ -46,7 +48,7 @@ screened := screen_frames(placed)
 print(screen_note(screened))
 
 -- The frames laid on each other, the way the mode asks for.
-stacked := superimpose(screened, mode, output, darks, sigma, flats, bias)
+stacked := superimpose(screened, mode, output, darks, sigma, flats, bias, scale, pixfrac)
 check stack_valid(stacked)
 print(stack_note(stacked))
 

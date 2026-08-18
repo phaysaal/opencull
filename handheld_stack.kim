@@ -29,6 +29,8 @@ param darks: text = ""
 param flats: text = ""
 param bias: text = ""
 param sigma: num = 2.5
+param scale: num = 2
+param pixfrac: num = 0.8
 param proofs_dir: text = ""
 param output: text = ""
 param demosaic: bool = true
@@ -65,7 +67,7 @@ placed := register(photos, pattern, only, 0, 23.5, demosaic, true, hints)
 screened := screen_frames(placed)
 print(screen_note(screened))
 
-stacked := superimpose(screened, mode, output, darks, sigma, flats, bias)
+stacked := superimpose(screened, mode, output, darks, sigma, flats, bias, scale, pixfrac)
 check stack_valid(stacked)
 print(stack_note(stacked))
 

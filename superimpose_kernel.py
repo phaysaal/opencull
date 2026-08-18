@@ -59,7 +59,22 @@ REFINE_PX = 10.0
 # Fewer agreeing pairs than this is not a registration, it is a guess.
 LEAST_AGREEING = 8
 
-MODES = ("trails", "average", "clipped")
+MODES = ("trails", "average", "clipped", "drizzle")
+
+# Drizzle's own two numbers. The grid is finer by SCALE; each input
+# pixel is shrunk to PIXFRAC of its width before it is dropped on to
+# that grid. At pixfrac 1 a drop is the whole pixel and drizzling
+# approaches plain averaging; toward 0 it approaches a point, which
+# recovers the most detail and leaves the most holes.
+# At pixfrac 1 a drop is the whole pixel and drizzling approaches
+# plain averaging; toward 0 it approaches a point, which in theory
+# recovers the most detail. In practice a small drop needs MANY more
+# frames to fill the finer grid evenly -- measured on twenty dithered
+# frames, 0.5 came back noisier AND blunter than 0.8, because each
+# output pixel heard from too few drops. So the default is generous
+# and the number is offered to whoever has hundreds of frames.
+DRIZZLE_SCALE = 2.0
+DRIZZLE_PIXFRAC = 0.8
 
 
 def _say(percent: float, stage: str) -> None:
@@ -585,7 +600,8 @@ def _hints_of(hints: str) -> dict[str, tuple[float, float]]:
 def superimpose(register_text: str, mode: str = "trails",
                 output: str = "", darks: str = "",
                 sigma: float = 2.5, flats: str = "",
-                bias: str = "") -> str:
+                bias: str = "", scale: float = DRIZZLE_SCALE,
+                pixfrac: float = DRIZZLE_PIXFRAC) -> str:
     """Lay the frames on each other, the way the mode asks for.
 
     trails   -- keep whatever is brightest, frames unmoved. The sky's
@@ -626,7 +642,7 @@ def superimpose(register_text: str, mode: str = "trails",
     turns = [float(item.get("turn", 0.0)) if aligned else 0.0
              for item in frames]
 
-    def read(index: int) -> np.ndarray:
+    def calibrated(index: int) -> np.ndarray:
         held = _frame(paths[index], demosaic)
         # The order calibration is done in is not a taste: the dark is
         # what the sensor adds, so it comes off first; the flat is what
@@ -638,6 +654,10 @@ def superimpose(register_text: str, mode: str = "trails",
         held = np.clip(held, 0.0, None)
         if flat is not None and flat.shape == held.shape:
             held = np.clip(held / flat, 0.0, None)
+        return held
+
+    def read(index: int) -> np.ndarray:
+        held = calibrated(index)
         if not aligned:
             return held
         shift, turn = shifts[index], turns[index]
@@ -648,13 +668,36 @@ def superimpose(register_text: str, mode: str = "trails",
                 else _warped(held, turn, shift))
 
     total = len(paths)
-    stack = read(0).astype(np.float32)
-    if mode == "trails":
+    if mode == "drizzle":
+        scale = float(min(max(scale, 1.0), 4.0))
+        pixfrac = float(min(max(pixfrac, 0.05), 1.0))
+        first = calibrated(0)
+        out_h = int(round(first.shape[0] * scale))
+        out_w = int(round(first.shape[1] * scale))
+        values = np.zeros((out_h, out_w, first.shape[2]), np.float64)
+        weights = np.zeros((out_h, out_w), np.float64)
+        for index in range(total):
+            _say(45 + index * 50.0 / total,
+                 f"drizzled {index + 1} of {total}")
+            _drizzle_frame(
+                calibrated(index) if index else first, values, weights,
+                turns[index], shifts[index], scale, pixfrac)
+        lit = weights > 1e-6
+        stack = np.zeros_like(values, dtype=np.float32)
+        stack[lit] = (values[lit] / weights[lit][..., None]).astype(
+            np.float32)
+        kept = float(np.mean(weights[lit])) if lit.any() else 0.0
+        empty = float(1.0 - lit.mean())
+    elif mode == "trails":
+        empty = 0.0
+        stack = read(0).astype(np.float32)
         for index in range(1, total):
             _say(45 + index * 50.0 / total, f"laid {index + 1} of {total}")
             stack = np.maximum(stack, read(index))
         kept = total
     else:
+        empty = 0.0
+        stack = read(0).astype(np.float32)
         summed = stack.astype(np.float64)
         squared = summed ** 2
         for index in range(1, total):
@@ -700,6 +743,9 @@ def superimpose(register_text: str, mode: str = "trails",
         "registered": sum(1 for count in agreed
                           if count >= LEAST_AGREEING) + 1,
         "kept_per_pixel": round(float(kept), 2),
+        "drizzle": ({"scale": scale, "pixfrac": pixfrac,
+                     "unfilled": round(empty, 5)}
+                    if mode == "drizzle" else None),
         "set_aside": [str(item["name"]) for item in told.get("frames", [])
                       if not item.get("keep", True)],
         "dark_subtracted": dark is not None,
@@ -939,6 +985,70 @@ def judge_frame(screened_text: str, name: str, found: Any) -> str:
         item["verdict"] = "kept by eye" if item["keep"] else "clouded by eye"
         item["why"] = str(said.get("why") or "")[:120]
     return json.dumps(told)
+
+
+def _drizzle_frame(frame: np.ndarray, values: np.ndarray,
+                   weights: np.ndarray, degrees: float,
+                   shift: tuple[float, float], scale: float,
+                   pixfrac: float) -> None:
+    """Drop one frame's shrunken pixels on to the finer grid.
+
+    Fruchter and Hook's reconstruction, and the reason it recovers
+    what interpolation cannot: an input pixel is not asked what its
+    neighbours are doing. It is shrunk to a smaller square -- a drop --
+    carried through the frame's own transform, and its light is shared
+    among the output pixels it actually lands on, in proportion to how
+    much of it lands there. Nothing is interpolated, so nothing is
+    blurred; what makes the detail appear is that different frames
+    land their drops in different places, which is what dithering IS.
+
+    The drop is treated as square in the output's own axes. That is
+    exact when the frame is only shifted and a good approximation
+    while the turn is small, which is what a night's registration
+    gives; a frame rolled far enough for the corner of a drop to
+    matter is past what this is honest about.
+    """
+    height, width = frame.shape[:2]
+    out_h, out_w = weights.shape
+    yy, xx = np.mgrid[0:height, 0:width].astype(np.float32)
+    cx, cy = (width - 1) / 2.0, (height - 1) / 2.0
+    angle = np.radians(degrees)
+    cos, sin = np.cos(angle), np.sin(angle)
+    # Where this pixel's centre lands on the reference frame, then on
+    # the finer grid the stack is being built on.
+    rx = cx + (xx - cx) * cos - (yy - cy) * sin + shift[0]
+    ry = cy + (xx - cx) * sin + (yy - cy) * cos + shift[1]
+    ox = (rx + 0.5) * scale
+    oy = (ry + 0.5) * scale
+    half = max(pixfrac, 0.01) * scale / 2.0
+    left = np.floor(ox - half).astype(np.int32)
+    top = np.floor(oy - half).astype(np.int32)
+    span = int(np.ceil(2.0 * half)) + 1
+    flat_values = values.reshape(-1, values.shape[2])
+    flat_weights = weights.reshape(-1)
+    for step_x in range(span):
+        px = left + step_x
+        wide = np.clip(np.minimum(ox + half, px + 1.0)
+                       - np.maximum(ox - half, px), 0.0, None)
+        for step_y in range(span):
+            py = top + step_y
+            tall = np.clip(np.minimum(oy + half, py + 1.0)
+                           - np.maximum(oy - half, py), 0.0, None)
+            share = wide * tall
+            lands = ((px >= 0) & (px < out_w) & (py >= 0)
+                     & (py < out_h) & (share > 0))
+            if not lands.any():
+                continue
+            where = (py[lands] * out_w + px[lands]).astype(np.int64)
+            part = share[lands].astype(np.float64)
+            flat_weights += np.bincount(
+                where, weights=part, minlength=out_h * out_w)
+            for channel in range(values.shape[2]):
+                flat_values[:, channel] += np.bincount(
+                    where,
+                    weights=frame[..., channel][lands].astype(np.float64)
+                    * part,
+                    minlength=out_h * out_w)
 
 
 def stack_valid(told: Any) -> bool:
