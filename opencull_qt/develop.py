@@ -593,6 +593,11 @@ class PhotoLabel(QLabel):
     the photograph is drawn to fit a box that no longer exists.
     """
 
+    # The magnification changed by a hand -- wheel or double click --
+    # so whoever renders the proof can render the part being looked at
+    # at the resolution it is being looked at.
+    magnified = Signal()
+
     def __init__(self):
         super().__init__("")
         self.setObjectName("paneImage")
@@ -613,12 +618,27 @@ class PhotoLabel(QLabel):
         self._pan_from = None
 
     def set_source(self, pixmap: QPixmap | None) -> None:
+        # The same photograph at a different resolution must show the
+        # same view: the zoom is display-per-source-pixel, so when the
+        # source grows the zoom shrinks in step and the crop on screen
+        # does not jump -- it sharpens.
+        if (pixmap is not None and self._source is not None
+                and self._zoom > 0 and self._source.width() > 0
+                and pixmap.width() > 0
+                and pixmap.width() != self._source.width()):
+            self._zoom *= self._source.width() / pixmap.width()
         self._source = pixmap
         if pixmap is None:
             self.setPixmap(QPixmap())
             return
         self.setText("")
         self._redraw()
+
+    def magnification(self) -> float:
+        """How far past fit the eye is: 1 at fit, 8 at the deep end."""
+        if self._zoom <= 0 or self._source is None:
+            return 1.0
+        return max(1.0, self._zoom / max(self._fit_scale(), 1e-6))
 
     def sweep_to(self, pixmap: QPixmap | None) -> None:
         """Show the treatment arriving across the frame it was made from.
@@ -746,11 +766,13 @@ class PhotoLabel(QLabel):
                     self._centre[0] += (dx - 0.5) * lean
                     self._centre[1] += (dy - 0.5) * lean
         self._redraw()
+        self.magnified.emit()
 
     def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802
         self._zoom = 0.0
         self._centre = [0.5, 0.5]
         self._redraw()
+        self.magnified.emit()
 
     def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt naming
         if self._zoom > 0:

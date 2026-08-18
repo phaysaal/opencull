@@ -966,6 +966,13 @@ class FineTunePage(QWidget):
         self._holding = False
 
         self.renderer = Renderer(workspace, PROOF_EDGE, pool, self)
+        # One profile per photograph: what its tuning is, and whether
+        # that tuning has been exported yet. Switching frames stops
+        # being a door that slams.
+        from opencull_gui.tuning import TuningLedger
+        self._ledger = TuningLedger(
+            workspace.project_layout["Recipes"] / "finetune-state.json")
+        self._suspend_profile = False
         self.renderer.done.connect(self._rendered)
         self.renderer.failed.connect(self._render_failed)
         # Thumbnails for the filmstrip, at the develop page's own edge so
@@ -1039,6 +1046,9 @@ class FineTunePage(QWidget):
         head.addWidget(hint)
         column.addLayout(head)
         self.frame = PhotoLabel()
+        # Looking closer is a render request: the crop being inspected
+        # is re-rendered at the resolution it is inspected at.
+        self.frame.magnified.connect(self._magnified)
         self.frame.setObjectName("paneImage")
         self.frame.installEventFilter(self)
         # Says a render is on its way -- but only once it has taken long
@@ -1309,7 +1319,7 @@ class FineTunePage(QWidget):
         keeps.addStretch(1)
         layout.addLayout(keeps)
 
-        self.keep_button = QPushButton("Develop this version")
+        self.keep_button = QPushButton("Export")
         self.keep_button.setObjectName("primary")
         self.keep_button.setFont(theme.body(10))
         self.keep_button.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -1340,6 +1350,7 @@ class FineTunePage(QWidget):
             item.setSizeHint(QSize(0, PHOTO_ROW))
             self.list.addItem(item)
         self.list.blockSignals(False)
+        self._dress_rows()
         if self.photos:
             self.list.setCurrentRow(0)
             self.show_photo(self.photos[0])
@@ -1403,8 +1414,29 @@ class FineTunePage(QWidget):
         except Exception:                            # noqa: BLE001 - blank
             self._as_shot_pixmap = None
         if self.treatments:
-            self.treatment_list.setCurrentRow(0)
-            self.show_treatment(str(self.treatments[0].get("id")))
+            # The frame's own profile first: the treatment it was being
+            # tuned on, its changes, its layer -- the room as it was left.
+            held = self._ledger.get(photo)
+            offered = [str(item.get("id")) for item in self.treatments]
+            row = 0
+            if held and str(held.get("treatment")) in offered:
+                row = offered.index(str(held["treatment"]))
+            self.treatment_list.blockSignals(True)
+            self.treatment_list.setCurrentRow(row)
+            self.treatment_list.blockSignals(False)
+            self._suspend_profile = True
+            try:
+                self.show_treatment(offered[row])
+                if held and str(held.get("treatment")) == offered[row]                         and self.recipe:
+                    self.changes = json.loads(json.dumps(
+                        held.get("changes") or {}))
+                    self.layer = int(held.get("layer") or 0)
+                    if self.changes:
+                        self._rebuild_mirror()
+                        self._show_controls()
+                        self.render()
+            finally:
+                self._suspend_profile = False
         else:
             self._clear()
             self.keep_button.setEnabled(False)
@@ -2650,8 +2682,14 @@ class FineTunePage(QWidget):
         if shown < 64:
             return PROOF_EDGE
         physical = shown * float(self.frame.devicePixelRatioF())
+        # Zoomed in, the visible part deserves visible resolution: the
+        # edge grows with the magnification, and so does its cap -- at
+        # fit nothing changes, and the deep end of the zoom asks for
+        # one big render, not eight sizes of one.
+        closer = min(self.frame.magnification(), 4.0)
+        physical *= closer
         snapped = int(-(-physical // 256) * 256)
-        return max(512, min(snapped, PROOF_EDGE))
+        return max(512, min(snapped, int(PROOF_EDGE * closer)))
 
     def render(self) -> None:
         if not self.current or not self.treatment:
@@ -2670,6 +2708,33 @@ class FineTunePage(QWidget):
             adjustments=asked or None, maximum=self.proof_edge())
         self._render_pending = True
         self._prepare_timer.start()
+        self._profile_moved()
+
+    def _magnified(self) -> None:
+        if self.current and self.treatment:
+            self.render()
+
+    def _profile_moved(self) -> None:
+        """The ledger follows the hand; a restore is not a move."""
+        if self._suspend_profile or not self.current:
+            return
+        if self.changes:
+            self._ledger.save(self.current, self.treatment,
+                              self.changes, self.layer)
+        else:
+            self._ledger.settle(self.current)
+        self._dress_rows()
+
+    def _dress_rows(self) -> None:
+        """A dot beside every frame whose edits have not been exported."""
+        for row, photo in enumerate(self.photos):
+            item = self.list.item(row)
+            if item is None:
+                continue
+            wanted = (f"{photo}  ●" if self._ledger.unexported(photo)
+                      else photo)
+            if item.text() != wanted:
+                item.setText(wanted)
 
     def _demosaic(self) -> str:
         return str(self.workspace.payload().get("rendering", {}).get(
@@ -2774,10 +2839,12 @@ class FineTunePage(QWidget):
             self._report(f"It could not be rendered: {exc}", "alarm")
             return
         self.keep_button.setEnabled(True)
+        self._ledger.mark_exported(self.current)
+        self._dress_rows()
         variant = str((record.get("render") or {}).get("variant") or "")
         self._report(
-            f"Kept as {variant}. It is on the export page beside the "
-            "treatment it came from.", "ok")
+            f"Exported as {variant}. It is on the export page beside "
+            "the treatment it came from.", "ok")
 
     # --- keeping a look ---------------------------------------------------
 

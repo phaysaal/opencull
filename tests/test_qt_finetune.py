@@ -52,14 +52,15 @@ class FineTunePageTests(unittest.TestCase):
         self.photos = PhotoStore(self.photos_path, self.root / "cache")
         self.addCleanup(self._temporary.cleanup)
 
-    def page(self, recipe: str = RECIPE, styles=("standard",)):
+    def page(self, recipe: str = RECIPE, styles=("standard",),
+             marked=(NAMES[0],)):
         from opencull_qt.develop import workspace_for
         from opencull_qt.finetune import FineTunePage
         from opencull_qt.previews import PreviewLoader
 
         shortlist = assess_and_suggest(
             self.root, self.report_path, self.photos_path,
-            marked=(NAMES[0],), styles=styles)
+            marked=marked, styles=styles)
         self._rewrite_recipe(shortlist, recipe)
         workspace = workspace_for(self.report, self.photos.root, decoders=set())
         loader = PreviewLoader(self.photos, None)
@@ -186,6 +187,88 @@ class FineTunePageTests(unittest.TestCase):
         anchor = held["value"]["anchor"]
         self.assertIn("target saturation", anchor)
         self.assertIn("target light", anchor)
+
+    def test_each_frame_keeps_its_own_settings_across_switches(self):
+        page = self.page(marked=(NAMES[0], NAMES[1]))
+        page.show_photo(NAMES[0])
+        page._curve_changed([[0.0, 0.0], [128.0, 190.0], [255.0, 255.0]])
+        page.show_photo(NAMES[1])
+        self.assertEqual(page.changes, {})
+        page._curve_changed([[0.0, 0.0], [128.0, 100.0], [255.0, 255.0]])
+        page.show_photo(NAMES[0])
+        self.assertEqual(page.changes["curve"]["points"][1],
+                         [128.0, 190.0])
+        applied = [op["op"] for op in page.recipe.get("operations", [])]
+        self.assertIn("tone.curve", applied)   # folded back in, not lost
+        page.show_photo(NAMES[1])
+        self.assertEqual(page.changes["curve"]["points"][1],
+                         [128.0, 100.0])
+
+    def test_the_profile_survives_a_new_page(self):
+        page = self.page()
+        page.show_photo(NAMES[0])
+        page._curve_changed([[0.0, 0.0], [128.0, 190.0], [255.0, 255.0]])
+        page.shutdown()
+        reopened = self.page()
+        reopened.show_photo(NAMES[0])
+        self.assertEqual(reopened.changes["curve"]["points"][1],
+                         [128.0, 190.0])
+
+    def test_unexported_edits_wear_a_dot_and_export_takes_it_off(self):
+        page = self.page()
+        page.show_photo(NAMES[0])
+        row = page.photos.index(NAMES[0])
+        self.assertEqual(page.list.item(row).text(), NAMES[0])
+        page._curve_changed([[0.0, 0.0], [128.0, 190.0], [255.0, 255.0]])
+        self.assertIn("●", page.list.item(row).text())
+        page.workspace.render_full = (
+            lambda *args, **kw: {"render": {"variant": "v1"}})
+        page.keep()
+        self.assertEqual(page.list.item(row).text(), NAMES[0])
+
+    def test_undoing_everything_settles_the_dot(self):
+        page = self.page()
+        page.show_photo(NAMES[0])
+        row = page.photos.index(NAMES[0])
+        page._curve_changed([[0.0, 0.0], [128.0, 190.0], [255.0, 255.0]])
+        self.assertIn("●", page.list.item(row).text())
+        page._curve_changed([[0.0, 0.0], [255.0, 255.0]])   # identity
+        self.assertEqual(page.list.item(row).text(), NAMES[0])
+
+    def test_the_export_button_says_export(self):
+        page = self.page()
+        self.assertEqual(page.keep_button.text(), "Export")
+
+    def test_looking_closer_asks_for_a_bigger_proof(self):
+        from PySide6.QtGui import QColor, QImage, QPixmap
+
+        page = self.page()
+        page.frame.resize(400, 300)
+        image = QImage(400, 300, QImage.Format.Format_RGB888)
+        image.fill(QColor(90, 80, 70))
+        page.frame.set_source(QPixmap.fromImage(image))
+        at_fit = page.proof_edge()
+        page.frame._zoom = page.frame._fit_scale() * 3.0
+        self.assertAlmostEqual(page.frame.magnification(), 3.0, places=3)
+        self.assertGreater(page.proof_edge(), at_fit * 2)
+        page.frame._zoom = page.frame._fit_scale() * 40.0
+        self.assertLessEqual(page.proof_edge(), 1600 * 4)
+
+    def test_a_sharper_proof_keeps_the_same_view(self):
+        from PySide6.QtGui import QColor, QImage, QPixmap
+
+        page = self.page()
+        page.frame.resize(400, 300)
+        def coloured(w, h):
+            image = QImage(w, h, QImage.Format.Format_RGB888)
+            image.fill(QColor(90, 80, 70))
+            return QPixmap.fromImage(image)
+        page.frame.set_source(coloured(800, 600))
+        page.frame._zoom = page.frame._fit_scale() * 4.0
+        before = page.frame.magnification()
+        page.frame.set_source(coloured(1600, 1200))   # same photo, sharper
+        self.assertAlmostEqual(
+            page.frame.magnification(), before, places=2)
 
     def test_a_colour_mask_layer_offers_its_own_geometry(self):
         page = self.page()
