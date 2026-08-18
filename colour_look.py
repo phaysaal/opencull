@@ -281,6 +281,14 @@ def save_look(name: str, operations: list[dict[str, Any]],
     return presets.save(name, operations, intent=intent, root=root)
 
 
+def dress_camera(model: str, operations: list[dict[str, Any]],
+                 note: str = "") -> dict[str, Any]:
+    """Assign a look as one camera's default: worn under every render."""
+    from opencull_gui import cameralooks
+
+    return cameralooks.assign(model, operations, note=note)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -291,10 +299,21 @@ def main(argv: list[str] | None = None) -> int:
                           "fractions 0..1, comma separated")
     fit.add_argument("--name", required=True)
     fit.add_argument("--relax", type=int, default=1)
+    fit.add_argument("--camera", default="",
+                     help="also assign as this camera model's default "
+                          "look, worn under every render of its frames")
     std = sub.add_parser("standard", help="author the standard look")
     std.add_argument("--strength", type=float, default=100.0)
     std.add_argument("--name", default="Darkimiya Standard")
+    std.add_argument("--camera", default="",
+                     help="also assign as this camera model's default")
+    listing = sub.add_parser("cameras", help="which cameras wear a look")
     args = parser.parse_args(argv)
+    if args.command == "cameras":
+        from opencull_gui import cameralooks
+
+        print(json.dumps(cameralooks.cameras(), indent=2))
+        return 0
     if args.command == "fit":
         from PIL import Image
 
@@ -307,8 +326,13 @@ def main(argv: list[str] | None = None) -> int:
             args.name, operations,
             intent="Fitted from a ColorChecker 24: white balance and a "
                    "matrix carry the reach, a relaxed lattice the rest.")
-        print(json.dumps({"kept": kept["name"], "report": report},
-                         indent=2))
+        told = {"kept": kept["name"], "report": report}
+        if args.camera:
+            dressed = dress_camera(
+                args.camera, operations,
+                note=f"fitted from {Path(args.chart).name}")
+            told["camera"] = dressed["camera"]
+        print(json.dumps(told, indent=2))
     else:
         operations = standard_look(args.strength)
         kept = save_look(
@@ -316,7 +340,12 @@ def main(argv: list[str] | None = None) -> int:
             intent="The preferred rendering, gently: skin a little "
                    "warmer, skies a little cleaner, a breath of chroma, "
                    "neutrals untouched.")
-        print(json.dumps({"kept": kept["name"]}, indent=2))
+        told = {"kept": kept["name"]}
+        if args.camera:
+            dressed = dress_camera(args.camera, operations,
+                                   note="the standard look")
+            told["camera"] = dressed["camera"]
+        print(json.dumps(told, indent=2))
     return 0
 
 

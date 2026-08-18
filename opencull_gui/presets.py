@@ -476,12 +476,16 @@ def portable_operations(operations: list[dict[str, Any]]) -> list[dict[str, Any]
 
     What the photographer switched off is not part of the look they are
     keeping -- carrying it along as a disabled operation would put an
-    instruction into the preset that says to do nothing.
+    instruction into the preset that says to do nothing. A camera's own
+    look stays behind too: it belongs to the camera, is laid back under
+    every render of its frames, and carried inside a preset it would be
+    worn twice at home and wrongly anywhere else.
     """
     return [
         json.loads(json.dumps(item)) for item in operations
         if isinstance(item, dict)
         and item.get("enabled", True) is not False
+        and not item.get("camera_look")
         and not str(item.get("op", "")).startswith(UNPORTABLE)
     ]
 

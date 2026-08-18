@@ -744,6 +744,16 @@ class DevelopmentWorkspace:
                 photo, style, str(entry.get(f"{style}_title", style.title())),
                 str(entry.get(f"{style}_intent", "")), recipe_value,
                 str(entry.get("guardrails", "")), source_kind)
+        # The camera's own look, laid under whatever the recipe says --
+        # baseline, preset, treatment or a hand-tuned version alike. A
+        # camera that has been given a look wears it before anything
+        # else speaks, the way a profile sits under a develop; a camera
+        # never dressed changes nothing here.
+        from . import cameralooks
+        from .scenes import camera_model
+
+        recipe = cameralooks.underneath(
+            recipe, cameralooks.look_for(camera_model(source)))
         return {"recipe": recipe, "source": source, "reference": reference,
                 "source_kind": source_kind,
                 # What this treatment is a departure from. Almost always

@@ -125,6 +125,66 @@ def _embedded_capture_time(path: Path) -> float | None:
     return None
 
 
+_EXIF_MODEL = 0x0110
+
+
+def _model_from_exif(exif: Any) -> str | None:
+    value = exif.get(_EXIF_MODEL)
+    settled = " ".join(str(value).split()) if value else ""
+    return settled or None
+
+
+def _embedded_camera_model(path: Path) -> str | None:
+    """The camera's name from a raw file's head, without decoding it."""
+    seen = -1
+    for cap in (_SMALL_HEAD, _LARGE_HEAD):
+        try:
+            with open(path, "rb") as handle:
+                head = handle.read(cap)
+        except OSError:
+            return None
+        if len(head) == seen:
+            break
+        seen = len(head)
+        at = head.find(_EXIF_MARKER)
+        if at >= 0:
+            exif = Image.Exif()
+            try:
+                exif.load(head[at:])
+                found = _model_from_exif(exif)
+            except Exception:                        # noqa: BLE001 - unreadable
+                found = None
+            if found is not None:
+                return found
+    return None
+
+
+@lru_cache(maxsize=8192)
+def _camera_model(path: str, _stat: tuple[int, int]) -> str | None:
+    try:
+        with Image.open(path) as image:
+            found = _model_from_exif(image.getexif())
+    except Exception:                                # noqa: BLE001 - not an image
+        found = None
+    return found if found is not None else _embedded_camera_model(Path(path))
+
+
+def camera_model(path: Path) -> str | None:
+    """Which camera took this frame, from its own EXIF, or None.
+
+    The same two roads as capture_time: the image's EXIF where PIL can
+    open it, else the EXIF block of the preview a raw file carries.
+    Cached against size and mtime -- a per-camera look asks this for
+    every render of every frame.
+    """
+    path = Path(path)
+    try:
+        status = path.stat()
+    except OSError:
+        return None
+    return _camera_model(str(path), (status.st_size, status.st_mtime_ns))
+
+
 @lru_cache(maxsize=8192)
 def _capture_time(path: str, _stat: tuple[int, int]) -> float | None:
     try:
