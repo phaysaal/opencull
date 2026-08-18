@@ -1,0 +1,49 @@
+-- Lay many frames of one sky on each other: trails, or a stack.
+--
+-- Two things a tripod and a dark hour make possible. TRAILS keeps
+-- whatever is brightest with the frames left where they were, so the
+-- sky's own motion draws the picture. A STACK registers the frames on
+-- the stars and averages them, buying the signal-to-noise of one long
+-- exposure without its blown highlights or its trailing -- and the
+-- clipped mode leaves out whatever the stack disagrees with, which is
+-- what a satellite, an aeroplane and a cosmic ray all are.
+--
+-- The registration leans on the one thing the sky is honest about: it
+-- turns at a constant rate. Given a focal length and the frames' own
+-- timestamps, there is an upper bound on how far anything can have
+-- moved, so the first pair is solved inside a disc of known radius
+-- rather than an unbounded plane -- by voting, since every pair of
+-- stars implies a shift and the true one is what many pairs agree on.
+-- Once one pair is solved the drift is a vector per second, and every
+-- later frame is predicted rather than searched.
+--
+-- Deterministic end to end: no model is asked for anything.
+
+param photos: text = "."
+param pattern: text = "*.RAF"
+param mode: text = "trails"
+param only: text = ""
+param focal_mm: num = 0
+param sensor_mm: num = 23.5
+param darks: text = ""
+param sigma: num = 2.5
+param output: text = ""
+param demosaic: bool = true
+
+use python "superimpose_kernel.py"
+
+-- Where every frame sits relative to the first. Trails ignores this;
+-- a stack cannot be honest without it.
+placed := register(photos, pattern, only, focal_mm, sensor_mm, demosaic)
+
+-- The frames laid on each other, the way the mode asks for.
+stacked := superimpose(placed, mode, output, darks, sigma)
+check stack_valid(stacked)
+print(stack_note(stacked))
+
+-- The report lands beside the stack it describes.
+where := stack_home(stacked)
+check stack_valid(stacked)
+act file.overwrite(where, stacked)
+settle until check file_exists(where) within 5
+commit(stacked)

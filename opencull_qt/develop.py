@@ -1237,6 +1237,18 @@ class DevelopPage(QWidget):
         self.timelapse_button.clicked.connect(self.timelapse_current)
         layout.addWidget(self.timelapse_button)
 
+        self.superimpose_button = QPushButton("Superimpose…")
+        self.superimpose_button.setObjectName("ghost")
+        self.superimpose_button.setFont(theme.body(10))
+        self.superimpose_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.superimpose_button.setToolTip(tooltip(
+            "Many frames of one sky, laid on each other: star trails, "
+            "or a registered stack that averages the noise away. The "
+            "frames are read from this folder and the result lands "
+            "beside them, ready to develop."))
+        self.superimpose_button.clicked.connect(self.superimpose_current)
+        layout.addWidget(self.superimpose_button)
+
         # What a treatment run for this frame is doing right now: a busy
         # bar because the work is real, and words because a bar that
         # cannot say "round 2 of 3" is just a light left on.
@@ -1802,6 +1814,31 @@ class DevelopPage(QWidget):
             "Queued. The frames land in the timelapse folder's frames/; "
             "the report beside them ends with the ffmpeg line that makes "
             "the video.")
+
+    def superimpose_current(self) -> None:
+        """The night-sky combiner, obvious parameters pre-filled."""
+        from .superimpose import SuperimposeDialog
+
+        photos = str(self.workspace.project.get("source_folder") or "")
+        if not photos:
+            return
+        selection = self._timelapse_selection()
+        # No Qt parent, for the same reason the timelapse dialog has
+        # none: a modal with a transient parent is glued to it by some
+        # desktops and then cannot be dragged.
+        dialog = SuperimposeDialog(photos, selection=selection)
+        dialog.adjustSize()
+        host = self.window().frameGeometry()
+        dialog.move(host.center() - dialog.rect().center())
+        if dialog.exec() != dialog.DialogCode.Accepted:
+            return
+        request = dialog.run_request()
+        if request is None:
+            return
+        self.program_wanted.emit(request["program"], request["parameters"])
+        self._report(
+            "Queued. The stack lands as a 16-bit TIFF with a proof "
+            "beside it; open the TIFF to develop what the sky gave.")
 
     def treat_current(self) -> None:
         """Ask for a Kimiya Treatment of this frame, budget stated first."""

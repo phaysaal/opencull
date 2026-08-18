@@ -59,6 +59,8 @@ BUILT_INS = (
     ("learn_look.kim",
      "Learn a look from RAW+JPEG pairs: the camera itself is the "
      "teacher."),
+    ("superimpose.kim",
+     "Lay many frames of one sky on each other: trails, or a stack."),
 )
 
 _PARAM_RE = re.compile(
