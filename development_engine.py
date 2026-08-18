@@ -600,6 +600,8 @@ def _apply_global(rgb: np.ndarray, operations: list[dict[str, Any]],
                 _blur(chroma, DENOISE_RADIUS * detail_scale) - chroma) * weight
         elif op == "detail.clean_colour":
             result = _clean_colour(result, value, detail_scale, window)
+        elif op == "finish.grain":
+            result = _film_grain(result, value, window)
         elif op == "levels.midpoint":
             # The levels midpoint is a gamma about the middle of the scale.
             if value > 0:
@@ -1139,6 +1141,43 @@ def _clean_colour(rgb: np.ndarray, strength: float,
             + _box_mean(offset, radius)
         cleaned[..., channel] = plane + (smoothed - plane) * k
     return np.clip(cleaned, 0.0, None).astype(np.float32)
+
+
+def _film_grain(rgb: np.ndarray, value: Any,
+                window: dict[str, float] | None = None) -> np.ndarray:
+    """Film grain: deterministic, sized to the frame, strongest midtone.
+
+    The noise is a hash of each pixel's position IN THE FULL FRAME, so
+    the same frame always grows the same grain -- a re-render is not a
+    re-roll, a cached proof stays honest, and a windowed fast pass is
+    the full render's grain cropped, bit for bit. Cells scale with the
+    frame so grain is a look, not a resolution artifact; the weight
+    peaks in the midtones and dies toward black and white, the way
+    silver did.
+    """
+    amount = min(max(float(value or 0.0), 0.0), 100.0) / 100.0
+    if amount <= 0.0:
+        return rgb
+    height, width = rgb.shape[:2]
+    full_w = round(width / max(float(window["w"]), 1e-6)) if window \
+        else width
+    full_h = round(height / max(float(window["h"]), 1e-6)) if window \
+        else height
+    off_x = round(float(window["x"]) * full_w) if window else 0
+    off_y = round(float(window["y"]) * full_h) if window else 0
+    cell = max(1, round(max(full_w, full_h) / 1500))
+    xs = ((np.arange(width, dtype=np.int64) + off_x) // cell)
+    ys = ((np.arange(height, dtype=np.int64) + off_y) // cell)
+    gx, gy = np.meshgrid(xs.astype(np.float64), ys.astype(np.float64))
+    seeded = np.sin(gx * 12.9898 + gy * 78.233) * 43758.5453
+    noise = (seeded - np.floor(seeded)).astype(np.float32) - 0.5
+    shown = np.clip(_encoded(np.clip(rgb, 0.0, None)), 0.0, 1.0)
+    lum = (shown[..., 0] * 0.2126 + shown[..., 1] * 0.7152
+           + shown[..., 2] * 0.0722)
+    weight = 4.0 * lum * (1.0 - lum)              # silver's own curve
+    grained = np.clip(
+        shown + (noise * weight * amount * 0.12)[..., None], 0.0, 1.0)
+    return _decoded(grained).astype(np.float32)
 
 
 def _uniformity(rgb: np.ndarray, effect: dict[str, Any],

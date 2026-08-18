@@ -127,6 +127,78 @@ class StandardLookTests(unittest.TestCase):
             after, (0.76, 0.59, 0.50), atol=2e-3))
 
 
+class MimicTests(unittest.TestCase):
+    """The camera's own JPEG teaches; the fit must learn what it knows."""
+
+    SECRET = [
+        {"op": "color.channel_mixer", "unit": "matrix",
+         "mode": "absolute", "enabled": True,
+         "value": [[1.08, -0.06, -0.02], [-0.04, 1.1, -0.06],
+                   [-0.02, -0.08, 1.1]]},
+        {"op": "color.saturation", "unit": "percent", "mode": "delta",
+         "value": 22.0, "enabled": True},
+        {"op": "tone.contrast", "unit": "percent", "mode": "delta",
+         "value": 18.0, "enabled": True},
+    ]
+
+    def scene(self, seed):
+        from development_engine import _box_mean
+
+        rng = np.random.default_rng(seed)
+        base = rng.random((96, 128, 3)).astype(np.float32) * 0.75 + 0.05
+        return np.stack(
+            [_box_mean(base[..., c], 6) for c in range(3)], -1)
+
+    def pair(self, seed):
+        linear = self.scene(seed)
+        source = np.clip(linear, 0, 1) ** (1 / _ENCODE_GAMMA)
+        taught = _apply_global(linear, self.SECRET)
+        target = np.clip(taught, 0, 1) ** (1 / _ENCODE_GAMMA)
+        return source, target
+
+    def test_a_hidden_simulation_is_learned_back(self):
+        ops, report = cl.fit_mimic(
+            [self.pair(seed) for seed in (1, 2, 3)])
+        held = self.scene(99)
+        truth = np.clip(_apply_global(held, self.SECRET), 0, 1) \
+            ** (1 / _ENCODE_GAMMA)
+        learned = np.clip(_apply_global(held, ops), 1e-6, None) \
+            ** (1 / _ENCODE_GAMMA)
+        before = float(np.abs(
+            np.clip(held, 0, 1) ** (1 / _ENCODE_GAMMA) - truth).mean())
+        after = float(np.abs(learned - truth).mean())
+        self.assertLess(after, before / 10.0)
+        self.assertGreater(report["samples"], 1000)
+
+    def test_clipped_pixels_do_not_teach(self):
+        source = np.full((10, 10, 3), 0.995, np.float32)
+        target = np.full((10, 10, 3), 0.5, np.float32)
+        kept_s, _kept_t = cl.mimic_samples(source, target)
+        self.assertEqual(len(kept_s), 0)
+
+    def test_too_little_honesty_is_refused(self):
+        source = np.full((10, 10, 3), 0.995, np.float32)
+        with self.assertRaises(cl.LookError):
+            cl.fit_mimic([(source, source)])
+
+    def test_raws_find_their_sibling_jpegs(self):
+        with tempfile.TemporaryDirectory() as folder:
+            raw = Path(folder) / "DSCF0001.RAF"
+            raw.write_bytes(b"x")
+            (Path(folder) / "DSCF0001.JPG").write_bytes(b"x")
+            pairs = cl._paired([str(raw)])
+            self.assertEqual(pairs[0][1].name, "DSCF0001.JPG")
+            lonely = Path(folder) / "DSCF0002.RAF"
+            lonely.write_bytes(b"x")
+            with self.assertRaises(cl.LookError):
+                cl._paired([str(lonely)])
+
+    def test_explicit_pairs_say_so_outright(self):
+        pairs = cl._paired(["a.jpg=b.jpg"])
+        self.assertEqual((pairs[0][0].name, pairs[0][1].name),
+                         ("a.jpg", "b.jpg"))
+
+
 class KeepingALookTests(unittest.TestCase):
     def test_a_look_is_an_ordinary_preset(self):
         from opencull_gui import presets

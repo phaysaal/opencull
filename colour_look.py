@@ -198,6 +198,148 @@ def fit_look(image: np.ndarray, corners: list[float],
     return operations, report
 
 
+# --- mimicry: the camera's own JPEG as the teacher ------------------------
+
+RAW_SUFFIXES = {".raf", ".arw", ".nef", ".cr2", ".cr3", ".dng"}
+MIMIC_EDGE = 128         # thumbnails: area means beat pixel matching
+MIMIC_MOST = 20000       # samples the lattice fit is willing to carry
+
+
+def _thumb_display(path: Path, edge: int = MIMIC_EDGE) -> np.ndarray:
+    """One frame as a small display-domain image of area averages.
+
+    Small on purpose: each pixel is the mean of a neighbourhood, so the
+    camera's sharpening, its noise reduction and a half-pixel of
+    framing drift all cancel, and what is left is the thing being
+    fitted -- colour and tone. A raw decodes the way the engine's own
+    baseline does: camera white balance, no auto-brightening.
+    """
+    from PIL import Image
+
+    path = Path(path)
+    if path.suffix.casefold() in RAW_SUFFIXES:
+        import rawpy
+
+        with rawpy.imread(str(path)) as raw:
+            pixels = raw.postprocess(
+                use_camera_wb=True, no_auto_bright=True, output_bps=16)
+        linear = pixels.astype(np.float32) / 65535.0
+        shown = np.clip(linear, 0.0, 1.0) ** (1.0 / _ENCODE_GAMMA)
+        image = Image.fromarray(
+            (shown * 255.0 + 0.5).astype(np.uint8), "RGB")
+    else:
+        with Image.open(path) as opened:
+            image = opened.convert("RGB")
+    width, height = image.size
+    scale = edge / max(width, height)
+    size = (max(1, round(width * scale)), max(1, round(height * scale)))
+    image = image.resize(size, Image.Resampling.BOX)
+    return np.asarray(image, dtype=np.float32) / 255.0
+
+
+def _paired(paths: list[str]) -> list[tuple[Path, Path]]:
+    """Which frame teaches which: RAWs find their sibling JPEG by stem;
+    an explicit source=target pair says so outright."""
+    pairs: list[tuple[Path, Path]] = []
+    for told in paths:
+        if "=" in told:
+            source, target = told.split("=", 1)
+            pairs.append((Path(source), Path(target)))
+            continue
+        raw = Path(told)
+        if raw.suffix.casefold() not in RAW_SUFFIXES:
+            raise LookError(
+                f"{raw.name}: give a RAW with a sibling JPEG, or an "
+                "explicit source=target pair")
+        sibling = next(
+            (raw.with_suffix(ending) for ending in
+             (".JPG", ".jpg", ".JPEG", ".jpeg")
+             if raw.with_suffix(ending).is_file()), None)
+        if sibling is None:
+            raise LookError(
+                f"{raw.name} has no sibling JPEG beside it -- the "
+                "camera's own rendering is the teacher")
+        pairs.append((raw, sibling))
+    if not pairs:
+        raise LookError("mimicry needs at least one pair to learn from")
+    return pairs
+
+
+def mimic_samples(source: np.ndarray, target: np.ndarray
+                  ) -> tuple[np.ndarray, np.ndarray]:
+    """Matched colour samples, with the untrustworthy ones refused.
+
+    A clipped pixel on either side is a lie about the transform -- the
+    camera's white holds no colour and teaches none.
+    """
+    if source.shape != target.shape:
+        from PIL import Image
+
+        sheet = Image.fromarray(
+            (target * 255.0 + 0.5).astype(np.uint8), "RGB").resize(
+            (source.shape[1], source.shape[0]), Image.Resampling.BOX)
+        target = np.asarray(sheet, dtype=np.float32) / 255.0
+    flat_s = source.reshape(-1, 3)
+    flat_t = target.reshape(-1, 3)
+    honest = ((flat_s.max(axis=1) < 0.99) & (flat_t.max(axis=1) < 0.99)
+              & ((flat_s.max(axis=1) > 0.01) | (flat_t.max(axis=1) > 0.01)))
+    return flat_s[honest], flat_t[honest]
+
+
+def fit_mimic(pairs: list[tuple[np.ndarray, np.ndarray]],
+              relax_passes: int = 1) -> tuple[list[dict[str, Any]], dict]:
+    """A film simulation, learned from the camera's own renderings.
+
+    The same shape every look here has -- a matrix for the reach, a
+    relaxed lattice for the rest -- fitted not from 24 chart patches
+    but from thousands of area-averaged correspondences between the
+    engine's neutral decode and the JPEG the camera made of the very
+    same light. Fujifilm never published these transforms; the camera
+    hands them over with every frame.
+    """
+    sources = []
+    targets = []
+    for source, target in pairs:
+        held_s, held_t = mimic_samples(source, target)
+        sources.append(held_s)
+        targets.append(held_t)
+    src = np.concatenate(sources)
+    tgt = np.concatenate(targets)
+    if len(src) < 200:
+        raise LookError(
+            f"only {len(src)} honest samples across the pairs -- "
+            "these frames are too clipped or too small to teach")
+    if len(src) > MIMIC_MOST:
+        stride = len(src) // MIMIC_MOST + 1
+        src, tgt = src[::stride], tgt[::stride]
+    src_lin = np.clip(src, 1e-4, 1.0) ** _ENCODE_GAMMA
+    tgt_lin = np.clip(tgt, 1e-4, 1.0) ** _ENCODE_GAMMA
+    solved, *_ = np.linalg.lstsq(src_lin, tgt_lin, rcond=None)
+    matrix = solved.T.astype(np.float64)
+    rendered = np.clip(src_lin @ matrix.T, 1e-6, None) \
+        ** (1.0 / _ENCODE_GAMMA)
+    lattice = relax(fit_lattice(
+        np.clip(rendered, 0, 1).astype(np.float32), tgt), relax_passes)
+    report = {
+        "samples": int(len(src)),
+        "residual_before": round(float(np.abs(src - tgt).mean()), 5),
+        "residual_matrix": round(float(
+            np.abs(rendered - tgt).mean()), 5),
+        "lattice_peak": round(float(np.abs(lattice).max()), 4),
+    }
+    operations = [
+        {"op": "color.channel_mixer", "unit": "matrix", "mode": "absolute",
+         "value": [[round(float(v), 6) for v in row] for row in matrix],
+         "source_instruction": "mimicked from the camera's own JPEGs",
+         "enabled": True},
+        {"op": "color.warp", "unit": "warp", "mode": "absolute",
+         "value": warp_value(lattice),
+         "source_instruction": "the residue the matrix could not say",
+         "enabled": True},
+    ]
+    return operations, report
+
+
 # --- the authored look ----------------------------------------------------
 
 def standard_look(strength: float = 100.0,
@@ -302,6 +444,17 @@ def main(argv: list[str] | None = None) -> int:
     fit.add_argument("--camera", default="",
                      help="also assign as this camera model's default "
                           "look, worn under every render of its frames")
+    learn = sub.add_parser(
+        "mimic", help="learn a look from RAW+JPEG pairs -- e.g. a "
+                      "Fujifilm film simulation, from frames shot in it")
+    learn.add_argument(
+        "frames", nargs="+",
+        help="RAW files with sibling JPEGs beside them, or explicit "
+             "source=target image pairs")
+    learn.add_argument("--name", required=True)
+    learn.add_argument("--relax", type=int, default=1)
+    learn.add_argument("--camera", default="",
+                       help="also assign as this camera model's default")
     std = sub.add_parser("standard", help="author the standard look")
     std.add_argument("--strength", type=float, default=100.0)
     std.add_argument("--name", default="Darkimiya Standard")
@@ -313,6 +466,22 @@ def main(argv: list[str] | None = None) -> int:
         from opencull_gui import cameralooks
 
         print(json.dumps(cameralooks.cameras(), indent=2))
+        return 0
+    if args.command == "mimic":
+        pairs = [(_thumb_display(source), _thumb_display(target))
+                 for source, target in _paired(args.frames)]
+        operations, report = fit_mimic(pairs, args.relax)
+        kept = save_look(
+            args.name, operations,
+            intent="Learned from the camera's own JPEGs: the neutral "
+                   "decode on one side, the rendering the camera made "
+                   "of the same light on the other.")
+        told = {"kept": kept["name"], "report": report}
+        if args.camera:
+            dressed = dress_camera(args.camera, operations,
+                                   note=f"mimicked: {args.name}")
+            told["camera"] = dressed["camera"]
+        print(json.dumps(told, indent=2))
         return 0
     if args.command == "fit":
         from PIL import Image

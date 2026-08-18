@@ -35,6 +35,7 @@ RANGES = {
     "detail.structure": (-100.0, 100.0, "percent"),
     "detail.dehaze": (-100.0, 100.0, "percent"),
     "finish.vignette": (-100.0, 100.0, "percent"),
+    "finish.grain": (0.0, 100.0, "percent"),
     "color.neutralize": (0.0, 100.0, "percent"),
     "detail.clean_colour": (0.0, 100.0, "percent"),
     # The eveners: how far each pixel in a colour mask's wedge walks

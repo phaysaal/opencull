@@ -44,7 +44,7 @@ SECTIONS = (
     ("Colour", ("color.temperature", "color.tint", "color.saturation")),
     ("Detail", ("detail.clarity", "detail.structure", "detail.dehaze",
                 "detail.clean_colour")),
-    ("Finish", ("finish.vignette",)),
+    ("Finish", ("finish.vignette", "finish.grain")),
 )
 
 LABELS = {
@@ -66,6 +66,7 @@ LABELS = {
     "detail.dehaze": "Dehaze",
     "detail.clean_colour": "Clean colour",
     "finish.vignette": "Vignette",
+    "finish.grain": "Grain",
 }
 
 # How a value is written where it is read. The unit is the compiler's; only

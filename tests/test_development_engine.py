@@ -381,6 +381,64 @@ class CurveColourHoldTests(unittest.TestCase):
         self.assertTrue(np.allclose(filmed, plain, atol=1e-5))
 
 
+class FilmGrainTests(unittest.TestCase):
+    """Grain is a look: deterministic, frame-sized, strongest midtone."""
+
+    def op(self, value):
+        return [{"op": "finish.grain", "unit": "percent", "mode": "delta",
+                 "value": value, "enabled": True}]
+
+    def field(self):
+        rng = np.random.default_rng(2)
+        return np.clip(
+            rng.random((240, 320, 3)).astype(np.float32) * 0.7 + 0.1,
+            0, 1)
+
+    def test_the_same_frame_grows_the_same_grain(self):
+        from development_engine import _apply_global
+
+        img = self.field()
+        self.assertTrue(np.array_equal(
+            _apply_global(img, self.op(60)),
+            _apply_global(img, self.op(60))))
+
+    def test_zero_is_a_no_op(self):
+        from development_engine import _apply_global
+
+        img = self.field()
+        self.assertTrue(np.allclose(
+            _apply_global(img, self.op(0)), img))
+
+    def test_the_windowed_grain_is_the_full_grain_cropped(self):
+        from development_engine import _apply_global
+
+        img = self.field()
+        whole = _apply_global(img, self.op(60))
+        crop = img[60:160, 80:200].copy()
+        part = _apply_global(crop, self.op(60), window={
+            "x": 80 / 320, "y": 60 / 240,
+            "w": 120 / 320, "h": 100 / 240})
+        self.assertEqual(float(np.abs(
+            part - whole[60:160, 80:200]).max()), 0.0)
+
+    def test_silver_dies_toward_black_and_white(self):
+        from development_engine import _apply_global
+
+        def sigma(level):
+            flat = np.full((48, 48, 3), level, np.float32)
+            return float(np.std(_apply_global(flat, self.op(60)) - flat))
+        self.assertGreater(sigma(0.22), sigma(0.001) * 5)
+        self.assertGreater(sigma(0.22), sigma(0.99) * 5)
+
+    def test_grain_sits_on_the_finish_surface(self):
+        from opencull_gui import adjustments
+
+        found = next(item for item in adjustments.full_surface(
+            {"operations": []}) if item["op"] == "finish.grain")
+        self.assertEqual(found["section"], "Finish")
+        self.assertEqual(found["label"], "Grain")
+
+
 class WindowedRenderTests(unittest.TestCase):
     """A windowed render is the full render, cropped -- bit for bit."""
 
