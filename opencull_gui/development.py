@@ -642,7 +642,7 @@ class DevelopmentWorkspace:
 
     def _prepare(self, photo: str, style: str, engine: str) -> dict:
         """Settle the source photograph and the recipe for one treatment."""
-        builtin_styles = set(BUILTIN_STYLES)
+        builtin_styles = set(BUILTIN_STYLES) | {"as-shot"}
         if engine not in set(ENGINES):
             raise ValueError("unsupported development preview engine")
         workspace = self.payload()
@@ -664,7 +664,8 @@ class DevelopmentWorkspace:
                 (item for item in self.finished_treatments(photo)
                  if item["id"] == style), None)
         if entry is None:
-            if style != "calibrated" and preset is None and treatment is None:
+            if style not in {"calibrated", "as-shot"} \
+                    and preset is None and treatment is None:
                 raise ValueError("photograph has no edit direction")
             # The baseline interprets nothing, so it needs no direction. Only
             # the RAW match matters, and that is indexed separately.
@@ -697,12 +698,22 @@ class DevelopmentWorkspace:
             if portable is None:
                 raise ValueError("unsupported development preview treatment")
             recipe_value = portable.get("recipe")
-        if style == "calibrated":
+        if style in {"calibrated", "as-shot"}:
+            # Both compile to no operations at all; they differ only in
+            # what the operations would land on. The baseline is the
+            # neutral decode; as-shot is the camera's own rendering,
+            # offered as a starting point -- fine tuning from the
+            # picture the camera made is how a film-simulation recipe
+            # is worked on top of the simulation itself.
             recipe = {
                 "format": "opencull-development-recipe-v1",
                 "source_photo": photo, "source_kind": source_kind,
-                "style": style, "title": "Calibrated baseline",
-                "intent": "Neutral technical preview.",
+                "style": style,
+                "title": ("As shot" if style == "as-shot"
+                          else "Calibrated baseline"),
+                "intent": ("The camera's own rendering, adjustable."
+                           if style == "as-shot"
+                           else "Neutral technical preview."),
                 "working_space": "scene-linear-rec2020-d65",
                 "operations": [], "guardrails": [], "diagnostics": [],
                 "coverage": {"instructions": 0, "executable": 0,
@@ -744,16 +755,21 @@ class DevelopmentWorkspace:
                 photo, style, str(entry.get(f"{style}_title", style.title())),
                 str(entry.get(f"{style}_intent", "")), recipe_value,
                 str(entry.get("guardrails", "")), source_kind)
+        base = str((preset or {}).get("base") or (
+            "camera" if style == "as-shot" else "raw"))
         # The camera's own look, laid under whatever the recipe says --
         # baseline, preset, treatment or a hand-tuned version alike. A
         # camera that has been given a look wears it before anything
         # else speaks, the way a profile sits under a develop; a camera
-        # never dressed changes nothing here.
+        # never dressed changes nothing here. Never on the camera's own
+        # rendering: that picture already wears the camera's colour,
+        # and a look laid on it would be worn twice.
         from . import cameralooks
         from .scenes import camera_model
 
-        recipe = cameralooks.underneath(
-            recipe, cameralooks.look_for(camera_model(source)))
+        if base != "camera":
+            recipe = cameralooks.underneath(
+                recipe, cameralooks.look_for(camera_model(source)))
         # And the folder's dust map, healed FIRST -- under even the
         # look: the spots are defects of the frame, and every other
         # operation deserves the frame as it should have been.
@@ -766,7 +782,7 @@ class DevelopmentWorkspace:
                 # What this treatment is a departure from. Almost always
                 # the raw; a preset may say the camera's own rendering
                 # instead, where that is the better photograph to correct.
-                "base": str((preset or {}).get("base") or "raw")}
+                "base": base}
 
 
     def _native_decode(
@@ -876,9 +892,12 @@ class DevelopmentWorkspace:
         """
         if demosaic not in set(DEMOSAIC_MODES):
             raise ValueError("unsupported development preview demosaic mode")
-        if style == "as-shot":
+        if style == "as-shot" and not adjustments and recipe is None \
+                and window is None:
             # There is nothing to render: the camera made this picture.
-            # A proof of it is the same picture, smaller.
+            # A proof of it is the same picture, smaller. The moment a
+            # hand moves something, it is a development like any other,
+            # from the camera's rendering as its base.
             return self._as_shot_preview(photo, maximum)
         prepared = self._prepare(photo, style, engine)
         # A caller may supply the recipe outright -- a treatment program

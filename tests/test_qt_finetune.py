@@ -545,6 +545,37 @@ class FineTunePageTests(unittest.TestCase):
         door.setChecked(False)
         self.assertTrue(all(label.isHidden() for label in rails))
 
+    def test_as_shot_is_a_tunable_starting_point(self):
+        page = self.page()
+        page.show_photo(NAMES[0])
+        page.show_treatment("as-shot")
+        self.assertEqual(page.recipe.get("title"), "As shot")
+        self.assertEqual(page.recipe.get("operations"), [])
+        self.assertNotIn("could not be read", page.status.text())
+        # Touch a control and the whole thing exports like any other.
+        page.changes["+insert"] = [{"op": "tone.exposure", "value": 0.5}]
+        page._show_controls()
+        self.assertTrue(page.keep_button.isEnabled())
+
+    def test_adjusted_as_shot_renders_from_the_cameras_picture(self):
+        import numpy as np
+        from PIL import Image as PILImage
+
+        page = self.page()
+        adjusted = page.workspace.recipe_preview(
+            NAMES[0], "as-shot", "default", "markesteijn-3-pass", 320,
+            adjustments={"+insert": [{"op": "tone.exposure",
+                                      "value": 0.5}]})
+        plain = page.workspace.recipe_preview(
+            NAMES[0], "as-shot", "default", "markesteijn-3-pass", 320)
+        bright = np.asarray(
+            PILImage.open(adjusted).convert("RGB"), float).mean()
+        camera = np.asarray(
+            PILImage.open(plain).convert("RGB"), float).mean()
+        self.assertGreater(bright, camera + 5)   # the EV landed
+        # And untouched as-shot is still the fast path: the JPEG itself.
+        self.assertNotEqual(str(adjusted), str(plain))
+
     def test_a_colour_mask_layer_offers_its_own_geometry(self):
         page = self.page()
         made = {"shape": "color", "geometry": {

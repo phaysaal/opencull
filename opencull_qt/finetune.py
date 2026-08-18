@@ -2118,8 +2118,11 @@ class FineTunePage(QWidget):
                    if on_mask else adjustments.full_surface(self.recipe))
         compiled = [item for item in adjustments.full_surface(self.recipe)
                     if not item.get("absent")]
-        self.keep_button.setEnabled(bool(compiled))
-        self.reset_button.setEnabled(bool(compiled))
+        # An empty compile is still workable the moment a hand moves
+        # something -- As shot starts from nothing but the camera's
+        # picture, and what is built on it exports like anything else.
+        self.keep_button.setEnabled(bool(compiled) or bool(self.changes))
+        self.reset_button.setEnabled(bool(compiled) or bool(self.changes))
         advice = zones.load(
             Path(str(self.workspace.project.get("source_folder") or ".")),
             self.current) if self.current else {}
