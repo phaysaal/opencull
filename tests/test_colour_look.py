@@ -233,3 +233,72 @@ class LookThroughTheStripTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LearnLookProgramTests(unittest.TestCase):
+    """The kim program's kernels: pair, fit, judge, keep."""
+
+    def shoot(self, folder: Path):
+        from unittest import mock
+
+        from PIL import Image
+        rng = np.random.default_rng(7)
+        from development_engine import _box_mean
+        for index in (1, 2, 3):
+            base = rng.random((120, 160, 3)).astype(np.float32) * 0.7 + 0.1
+            lin = np.stack([_box_mean(base[..., c], 8)
+                            for c in range(3)], -1)
+            src = np.clip(lin, 0, 1) ** (1 / _ENCODE_GAMMA)
+            tgt = np.clip(lin * [1.1, 1.0, 0.9], 0, 1) \
+                ** (1 / _ENCODE_GAMMA)
+            Image.fromarray((src * 255 + 0.5).astype(np.uint8)).save(
+                folder / f"DSCF000{index}.tif")
+            Image.fromarray((tgt * 255 + 0.5).astype(np.uint8)).save(
+                folder / f"DSCF000{index}.JPG")
+        return mock.patch.object(
+            cl, "RAW_SUFFIXES", cl.RAW_SUFFIXES | {".tif"})
+
+    def test_the_program_learns_and_writes_a_real_preset(self):
+        import look_kernel
+
+        with tempfile.TemporaryDirectory() as folder:
+            with self.shoot(Path(folder)):
+                told = look_kernel.learn_look(
+                    folder, "*.tif", "Warm test look", 12)
+            self.assertTrue(look_kernel.look_valid(told))
+            self.assertIn("Warm test look", look_kernel.look_note(told))
+            import json as json_module
+            value = json_module.loads(told)
+            self.assertEqual(value["format"], "darkimiya-preset-v1")
+            ops = [item["op"] for item in value["operations"]]
+            self.assertIn("color.warp", ops)
+            # written where look_home says, the store reads it back
+            import os
+            held = os.environ.get("DARKIMIYA_PRESETS")
+            os.environ["DARKIMIYA_PRESETS"] = str(
+                Path(folder) / "presets")
+            try:
+                where = Path(look_kernel.look_home(told))
+                where.write_text(told, encoding="utf-8")
+                from opencull_gui import presets
+                listed = presets.saved()
+                self.assertEqual(listed[0]["name"], "Warm test look")
+            finally:
+                if held is None:
+                    os.environ.pop("DARKIMIYA_PRESETS", None)
+                else:
+                    os.environ["DARKIMIYA_PRESETS"] = held
+
+    def test_an_empty_folder_fails_the_check_politely(self):
+        import look_kernel
+
+        with tempfile.TemporaryDirectory() as folder:
+            told = look_kernel.learn_look(folder, "*.RAF", "Nothing", 12)
+            self.assertFalse(look_kernel.look_valid(told))
+            self.assertIn("no RAW+JPEG pairs", look_kernel.look_note(told))
+
+    def test_the_program_is_in_the_catalogue(self):
+        from opencull_gui.programs import BUILT_INS
+
+        self.assertIn("learn_look.kim",
+                      [name for name, _purpose in BUILT_INS])

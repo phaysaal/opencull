@@ -463,14 +463,41 @@ def _mask_operations(recipe: dict[str, Any]) -> list[dict[str, Any]]:
             and isinstance(operation.get("value"), dict)]
 
 
+def _unpacked(text: str) -> list[str]:
+    """A guardrail that is secretly a list, opened into its sentences.
+
+    Treatment programs sometimes hand back their whole promise set as
+    one stringified Python list; shown raw it reads as a wall of
+    quoted debris. If the string parses as a list of strings, those
+    are the guardrails; anything else is one guardrail, as written.
+    """
+    told = text.strip()
+    if told.startswith("[") and told.endswith("]"):
+        import ast
+
+        try:
+            value = ast.literal_eval(told)
+        except (ValueError, SyntaxError):
+            return [told]
+        if isinstance(value, (list, tuple)) and all(
+                isinstance(item, str) for item in value):
+            return [item.strip() for item in value if item.strip()]
+    return [told]
+
+
 def guardrails(recipe: dict[str, Any]) -> list[str]:
     """What the treatment promised not to do, which is not up for adjustment."""
     found = []
     for item in recipe.get("guardrails", []) or []:
+        if isinstance(item, (list, tuple)):
+            for said in item:
+                if isinstance(said, str) and said.strip():
+                    found.extend(_unpacked(said))
+            continue
         text = item if isinstance(item, str) else str(
             (item or {}).get("source_instruction") or "")
         if text.strip():
-            found.append(text.strip())
+            found.extend(_unpacked(text))
     for operation in recipe.get("operations", []) or []:
         if isinstance(operation, dict) and str(
                 operation.get("op", "")).startswith("guardrail."):

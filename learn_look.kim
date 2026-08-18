@@ -1,0 +1,33 @@
+-- Learn a look from RAW+JPEG pairs: the camera itself is the teacher.
+--
+-- Fujifilm never published Provia, Velvia or Classic Chrome; the
+-- camera publishes them with every frame. Shoot a handful of varied
+-- frames with the simulation set and RAW+JPEG on, point this at the
+-- folder, and the fit pairs the engine's neutral decode against the
+-- JPEG the camera made of the very same light. What comes out is a
+-- preset -- a matrix and a smooth colour lattice -- that lays that
+-- rendering on ANY raw, whatever simulation it was shot in.
+--
+-- Deterministic end to end: thumbnails of area means teach colour and
+-- tone while sharpening, noise and framing drift cancel; clipped
+-- pixels are refused; no model is asked for anything.
+
+param photos: text = "."
+param pattern: text = "*.RAF"
+param name: text = "Learned look"
+param most_frames: num = 12
+
+use python "look_kernel.py"
+
+-- Every RAW with a JPEG beside it votes; the fit is their agreement.
+found := learn_look(photos, pattern, name, most_frames)
+check look_valid(found)
+print(look_note(found))
+
+-- The look joins the preset store, where every photograph's strip
+-- already knows to offer it.
+where := look_home(found)
+check look_valid(found)
+act file.overwrite(where, found)
+settle until check file_exists(where) within 5
+commit(found)

@@ -2207,17 +2207,36 @@ class FineTunePage(QWidget):
                 "it answers to the hand."))
             bands.changed.connect(self._hsl_changed)
             self.body.addWidget(bands)
-        for text in adjustments.guardrails(self.recipe):
-            rail = QLabel(f"◆ {text}")
-            rail.setObjectName("guardrail")
-            rail.setWordWrap(True)
-            rail.setFont(theme.body(8))
-            rail.setToolTip(tooltip(
-                "A promise this treatment made, which verification checks. "
-                "It is shown rather than offered: switching it off would "
-                "leave a certificate judging a claim the rendering no longer "
-                "makes."))
-            self.body.addWidget(rail)
+        promises = adjustments.guardrails(self.recipe)
+        if promises:
+            # The promises fold. A treatment's guardrails can run to a
+            # dozen sentences, and a dozen sentences always on screen
+            # read as scaffolding; the button says how many there are,
+            # and opening it is one click for whoever wants the words.
+            rails_door = QPushButton(f"Guardrails · {len(promises)}")
+            rails_door.setObjectName("ghost")
+            rails_door.setProperty("slim", "true")
+            rails_door.setFont(theme.body(8))
+            rails_door.setCheckable(True)
+            rails_door.setCursor(Qt.CursorShape.PointingHandCursor)
+            rails_door.setToolTip(tooltip(
+                "The promises this treatment made, which verification "
+                "checks. They are shown rather than offered: switching "
+                "one off would leave a certificate judging a claim the "
+                "rendering no longer makes."))
+            self.body.addWidget(rails_door)
+            held_rails = []
+            for text in promises:
+                rail = QLabel(f"◆ {text}")
+                rail.setObjectName("guardrail")
+                rail.setWordWrap(True)
+                rail.setFont(theme.body(8))
+                rail.hide()
+                held_rails.append(rail)
+                self.body.addWidget(rail)
+            rails_door.toggled.connect(
+                lambda on, rails=held_rails: [r.setVisible(on)
+                                              for r in rails])
         self.body.addStretch(1)
         if getattr(self, "_scroll", None) is not None and held:
             from PySide6.QtCore import QTimer

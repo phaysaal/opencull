@@ -526,6 +526,25 @@ class FineTunePageTests(unittest.TestCase):
         self.assertFalse(page.ab_button.isChecked())
         self.assertFalse(page._holding)
 
+    def test_guardrails_wait_behind_their_door(self):
+        from PySide6.QtWidgets import QLabel, QPushButton
+
+        page = self.page()
+        page.recipe.setdefault("guardrails", []).extend([
+            "Keep skin believable.", "No crushed blacks."])
+        page._show_controls()
+        rails = [label for label in page.findChildren(QLabel)
+                 if label.text().startswith("◆")]
+        self.assertTrue(rails)
+        self.assertTrue(all(label.isHidden() for label in rails))
+        door = next(button for button in page.findChildren(QPushButton)
+                    if button.text().startswith("Guardrails"))
+        self.assertIn("· 3", door.text().replace("  ", " "))  # 2 + the fixture own
+        door.setChecked(True)
+        self.assertTrue(all(not label.isHidden() for label in rails))
+        door.setChecked(False)
+        self.assertTrue(all(label.isHidden() for label in rails))
+
     def test_a_colour_mask_layer_offers_its_own_geometry(self):
         page = self.page()
         made = {"shape": "color", "geometry": {

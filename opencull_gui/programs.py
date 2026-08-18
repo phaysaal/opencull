@@ -56,6 +56,9 @@ BUILT_INS = (
      "carries."),
     ("dust_removal.kim",
      "Map sensor dust across a folder; every render heals it first."),
+    ("learn_look.kim",
+     "Learn a look from RAW+JPEG pairs: the camera itself is the "
+     "teacher."),
 )
 
 _PARAM_RE = re.compile(

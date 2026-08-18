@@ -535,3 +535,25 @@ class TransplantTests(unittest.TestCase):
         held = {op["op"]: op["value"] for op in out["operations"]}
         self.assertEqual(held["tone.contrast"], 12.0)
         self.assertEqual(held["tone.exposure"], 0.8)
+
+
+class GuardrailUnpackingTests(unittest.TestCase):
+    """A guardrail that is secretly a list opens into its sentences."""
+
+    def test_a_stringified_list_opens(self):
+        told = adjustments.guardrails({"guardrails": [
+            "['Do not crop away the walker.', 'Keep foliage green.']",
+            "Correct lens behavior first."], "operations": []})
+        self.assertEqual(told, [
+            "Do not crop away the walker.", "Keep foliage green.",
+            "Correct lens behavior first."])
+
+    def test_a_real_list_opens_too(self):
+        told = adjustments.guardrails({"guardrails": [
+            ["One promise.", "Another."]], "operations": []})
+        self.assertEqual(told, ["One promise.", "Another."])
+
+    def test_an_ordinary_sentence_is_left_as_written(self):
+        told = adjustments.guardrails({"guardrails": [
+            "Keep skin believable [as shot]."], "operations": []})
+        self.assertEqual(told, ["Keep skin believable [as shot]."])

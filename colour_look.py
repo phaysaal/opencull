@@ -217,17 +217,23 @@ def _thumb_display(path: Path, edge: int = MIMIC_EDGE) -> np.ndarray:
     from PIL import Image
 
     path = Path(path)
+    image = None
     if path.suffix.casefold() in RAW_SUFFIXES:
         import rawpy
 
-        with rawpy.imread(str(path)) as raw:
-            pixels = raw.postprocess(
-                use_camera_wb=True, no_auto_bright=True, output_bps=16)
-        linear = pixels.astype(np.float32) / 65535.0
-        shown = np.clip(linear, 0.0, 1.0) ** (1.0 / _ENCODE_GAMMA)
-        image = Image.fromarray(
-            (shown * 255.0 + 0.5).astype(np.uint8), "RGB")
-    else:
+        try:
+            with rawpy.imread(str(path)) as raw:
+                pixels = raw.postprocess(
+                    use_camera_wb=True, no_auto_bright=True,
+                    output_bps=16)
+        except Exception:              # noqa: BLE001 - not actually a raw
+            image = None
+        else:
+            linear = pixels.astype(np.float32) / 65535.0
+            shown = np.clip(linear, 0.0, 1.0) ** (1.0 / _ENCODE_GAMMA)
+            image = Image.fromarray(
+                (shown * 255.0 + 0.5).astype(np.uint8), "RGB")
+    if image is None:
         with Image.open(path) as opened:
             image = opened.convert("RGB")
     width, height = image.size
