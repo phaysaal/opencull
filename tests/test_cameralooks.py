@@ -203,6 +203,23 @@ class WornUnderEveryRenderTests(unittest.TestCase):
         self.assertEqual(ops[:2], ["color.channel_mixer", "color.warp"])
         self.assertGreater(len(ops), 2)     # the preset's own moves follow
 
+    def test_the_dust_map_is_healed_first_under_even_the_look(self):
+        from opencull_gui import dust
+
+        cameralooks.assign("FUJIFILM X-T5", LOOK_OPS)
+        dust.save_map({
+            "format": dust.DUST_FORMAT,
+            "photos": str(self.root / "photos"), "pattern": "*.JPG",
+            "frames_read": 8,
+            "spots": [{"x": 0.5, "y": 0.25, "r": 0.01,
+                       "depth": 0.3, "seen": 1.0}]})
+        recipe = self.workspace.compiled_recipe(
+            "A.JPG", "calibrated", "darktable")
+        ops = [item["op"] for item in recipe["operations"]]
+        self.assertEqual(ops, ["heal.spots", "color.channel_mixer",
+                               "color.warp"])
+        self.assertTrue(recipe["operations"][0]["dust_map"])
+
     def test_an_undressed_camera_renders_exactly_as_before(self):
         recipe = self.workspace.compiled_recipe(
             "A.JPG", "calibrated", "darktable")

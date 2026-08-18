@@ -54,6 +54,8 @@ BUILT_INS = (
     ("named_subject_timelapse.kim",
      "Pin a subject you can only name: a model anchors, the tracker "
      "carries."),
+    ("dust_removal.kim",
+     "Map sensor dust across a folder; every render heals it first."),
 )
 
 _PARAM_RE = re.compile(

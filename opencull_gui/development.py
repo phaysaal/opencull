@@ -754,6 +754,13 @@ class DevelopmentWorkspace:
 
         recipe = cameralooks.underneath(
             recipe, cameralooks.look_for(camera_model(source)))
+        # And the folder's dust map, healed FIRST -- under even the
+        # look: the spots are defects of the frame, and every other
+        # operation deserves the frame as it should have been.
+        from . import dust
+
+        recipe = dust.underneath(
+            recipe, dust.load_map(workspace["source_folder"]))
         return {"recipe": recipe, "source": source, "reference": reference,
                 "source_kind": source_kind,
                 # What this treatment is a departure from. Almost always

@@ -365,6 +365,16 @@ def _apply_global(rgb: np.ndarray, operations: list[dict[str, Any]],
             if progress is not None:
                 progress(done, total, _named(item))
             continue
+        if op == "heal.spots" and isinstance(value, dict):
+            # Sensor dust and lens spots, taken back out: each spot is a
+            # small disc rebuilt from its own boundary, feathered so the
+            # repair has no edge. Coordinates are fractions of the frame
+            # -- the same words at proof size and at full size -- and a
+            # frame with no listed spots is untouched.
+            result = _heal_spots(result, value)
+            if progress is not None:
+                progress(done, total, _named(item))
+            continue
         if op == "color.warp" and isinstance(value, dict):
             # A smooth warp of colour space itself: a coarse lattice of
             # deltas, trilinearly interpolated, applied in the encoded
@@ -874,6 +884,69 @@ def _spatial_mask(rgb: np.ndarray, shape: str, value: dict[str, Any]) -> np.ndar
             return (1.0 - weight).astype(np.float32)
         return weight.astype(np.float32)
     return _hue_mask(rgb, anchor)
+
+
+_HEAL_MOST = 64          # spots a single operation may carry
+_HEAL_WIDEST = 0.05      # radius cap, as a fraction of the short edge
+
+
+def _heal_spots(rgb: np.ndarray, value: dict[str, Any]) -> np.ndarray:
+    """Rebuild each listed disc from the ring around it.
+
+    For every pixel inside a spot, the healed colour is the inverse-
+    distance blend of samples taken on a ring just outside the disc --
+    so gradients (a sky darkening toward a corner) heal into the same
+    gradient, not into a flat average. The repair fades in across the
+    disc's outer quarter, and outside the disc nothing is touched.
+    """
+    spots = value.get("spots")
+    if not isinstance(spots, list) or not spots:
+        return rgb
+    height, width = rgb.shape[:2]
+    short = float(min(height, width))
+    healed = rgb.copy()
+    for spot in spots[:_HEAL_MOST]:
+        if not isinstance(spot, dict):
+            continue
+        try:
+            cx = float(spot["x"]) * width
+            cy = float(spot["y"]) * height
+            radius = min(max(float(spot["r"]), 0.0), _HEAL_WIDEST) * short
+        except (KeyError, TypeError, ValueError):
+            continue
+        if radius < 0.75:
+            continue
+        left = max(int(cx - radius) - 1, 0)
+        right = min(int(cx + radius) + 2, width)
+        top = max(int(cy - radius) - 1, 0)
+        bottom = min(int(cy + radius) + 2, height)
+        if right <= left or bottom <= top:
+            continue
+        ys, xs = np.mgrid[top:bottom, left:right].astype(np.float32)
+        away = np.sqrt((xs - cx) ** 2 + (ys - cy) ** 2)
+        inside = away <= radius
+        if not inside.any():
+            continue
+        angles = np.linspace(0.0, 2.0 * np.pi, 16, endpoint=False)
+        ring_x = np.clip(cx + np.cos(angles) * radius * 1.35,
+                         0, width - 1).astype(np.int32)
+        ring_y = np.clip(cy + np.sin(angles) * radius * 1.35,
+                         0, height - 1).astype(np.int32)
+        ring = healed[ring_y, ring_x]                       # (16, 3)
+        px = xs[inside][:, None]
+        py = ys[inside][:, None]
+        reach = ((px - ring_x[None, :].astype(np.float32)) ** 2
+                 + (py - ring_y[None, :].astype(np.float32)) ** 2)
+        pull = 1.0 / (reach + 1.0)
+        patch = (pull @ ring) / pull.sum(axis=1, keepdims=True)
+        # The repair fades in across the disc's outer quarter.
+        blend = np.clip((radius - away[inside]) / max(radius * 0.25, 0.5),
+                        0.0, 1.0)
+        blend = blend * blend * (3.0 - 2.0 * blend)
+        window = healed[top:bottom, left:right]
+        window[inside] = (window[inside] * (1.0 - blend[:, None])
+                          + patch * blend[:, None])
+    return healed
 
 
 def _warp_lattice(value: dict[str, Any]) -> tuple[np.ndarray, int] | None:

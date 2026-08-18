@@ -381,6 +381,65 @@ class CurveColourHoldTests(unittest.TestCase):
         self.assertTrue(np.allclose(filmed, plain, atol=1e-5))
 
 
+class HealSpotsTests(unittest.TestCase):
+    """Each disc rebuilt from its own ring: no spot, no edge, no drift."""
+
+    def field(self):
+        h, w = 120, 160
+        img = np.zeros((h, w, 3), np.float32)
+        for y in range(h):
+            img[y] = 0.3 + 0.4 * y / h
+        yy, xx = np.mgrid[0:h, 0:w]
+        disc = ((xx - 80) ** 2 + (yy - 60) ** 2) <= 5 ** 2
+        img[disc] *= 0.4
+        return img
+
+    def op(self, spots):
+        return [{"op": "heal.spots", "unit": "spots", "mode": "absolute",
+                 "enabled": True, "value": {"spots": spots}}]
+
+    def test_the_spot_heals_to_the_clean_value(self):
+        from development_engine import _apply_global
+
+        out = _apply_global(self.field(), self.op(
+            [{"x": 0.5, "y": 0.5, "r": 8 / 120}]))
+        self.assertAlmostEqual(float(out[60, 80, 0]), 0.5, places=2)
+
+    def test_a_gradient_heals_into_the_same_gradient(self):
+        from development_engine import _apply_global
+
+        out = _apply_global(self.field(), self.op(
+            [{"x": 0.5, "y": 0.5, "r": 8 / 120}]))
+        column = out[53:68, 80, 0]
+        self.assertGreater(float(column[-1]), float(column[0]) + 0.02)
+
+    def test_outside_the_disc_nothing_is_touched(self):
+        from development_engine import _apply_global
+
+        img = self.field()
+        out = _apply_global(img, self.op(
+            [{"x": 0.5, "y": 0.5, "r": 8 / 120}]))
+        self.assertTrue(np.allclose(out[0:40], img[0:40]))
+        self.assertTrue(np.allclose(out[:, 0:60], img[:, 0:60]))
+
+    def test_no_spots_and_broken_spots_are_no_ops(self):
+        from development_engine import _apply_global
+
+        img = self.field()
+        self.assertTrue(np.allclose(
+            _apply_global(img, self.op([])), img))
+        self.assertTrue(np.allclose(
+            _apply_global(img, self.op([{"x": "?"}, 7])), img))
+
+    def test_a_spot_at_the_frames_edge_stays_in_bounds(self):
+        from development_engine import _apply_global
+
+        out = _apply_global(self.field(), self.op(
+            [{"x": 0.01, "y": 0.01, "r": 0.05},
+             {"x": 0.99, "y": 0.99, "r": 0.05}]))
+        self.assertTrue(np.isfinite(out).all())
+
+
 class ColourWarpTests(unittest.TestCase):
     """The lattice: neighbouring colours receive neighbouring words."""
 

@@ -1,0 +1,34 @@
+-- Map sensor dust across a folder; every render heals it first.
+--
+-- A dust spot lives on the sensor, so it sits at exactly the same
+-- place in every frame while the world moves behind it. Detection is
+-- therefore a vote, not a vision problem: each frame is divided by
+-- its own local blur so lighting cancels, and a dip that survives the
+-- median across frames is dust -- a bird or a branch moves, and the
+-- median forgets it. No model is asked for anything; a run over a
+-- whole shoot costs preview reads and arithmetic.
+--
+-- The finding is a dust map kept beside the photographs. From then on
+-- every render of the folder -- baseline, preset, treatment, or a
+-- hand-tuned version -- heals the listed spots before anything else
+-- touches the frame. An empty map is a finding too: a clean sensor,
+-- on record, so the question is not asked again.
+
+param photos: text = "."
+param pattern: text = ""
+param edge: num = 768
+
+use python "dust_kernel.py"
+
+-- Every readable frame votes; the map is their agreement.
+found := survey_dust(photos, pattern, edge)
+check map_valid(found)
+print(map_note(found))
+
+-- The map lives beside the photographs, under the house folder,
+-- where the renderer already knows to look.
+where := map_home(photos)
+check map_valid(found)
+act file.overwrite(where, found)
+settle until check file_exists(where) within 5
+commit(found)

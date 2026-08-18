@@ -486,6 +486,7 @@ def portable_operations(operations: list[dict[str, Any]]) -> list[dict[str, Any]
         if isinstance(item, dict)
         and item.get("enabled", True) is not False
         and not item.get("camera_look")
+        and not item.get("dust_map")
         and not str(item.get("op", "")).startswith(UNPORTABLE)
     ]
 
