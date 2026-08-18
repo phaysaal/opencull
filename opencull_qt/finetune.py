@@ -1875,7 +1875,7 @@ class FineTunePage(QWidget):
         menu = QMenu(self)
         menu.setFont(theme.body(10))
         rename = menu.addAction("Rename…")
-        erase = menu.addAction("Erase this mask")
+        erase = menu.addAction("Delete this mask")
         chosen = menu.exec(self.layers.mapToGlobal(where))
         if chosen is rename:
             placed = {m["ordinal"]: m for m in adjustments.masks(self.recipe)}
@@ -1886,7 +1886,7 @@ class FineTunePage(QWidget):
                 self._remember("rename mask")
                 self._mask_structure(ordinal, {"label": name.strip()})
         elif chosen is erase:
-            self._remember("erase mask")
+            self._remember("delete mask")
             self._mask_structure(ordinal, {"deleted": True})
             if self.layer == ordinal:
                 self.layer = 0
