@@ -422,6 +422,20 @@ def _apply_global(rgb: np.ndarray, operations: list[dict[str, Any]],
             if progress is not None:
                 progress(done, total, _named(item))
             continue
+        if op == "color.background" and isinstance(value, dict):
+            # The sky is not one brightness. A lens vignettes, a town
+            # glows from one side, and the result is a background that
+            # slopes across the frame -- on one of these stacks by
+            # seventy percent of the sky's own level, nearly five
+            # times the noise. Every stretch multiplies that slope
+            # along with the stars, so it is taken out first, and only
+            # its UNEVENNESS is: the surface's own middle is added
+            # back, so the sky keeps the level it had and loses only
+            # the tilt.
+            result = _flattened(result, value, window)
+            if progress is not None:
+                progress(done, total, _named(item))
+            continue
         if op == "color.sky_offset" and isinstance(value, dict):
             # Light pollution is not grey. It arrives as a different
             # amount of red, green and blue added to every pixel, and a
@@ -1071,6 +1085,62 @@ def _heal_spots(rgb: np.ndarray, value: dict[str, Any],
         piece[inside] = (piece[inside] * (1.0 - blend[:, None])
                          + patch * blend[:, None])
     return healed
+
+
+def _background_grid(value: dict[str, Any]) -> np.ndarray | None:
+    """The coarse per-channel surface a fit measured, or None."""
+    try:
+        size = int(value.get("size", 0))
+    except (TypeError, ValueError):
+        return None
+    if not 2 <= size <= 64:
+        return None
+    encoded = str(value.get("levels") or "")
+    if not encoded:
+        return None
+    try:
+        raw = np.frombuffer(base64.b64decode(encoded), dtype=np.float16)
+        return raw.astype(np.float32).reshape(size, size, 3)
+    except (ValueError, TypeError):
+        return None
+
+
+def _flattened(rgb: np.ndarray, value: dict[str, Any],
+               window: dict[str, float] | None = None) -> np.ndarray:
+    """Take the slope out of the sky and leave its level alone.
+
+    The surface is carried coarse -- a grid of what the background
+    was, measured where no star stood -- and read back by bilinear
+    interpolation, so it describes a slope and can never describe a
+    star. Subtracting it outright would leave the sky at zero and the
+    picture with nothing to stretch, so what is subtracted is the
+    surface minus its own middle: the tilt goes, the level stays.
+    """
+    grid = _background_grid(value)
+    if grid is None:
+        return rgb
+    height, width = rgb.shape[:2]
+    size = grid.shape[0]
+    yy, xx = _frame_grid(height, width, window)
+    px = np.clip(xx, 0.0, 1.0) * (size - 1)
+    py = np.clip(yy, 0.0, 1.0) * (size - 1)
+    x0 = np.minimum(np.floor(px).astype(np.int32), size - 2)
+    y0 = np.minimum(np.floor(py).astype(np.int32), size - 2)
+    fx = (px - x0)[..., None]
+    fy = (py - y0)[..., None]
+    top = grid[y0, x0] * (1 - fx) + grid[y0, x0 + 1] * fx
+    low = grid[y0 + 1, x0] * (1 - fx) + grid[y0 + 1, x0 + 1] * fx
+    surface = top * (1 - fy) + low * fy
+    # The level to keep: the surface's own middle, so only the tilt is
+    # removed. Stated by the fit rather than recomputed here, because
+    # a window would compute a different middle from its own corner.
+    middle = np.asarray(
+        value.get("middle") or [0.0, 0.0, 0.0], dtype=np.float32)
+    shown = np.clip(_encoded(np.clip(rgb, 0.0, None)), 0.0, 1.0)
+    strength = min(max(float(value.get("strength", 100.0) or 0.0),
+                       0.0), 100.0) / 100.0
+    flat = shown - (surface - middle[None, None, :]) * strength
+    return _decoded(np.clip(flat, 0.0, 1.0))
 
 
 def _warp_lattice(value: dict[str, Any]) -> tuple[np.ndarray, int] | None:

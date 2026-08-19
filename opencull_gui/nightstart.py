@@ -116,10 +116,87 @@ def measure(shown: np.ndarray) -> dict[str, float]:
     residual = lum - _box_mean(lum, 3)
     # 1.4826 makes the median absolute deviation an estimate of sigma.
     noise = float(np.median(np.abs(residual))) * 1.4826
+    # How far the background slopes across the frame, measured where
+    # no star stands: a low quantile of each of nine big tiles.
+    height, width = lum.shape
+    corners = [float(np.percentile(
+        lum[row * height // 3:(row + 1) * height // 3,
+            column * width // 3:(column + 1) * width // 3], 20))
+        for row in range(3) for column in range(3)]
     return {"sky": sky, "noise": max(noise, 1e-6),
             "channels": channels,
             "cast": round(max(channels) - min(channels), 5),
+            "slope": round(max(corners) - min(corners), 5),
             "brightest": float(np.percentile(lum, 99.99))}
+
+
+# How coarse the fitted sky is, and it is a judgement rather than a
+# constant. Fine enough to follow a lens's vignetting and a town on
+# the horizon; far too coarse to follow a star, which is the point --
+# a surface that could fit a star would subtract it. Measured on a
+# real stack, a 70% slope came down to 19% at twelve tiles and 7% at
+# twenty-four; sixteen leaves 11% and is where this sits, because
+# the finer the grid the less a surface can tell a SLOPE from a
+# NEBULA. On a frame with the Milky Way across it, fewer tiles or a
+# lower strength -- the fit cannot know it is eating the subject.
+BACKGROUND_TILES = 16
+# Which part of each tile counts as "no star here".
+BACKGROUND_QUANTILE = 20
+
+
+def fit_background(shown: np.ndarray, tiles: int = BACKGROUND_TILES,
+                   quantile: float = BACKGROUND_QUANTILE,
+                   strength: float = 100.0) -> dict[str, Any] | None:
+    """Measure the sky's slope where no star stands, as an operation.
+
+    Each tile answers with a low quantile of its own pixels rather
+    than a mean: a mean is pulled up by every star in the tile, and a
+    surface pulled up by stars subtracts them. The grid is then
+    smoothed, because a tile that happened to hold a bright clump
+    should not put a dent in the sky.
+    """
+    import base64
+
+    height, width = shown.shape[:2]
+    # A tile has to be far bigger than a star, or its low quantile is
+    # a star's own skirt and the surface follows what it is supposed
+    # to ignore -- measured on a small frame, a star lost a sixth of
+    # its brightness to a grid whose tiles were twenty pixels wide.
+    # So the grid is only as fine as the frame can carry.
+    tiles = int(min(tiles, min(height, width) // 40))
+    if tiles < 3:
+        return None
+    grid = np.zeros((tiles, tiles, 3), np.float32)
+    for row in range(tiles):
+        top, bottom = row * height // tiles, (row + 1) * height // tiles
+        for column in range(tiles):
+            left = column * width // tiles
+            right = (column + 1) * width // tiles
+            tile = shown[top:bottom, left:right]
+            grid[row, column] = np.percentile(
+                tile.reshape(-1, 3), quantile, axis=0)
+    # One gentle pass, so the surface is a slope and not a patchwork.
+    # Two flattened the surface itself and under-corrected: 19% of the
+    # slope left against 11% with one.
+    for _pass in range(1):
+        padded = np.pad(grid, ((1, 1), (1, 1), (0, 0)), mode="edge")
+        grid = sum(padded[y:y + tiles, x:x + tiles]
+                   for y in range(3) for x in range(3)) / 9.0
+    middle = [float(np.median(grid[..., index])) for index in range(3)]
+    spread = float(grid.max() - grid.min())
+    return {
+        "op": "color.background", "unit": "surface", "mode": "absolute",
+        "value": {
+            "size": int(tiles),
+            "levels": base64.b64encode(
+                grid.astype(np.float16).tobytes()).decode(),
+            "middle": [round(level, 6) for level in middle],
+            "strength": round(float(strength), 1),
+        },
+        "source_instruction": (
+            f"the sky's own slope, {spread:.4f} across the frame"),
+        "enabled": True,
+    }
 
 
 def _lands_at(level: float, black: float, strength: float) -> float:
@@ -159,7 +236,31 @@ def night_start(path: str | Path, shown: np.ndarray | None = None,
         from superimpose_kernel import _frame
 
         shown = _frame(path, demosaic=True)
-    told = measure(np.asarray(shown, dtype=np.float32))
+    shown = np.asarray(shown, dtype=np.float32)
+    # The slope first, and measured before anything else, because
+    # every number after it describes a sky that no longer slopes.
+    first = measure(shown)
+    # A slope worth removing has to be bigger than the noise it would
+    # be measured through. Below that the tiles differ by chance, the
+    # fit "improves" a sky that was already even, and the photographer
+    # is left with an operation that did nothing they can see.
+    flatten = (fit_background(shown)
+               if first["slope"] > first["noise"] * 2.5 else None)
+    if flatten is not None:
+        from development_engine import _apply_global, _decoded, _encoded
+
+        settled = np.clip(_encoded(_apply_global(
+            _decoded(shown).astype(np.float32), [flatten])), 0.0, 1.0)
+        before = first
+        after = measure(settled)
+        if after.get("slope", 1.0) >= before.get("slope", 0.0) * 0.9:
+            # It found nothing worth removing; an operation that does
+            # nothing is worse than no operation, because it invites
+            # the photographer to wonder what it did.
+            flatten = None
+        else:
+            shown = settled
+    told = measure(shown)
     sky, noise = told["sky"], told["noise"]
     if sky < DEAD_FRAME and told["brightest"] < DEAD_FRAME * 10:
         return {"operations": [], "measured": told, "camera": facts,
@@ -228,6 +329,8 @@ def night_start(path: str | Path, shown: np.ndarray | None = None,
     colour = min(max((iso / 6400.0) * 70.0, 25.0), 85.0) if iso else 45.0
 
     operations = []
+    if flatten is not None:
+        operations.append(flatten)
     if cast > 0.002:
         operations.append({
             "op": "color.sky_offset", "unit": "levels",
@@ -261,8 +364,10 @@ def night_start(path: str | Path, shown: np.ndarray | None = None,
     return {"operations": operations, "measured": told, "camera": facts,
             "black": black, "strength": strength,
             "noise_after": settled, "reached_target": reached,
-            "note": note_for(told, facts, frames, strength, quieting,
-                             settled, reached)}
+            "flattened": flatten is not None,
+            "note": note_for(dict(told, flattened=(
+                before["slope"] if flatten is not None else 0.0)),
+                facts, frames, strength, quieting, settled, reached)}
 
 
 def trailing_limit(focal: float, crop: float = 1.5) -> float:
@@ -280,6 +385,14 @@ def note_for(told: dict, facts: dict, frames: int, strength: float,
              reached: bool = True) -> str:
     """What was decided, in the terms it was decided on."""
     parts = []
+    if told.get("flattened"):
+        parts.append(
+            f"The sky sloped by {told['flattened']:.4f} across the "
+            f"frame -- {told['flattened'] / max(told['noise'], 1e-6):.1f} "
+            "times the noise, and the largest thing in the picture "
+            "after the stars -- so a surface measured where no star "
+            "stands was subtracted, keeping the sky's level and "
+            "taking only its tilt.")
     if told.get("cast", 0) > 0.002:
         channels = told.get("channels") or []
         parts.append(

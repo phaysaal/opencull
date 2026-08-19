@@ -127,6 +127,107 @@ class NightCleanTests(unittest.TestCase):
             "mode": "delta", "value": 0.0, "enabled": True}]), held))
 
 
+class BackgroundTests(unittest.TestCase):
+    """The sky's slope, measured where no star stands."""
+
+    def sloped(self, tilt=0.03, sky=0.02, stars=60, size=(480, 640)):
+        # Big enough for a real grid: tiles are floored at forty
+        # pixels, so a small frame gets a surface too coarse to
+        # follow anything.
+        held = night_frame(sky=(sky, sky, sky), noise=0.003,
+                           stars=stars, size=size)
+        height, width = size
+        grid_y, grid_x = np.mgrid[0:height, 0:width]
+        # Brighter in the middle, as a lens vignettes a flat sky.
+        away = np.sqrt(((grid_x - width / 2) / (width / 2)) ** 2
+                       + ((grid_y - height / 2) / (height / 2)) ** 2)
+        return np.clip(
+            held + (tilt * (1.0 - np.clip(away, 0, 1)))[..., None],
+            0, 1).astype(np.float32)
+
+    def slope_of(self, held, tiles=6) -> float:
+        height, width = held.shape[:2]
+        lum = held[..., 0] * 0.2126 + held[..., 1] * 0.7152 \
+            + held[..., 2] * 0.0722
+        corners = [float(np.percentile(
+            lum[r * height // tiles:(r + 1) * height // tiles,
+                c * width // tiles:(c + 1) * width // tiles], 20))
+            for r in range(tiles) for c in range(tiles)]
+        return max(corners) - min(corners)
+
+    def test_a_slope_is_measured_and_taken_out(self):
+        held = self.sloped(tilt=0.03)
+        before = self.slope_of(held)
+        fitted = nightstart.fit_background(held)
+        self.assertIsNotNone(fitted)
+        out = np.clip(_encoded(_apply_global(
+            _decoded(held).astype(np.float32), [fitted])), 0, 1)
+        self.assertLess(self.slope_of(out), before * 0.4)
+
+    def test_the_sky_keeps_its_level_and_loses_only_the_tilt(self):
+        held = self.sloped(tilt=0.03, sky=0.02)
+        fitted = nightstart.fit_background(held)
+        out = np.clip(_encoded(_apply_global(
+            _decoded(held).astype(np.float32), [fitted])), 0, 1)
+        # Subtracting the surface outright would leave nothing to
+        # stretch; only its unevenness comes off.
+        self.assertGreater(float(np.median(out)), 0.01)
+
+    def test_a_surface_cannot_follow_a_star(self):
+        held = self.sloped(tilt=0.0, stars=40)
+        fitted = nightstart.fit_background(held)
+        if fitted is None:
+            return                       # nothing to remove: also fine
+        out = np.clip(_encoded(_apply_global(
+            _decoded(held).astype(np.float32), [fitted])), 0, 1)
+        star = np.unravel_index(
+            np.argmax(held[..., 1]), held[..., 1].shape)
+        # night_frame already speaks display, so comparing against
+        # _encoded(held) would encode it twice and measure a star
+        # that was never there.
+        self.assertGreater(float(out[star][1]),
+                           float(held[star][1]) * 0.98)
+
+    def test_strength_scales_how_much_comes_off(self):
+        held = self.sloped(tilt=0.03)
+        full = nightstart.fit_background(held, strength=100.0)
+        half = nightstart.fit_background(held, strength=50.0)
+        def left(op):
+            return self.slope_of(np.clip(_encoded(_apply_global(
+                _decoded(held).astype(np.float32), [op])), 0, 1))
+        self.assertGreater(left(half), left(full))
+
+    def test_a_frame_too_small_to_tile_is_refused(self):
+        self.assertIsNone(nightstart.fit_background(
+            night_frame(size=(20, 24))))
+
+    def test_an_even_sky_is_left_alone_by_the_night_start(self):
+        with tempfile.TemporaryDirectory() as folder:
+            held = night_frame(sky=(0.02, 0.02, 0.02), noise=0.003)
+            path = Path(folder) / "even.png"
+            Image.fromarray(
+                (held * 255 + 0.5).astype(np.uint8)).save(path)
+            told = nightstart.night_start(path, shown=held)
+            # An operation that does nothing is worse than none: it
+            # invites the photographer to wonder what it did.
+            self.assertFalse(told["flattened"])
+
+    def test_the_windowed_surface_is_the_whole_one_cropped(self):
+        from development_engine import _apply_global as apply_ops
+
+        held = self.sloped(tilt=0.04)
+        fitted = nightstart.fit_background(held)
+        linear = _decoded(held).astype(np.float32)
+        whole = apply_ops(linear, [fitted])
+        y0, x0, tall, wide = 60, 80, 100, 120
+        crop = linear[y0:y0 + tall, x0:x0 + wide].copy()
+        part = apply_ops(crop, [fitted], window={
+            "x": x0 / held.shape[1], "y": y0 / held.shape[0],
+            "w": wide / held.shape[1], "h": tall / held.shape[0]})
+        self.assertLess(float(np.abs(
+            part - whole[y0:y0 + tall, x0:x0 + wide]).max()), 1e-6)
+
+
 class NightStartTests(unittest.TestCase):
     def written(self, folder: Path, shown, name="N.png"):
         # The pixels are handed in directly; the file only has to
@@ -155,7 +256,11 @@ class NightStartTests(unittest.TestCase):
             path = self.written(Path(folder), shown)
             told = nightstart.night_start(path, shown=shown, frames=1)
             names = [item["op"] for item in told["operations"]]
-            self.assertEqual(names[0], "color.sky_offset")
+            # Before anything multiplies it -- whatever else the
+            # measurement decided to put in front.
+            self.assertIn("color.sky_offset", names)
+            self.assertLess(names.index("color.sky_offset"),
+                            names.index("tone.stretch"))
             out = developed(shown, told["operations"])
             channels = [float(np.median(out[..., index]))
                         for index in range(3)]
