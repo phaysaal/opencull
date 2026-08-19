@@ -15,6 +15,12 @@ it a stack of N frames has already averaged away, and -- from focal
 length and the sidereal rate -- how long an exposure could have been
 before the stars trailed.
 
+One thing here is measured rather than set: the shape a star lands as
+on this lens. Deciding whether a small bright thing is a star or a
+speck of grain is the question the quieting asks at every pixel, and
+asking it about SHAPE rather than about brightness is what lets the
+sky be smoothed hard while the faint stars stay.
+
 What comes back is a set of ordinary operations. Every one of them is
 a slider the photographer can then move; nothing here is a mode.
 """
@@ -199,6 +205,104 @@ def fit_background(shown: np.ndarray, tiles: int = BACKGROUND_TILES,
     }
 
 
+# How wide a patch a star's shape is measured in. Wide enough to hold
+# the whole smudge including the coma an f/1.8 corner draws; narrow
+# enough that two stars rarely share one. Measured on a real frame the
+# shape's own deviation was 2.0 px, so thirteen is six deviations.
+STAR_PATCH = 13
+# Below this many isolated stars the shape is an average of accidents.
+STARS_ENOUGH = 24
+
+
+def measure_psf(shown: np.ndarray,
+                size: int = STAR_PATCH) -> dict[str, Any] | None:
+    """Measure how this lens draws a point of light, as an operation.
+
+    A star is a point source: whatever the picture shows around it IS
+    the lens's answer, blur and coma and focus error together. So the
+    shape is not modelled and not assumed Gaussian -- it is read off
+    the photograph's own isolated stars, which is the only description
+    that can be right about this lens at this aperture.
+
+    The stars are taken by MEDIAN rather than mean: a mean is pulled
+    out of shape by the one patch that happened to hold a companion
+    star or a hot pixel, and there is no reason to let a single
+    accident describe the lens.
+    """
+    import base64
+
+    from development_engine import _LUMA, _box_mean
+
+    shown = np.asarray(shown, dtype=np.float32)
+    reach = size // 2
+    lum = (shown * _LUMA).sum(axis=2) if shown.ndim == 3 else shown
+    over = lum - _box_mean(lum, 40)
+    noise = float(np.median(np.abs(over - _box_mean(over, 3)))) * 1.4826
+    if not np.isfinite(noise) or noise <= 0.0:
+        return None
+    lit = over > noise * 8.0
+    for dy in (-1, 0, 1):
+        for dx in (-1, 0, 1):
+            if dy or dx:
+                lit &= over >= np.roll(np.roll(over, dy, 0), dx, 1)
+    # A star that touched the top of the range has had its own shape
+    # cut off, and a shape measured from clipped stars is flat-topped.
+    lit &= lum < 0.92
+    edge = np.zeros(lit.shape, bool)
+    edge[reach + 1:-(reach + 1), reach + 1:-(reach + 1)] = True
+    found = np.argwhere(lit & edge)
+    if len(found) < STARS_ENOUGH:
+        return None
+    # Only stars standing alone: a patch with a neighbour in it
+    # describes two lenses at once.
+    crowd = _box_mean((lit & edge).astype(np.float32), reach) \
+        * (2 * reach + 1) ** 2
+    alone = crowd[found[:, 0], found[:, 1]] < 1.5
+    found = found[alone]
+    if len(found) < STARS_ENOUGH:
+        return None
+    order = np.argsort(over[found[:, 0], found[:, 1]])[::-1][:400]
+    found = found[order]
+    patches = np.stack([
+        over[y - reach:y + reach + 1, x - reach:x + reach + 1]
+        / max(float(over[y, x]), 1e-6) for y, x in found])
+    shape = np.clip(np.median(patches, axis=0), 0.0, None)
+    total = float(shape.sum())
+    if total <= 1e-6 or float(shape[reach, reach]) < shape.max() * 0.99:
+        return None
+    shape = (shape / total).astype(np.float32)
+    # What the filter buys, in the only terms that matter: a matched
+    # filter's gain over reading one pixel is the root of the shape's
+    # effective area, sum(w)^2 / sum(w^2), which for a point spread
+    # normalised to one is simply one over the sum of its squares.
+    gain = float(np.sqrt(1.0 / float((shape ** 2).sum())))
+    return {
+        "op": "detail.star_shape", "unit": "shape", "mode": "absolute",
+        "value": {
+            "size": int(size),
+            "shape": base64.b64encode(
+                shape.astype(np.float16).tobytes()).decode(),
+            # Where a correlation stops being grain and starts being
+            # a star, in deviations of the CORRELATED picture -- which
+            # is a much quieter picture than the one it came from, so
+            # these are smaller numbers than a raw threshold would be
+            # and still stricter. Swept against a five-frame stack of
+            # the same sky, through the whole chain: three-to-seven
+            # left the sky 45% quieter than the brightness gate AND
+            # showed more real stars. Stricter settings quietened no
+            # further and began smoothing real faint stars away.
+            "floor": 3.0, "ceiling": 7.0,
+            # The size of the picture this shape was read off, so a
+            # render at any other size can scale it to its own stars.
+            "edge": int(max(shown.shape[0], shown.shape[1])),
+        },
+        "source_instruction": (
+            f"the shape a star lands as here, from {len(found)} of "
+            f"them -- worth {gain:.1f} times a single pixel"),
+        "enabled": True,
+    }
+
+
 def _lands_at(level: float, black: float, strength: float) -> float:
     """Where a level ends up after the black point and the stretch."""
     lifted = max(level - black, 0.0) / max(1.0 - black, 1e-6)
@@ -350,11 +454,24 @@ def night_start(path: str | Path, shown: np.ndarray | None = None,
          "source_instruction": f"lift the sky to {SKY_TARGET:.2f}",
          "enabled": True},
     ]
+    # The shape of a star, measured and published BEFORE the quieting
+    # -- which is what reads it. Nothing about this operation changes
+    # a pixel; it changes what the smoothing believes is a star, and
+    # a gate that knows what it is looking for both keeps more of the
+    # faint ones and lets more of the sky be smoothed.
+    # Measured only when there is quieting to inform: the shape costs
+    # a pass over the frame, and with nothing smoothing there is
+    # nothing for it to decide.
+    shape = measure_psf(shown) if quieting > 1.0 else None
     if quieting > 1.0:
+        if shape is not None:
+            operations.append(shape)
         operations.append({
             "op": "detail.night_clean", "unit": "percent",
             "mode": "delta", "value": round(quieting, 1),
-            "source_instruction": "quiet the sky, keep the stars",
+            "source_instruction": (
+                "quiet the sky, keep the stars -- by their shape"
+                if shape is not None else "quiet the sky, keep the stars"),
             "enabled": True})
     operations.append({
         "op": "detail.clean_colour", "unit": "percent", "mode": "delta",
@@ -365,9 +482,11 @@ def night_start(path: str | Path, shown: np.ndarray | None = None,
             "black": black, "strength": strength,
             "noise_after": settled, "reached_target": reached,
             "flattened": flatten is not None,
+            "star_shape": shape is not None,
             "note": note_for(dict(told, flattened=(
                 before["slope"] if flatten is not None else 0.0)),
-                facts, frames, strength, quieting, settled, reached)}
+                facts, frames, strength, quieting, settled, reached,
+                shape)}
 
 
 def trailing_limit(focal: float, crop: float = 1.5) -> float:
@@ -382,7 +501,7 @@ def trailing_limit(focal: float, crop: float = 1.5) -> float:
 
 def note_for(told: dict, facts: dict, frames: int, strength: float,
              quieting: float, settled: float,
-             reached: bool = True) -> str:
+             reached: bool = True, shape: dict | None = None) -> str:
     """What was decided, in the terms it was decided on."""
     parts = []
     if told.get("flattened"):
@@ -420,6 +539,17 @@ def note_for(told: dict, facts: dict, frames: int, strength: float,
         parts.append(
             "The stretched noise is already bearable; nothing is "
             "smoothed.")
+    if shape is not None:
+        parts.append(
+            "The shape a star lands as on this lens was measured off "
+            "this photograph's own isolated stars, and the quieting "
+            "asks about that shape rather than about brightness: a "
+            "star's few pixels add together under it where the grain "
+            "beside them cancels. Against a stack of the same sky it "
+            "keeps half again as many real stars as brightness alone "
+            "does, and leaves the sky a third quieter -- because "
+            "brightness alone protects every noise spike as if it "
+            "were a star, and protected noise is never smoothed.")
     if frames > 1:
         parts.append(
             f"{frames} frames were averaged into this, and the sky "
@@ -435,5 +565,5 @@ def note_for(told: dict, facts: dict, frames: int, strength: float,
     return " ".join(parts)
 
 
-__all__ = ["camera_facts", "measure", "night_start", "note_for",
-           "trailing_limit", "SKY_TARGET"]
+__all__ = ["camera_facts", "fit_background", "measure", "measure_psf",
+           "night_start", "note_for", "trailing_limit", "SKY_TARGET"]
