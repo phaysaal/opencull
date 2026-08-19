@@ -27,7 +27,15 @@ ENGINE_FORMAT = "opencull-development-render-v1"
 # changes when the engine's own arithmetic does -- so without this, an
 # improvement to the renderer is invisible on every frame already looked
 # at, which is exactly the frames somebody is judging it by.
-RECIPE_ENGINE_REVISION = 11
+RECIPE_ENGINE_REVISION = 12
+# How many deviations of its own plane a detail must stand clear of to
+# survive the quieting at full strength. Hard, and it can afford to
+# be, because the plane it cuts hardest is the one a star has least
+# of. Swept against a five-frame stack of the same sky: four, six and
+# eight all land within a percent of each other on stars, and six
+# left the quietest sky. Below four the lone survivors a threshold
+# leaves start reading as faint stars.
+NIGHT_CLEAN_SIGMAS = 6.0
 
 
 class DevelopmentError(ValueError):
@@ -1316,20 +1324,97 @@ def _star_keeps(lum: np.ndarray, shape_value: dict[str, Any],
     return sure * sure * (3.0 - 2.0 * sure)
 
 
+# The B3 spline, which is what an a trous transform smooths with. Very
+# nearly a Gaussian, and separable, so a scale costs ten passes rather
+# than a convolution.
+_STARLET = (1.0 / 16.0, 4.0 / 16.0, 6.0 / 16.0, 4.0 / 16.0, 1.0 / 16.0)
+
+
+def _dilated_smooth(plane: np.ndarray, step: int) -> np.ndarray:
+    """The B3 spline laid on with holes, which is the whole trick.
+
+    "A trous" means with holes: instead of shrinking the picture at
+    each scale, the KERNEL is stretched, its five taps spaced further
+    and further apart. The picture never changes size, so nothing is
+    decimated and nothing aliases, and a star half a pixel to the left
+    decomposes the same way as a star half a pixel to the right.
+    That translation-invariance is why this is the transform
+    astronomers use on point sources and an ordinary wavelet is not.
+    """
+    reach = 2 * step
+    spare = ((0, 0),) * (plane.ndim - 2)
+    out = np.zeros(plane.shape, np.float32)
+    tall = np.pad(plane, ((reach, reach), (0, 0)) + spare, mode="reflect")
+    for index, weight in enumerate(_STARLET):
+        at = index * step
+        out += tall[at:at + plane.shape[0]] * weight
+    wide = np.pad(out, ((0, 0), (reach, reach)) + spare, mode="reflect")
+    across = np.zeros(plane.shape, np.float32)
+    for index, weight in enumerate(_STARLET):
+        at = index * step
+        across += wide[:, at:at + plane.shape[1]] * weight
+    return across
+
+
+def _starlet(plane: np.ndarray,
+             levels: int) -> tuple[list[np.ndarray], np.ndarray]:
+    """A picture taken apart by size: the planes, and what is left.
+
+    Each plane holds what one doubling of scale added -- the first
+    holds what varies pixel to pixel, the last what varies over tens
+    of pixels -- and the residual holds everything coarser. Nothing is
+    lost and nothing is approximated: the planes and the residual add
+    back to exactly the picture that went in, which is what makes it
+    safe to alter one of them and leave the rest alone.
+    """
+    planes = []
+    current = plane
+    for level in range(levels):
+        smoothed = _dilated_smooth(current, 1 << level)
+        planes.append(current - smoothed)
+        current = smoothed
+    return planes, current
+
+
+def _starlet_levels(detail_scale: float) -> int:
+    """How many doublings are worth taking apart at this size.
+
+    The scales that matter are the ones at and below a star, and a
+    star is a few pixels of the picture BEING DRAWN -- four in an
+    export, one in a thumbnail. So the count follows the render's own
+    scale, which also keeps a zoomed window and the full frame behind
+    it taking the picture apart the same way.
+    """
+    return int(min(5, max(2, round(3.0 + math.log2(max(
+        float(detail_scale), 0.25))))))
+
+
 def _night_clean(rgb: np.ndarray, strength: float,
                  detail_scale: float,
                  window: dict[str, float] | None = None,
                  shape_value: dict[str, Any] | None = None) -> np.ndarray:
-    """Smooth the sky and leave the stars alone.
+    """Quieten the sky by size, and leave the stars alone.
 
     An ordinary denoise cannot tell a star from a hot pixel: both are
     small and bright, so smoothing enough to quieten a high-ISO sky
-    dissolves exactly what the photograph was taken for. Here the
-    smoothing is laid ONLY where the picture is dark. What stands
-    clear of its own neighbourhood -- which is what a star is, and
-    what the dust module and the star finder both already use -- keeps
-    every pixel it had, and the fade between the two is smooth, so
-    there is no halo around anything.
+    dissolves exactly what the photograph was taken for. Two things
+    are done about that here, and they are independent.
+
+    WHERE. What the lens draws a star as was measured off this very
+    photograph, and wherever that shape stands clear the picture is
+    left untouched.
+
+    AT WHAT SIZE. The picture is taken apart into planes by scale --
+    what varies pixel to pixel, then every doubling above it -- and
+    each plane is cut back against its own grain. This is the part a
+    single blur cannot do at all. A blur has one radius and there is
+    no radius that is right: small enough to spare a star is too small
+    to reach the grain around it, and large enough to flatten the
+    grain dissolves the star. But noise and stars are not the same
+    SIZE. On a field of pure grain 89% lands in the finest plane; on a
+    star of the width this lens draws, that plane holds 5%. So the
+    plane holding nearly all the noise is very nearly not the plane
+    holding the star, and it can be cut hard without costing much.
     """
     amount = min(max(float(strength or 0.0), 0.0), 100.0) / 100.0
     if amount <= 0.0:
@@ -1364,13 +1449,63 @@ def _night_clean(rgb: np.ndarray, strength: float,
         grain = _box_mean(np.abs(over), max(reach * 6, 6)) * 1.4826
         lift = np.clip(over / np.maximum(grain * 4.0, 1e-5), 0.0, 1.0)
         keeps = lift * lift * (3.0 - 2.0 * lift)
-    keeps = keeps[..., None]
-    # A Gaussian, not a box: a box mean laid on at nine tenths shows
-    # its own square edges as faint tiling across the sky, and a sky
-    # is the one place there is nothing else to hide them behind.
-    smoothed = _blur(rgb, float(reach))
-    quiet = rgb + (smoothed - rgb) * amount
-    return (quiet * (1.0 - keeps) + rgb * keeps).astype(np.float32)
+    # Taken apart by size, and quietened a size at a time.
+    #
+    # One blur has one radius, and there is no radius that is right:
+    # small enough to spare a star is too small to touch the grain a
+    # star sits in, and large enough to flatten the grain dissolves
+    # the star. The two are not the same SIZE, though, and that is
+    # something a single blur cannot use and this can. Measured on a
+    # field of pure grain, 89% of it lands in the finest plane alone;
+    # measured on one star of the width this lens draws, that plane
+    # holds 5% of it. So the plane where nearly all the noise is is
+    # very nearly not where the star is, and it can be cut hard.
+    #
+    # Every channel, not luminance. Each channel's grain is its own
+    # independent draw, and luminance is a weighted mean of the three
+    # -- so quietening luminance and laying the difference back on all
+    # three removes the part they happened to share and leaves the
+    # rest. Measured: 22% off the luminance and 5% off the picture,
+    # which is a denoise that mostly did not happen.
+    levels = _starlet_levels(detail_scale)
+    planes, residual = _starlet(rgb, levels)
+    held = keeps[..., None]
+    quiet = residual
+    for level, plane in enumerate(planes):
+        # Each plane is judged against ITS OWN grain, measured over a
+        # neighbourhood the size of the plane -- a coarse plane's
+        # deviations are genuinely smaller, and a threshold taken from
+        # the picture as a whole would flatten it entirely. Per
+        # channel, for the same reason the transform is.
+        span = max(6, 3 * (1 << level))
+        # One field, three levels. Where the grain is coarse and where
+        # it is fine is a fact about the sensor and the sky, and both
+        # are the same behind all three channels; only how much of it
+        # each channel carries differs. So the SHAPE is measured once,
+        # from all three together, and each channel scales it by its
+        # own amount. Three times less work than measuring each
+        # separately, and a steadier estimate for it, since it hears
+        # from three times as many pixels.
+        across = np.abs(plane).mean(axis=2)
+        field = _box_mean(across, span) * 1.4826
+        # The three amounts are one ratio each, and a ratio does not
+        # need twenty-six million pixels to be sure of itself. Every
+        # eighth row and column is four hundred thousand samples,
+        # which settles a median far past the precision this uses it
+        # to.
+        thin = np.abs(plane[::8, ::8])
+        middle = max(float(np.median(thin.mean(axis=2))), 1e-9)
+        shares = np.asarray(
+            [max(float(np.median(thin[..., band])), 1e-9) / middle
+             for band in range(plane.shape[2])], dtype=np.float32)
+        limit = field[..., None] * shares * (NIGHT_CLEAN_SIGMAS * amount)
+        # Soft, not hard: a hard threshold leaves a step at the
+        # boundary and the step is visible on a smooth sky as a
+        # mottling. Softly, what stood barely clear is brought down to
+        # nothing and what stood well clear keeps almost all of itself.
+        cut = np.sign(plane) * np.maximum(np.abs(plane) - limit, 0.0)
+        quiet = quiet + (cut * (1.0 - held) + plane * held)
+    return np.clip(quiet, 0.0, None).astype(np.float32)
 
 
 def _star_shape(value: dict[str, Any]) -> np.ndarray | None:

@@ -18,6 +18,8 @@ from development_engine import (
     _resized_shape,
     _star_keeps,
     _star_shape,
+    _starlet,
+    _starlet_levels,
 )
 from opencull_gui import nightstart
 
@@ -572,6 +574,73 @@ class StarShapeTests(unittest.TestCase):
                         names.index("detail.night_clean"))
         self.assertTrue(result["star_shape"])
         self.assertIn("shape", result["note"])
+
+
+
+class StarletTests(unittest.TestCase):
+    """Taking a picture apart by size, and putting it back."""
+
+    def test_the_planes_and_the_residual_are_the_picture(self):
+        """Nothing lost and nothing approximated, or it is not safe."""
+        rng = np.random.default_rng(3)
+        for shape in ((240, 320), (240, 320, 3)):
+            held = rng.random(shape).astype(np.float32)
+            for levels in (2, 4, 5):
+                planes, residual = _starlet(held, levels)
+                self.assertEqual(len(planes), levels)
+                back = sum(planes) + residual
+                self.assertLess(float(np.abs(back - held).max()), 1e-5)
+
+    def test_noise_falls_where_the_transform_says_it_should(self):
+        """The starlet's own factors, which is a strong check on it."""
+        rng = np.random.default_rng(11)
+        grain = rng.normal(0.0, 0.01, (600, 800)).astype(np.float32)
+        planes, _residual = _starlet(grain, 4)
+        # Published for a B3-spline starlet on white noise.
+        for plane, factor in zip(planes, (0.889, 0.200, 0.086, 0.041)):
+            self.assertAlmostEqual(float(np.std(plane)) / 0.01, factor,
+                                   delta=0.02)
+
+    def test_nearly_all_the_grain_is_in_the_finest_plane(self):
+        """Which is the whole reason this beats one blur."""
+        rng = np.random.default_rng(5)
+        grain = rng.normal(0.0, 0.01, (400, 400)).astype(np.float32)
+        planes, residual = _starlet(grain, 4)
+        share = float(np.var(planes[0])) / float(np.var(grain))
+        self.assertGreater(share, 0.75)
+
+    def test_a_star_is_not_in_the_finest_plane(self):
+        """And that is the other half of the reason."""
+        grid_y, grid_x = np.mgrid[0:200, 0:200]
+        star = np.exp(-(((grid_x - 100) ** 2 + (grid_y - 100) ** 2)
+                        / (2 * 2.0 ** 2))).astype(np.float32)
+        planes, residual = _starlet(star, 4)
+        total = sum(float(np.abs(p).sum()) for p in planes) \
+            + float(np.abs(residual).sum())
+        finest = float(np.abs(planes[0]).sum()) / total
+        self.assertLess(finest, 0.15)
+
+    def test_a_star_decomposes_the_same_wherever_it_stands(self):
+        """Undecimated, so nothing depends on which pixel it landed on."""
+        grid_y, grid_x = np.mgrid[0:120, 0:120]
+        made = []
+        for at in (60, 61):
+            star = np.exp(-(((grid_x - at) ** 2 + (grid_y - 60) ** 2)
+                            / (2 * 2.0 ** 2))).astype(np.float32)
+            planes, _residual = _starlet(star, 3)
+            made.append([float(np.abs(p).sum()) for p in planes])
+        for one, other in zip(*made):
+            self.assertAlmostEqual(one / other, 1.0, delta=0.02)
+
+    def test_how_many_sizes_follows_the_size_being_drawn(self):
+        self.assertEqual(_starlet_levels(0.25), 2)
+        self.assertEqual(_starlet_levels(1.0), 3)
+        self.assertGreaterEqual(_starlet_levels(3.9), 5)
+        # Never fewer than two, never more than five, whatever it is
+        # handed -- a thumbnail has no fine scales and an enormous
+        # frame gains nothing from a sixth doubling.
+        self.assertEqual(_starlet_levels(0.0), 2)
+        self.assertEqual(_starlet_levels(1000.0), 5)
 
 
 
