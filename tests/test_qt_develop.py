@@ -821,6 +821,20 @@ class FoldedIntentTests(unittest.TestCase):
 
         cls.application = QApplication.instance() or QApplication([])
 
+    def temporary_root(self) -> Path:
+        """A folder that outlives the page that writes into it.
+
+        addCleanup runs last-registered-first, so registering the
+        folder's removal BEFORE anything that writes into it means the
+        writers are shut down before it goes. A `with` block cannot do
+        that: it closes at the end of the test body, while the preview
+        thread is still filing its cache into the folder -- which is a
+        teardown that fails only when the timing is against it.
+        """
+        holder = tempfile.TemporaryDirectory()
+        self.addCleanup(holder.cleanup)
+        return Path(holder.name).resolve()
+
     def page_with_intent(self, root: Path):
         report_path, photos = build_shoot(root)
         assess_and_suggest(root, report_path, photos)
@@ -841,40 +855,30 @@ class FoldedIntentTests(unittest.TestCase):
         return page
 
     def test_the_intent_shows_one_line_and_folds_the_rest(self):
-        import tempfile
-
-        with tempfile.TemporaryDirectory() as folder:
-            page = self.page_with_intent(Path(folder).resolve())
-            page.resize(1200, 800)
-            page._say_intent(
-                "A very long story about dusk being held back " * 8)
-            self.assertFalse(page.intent.isVisible())
-            self.assertIn("…", page.intent_line.text())
-            page.intent_dot.setChecked(True)
-            self.assertTrue(page.intent.text().startswith(
-                "A very long story"))
+        page = self.page_with_intent(self.temporary_root())
+        page.resize(1200, 800)
+        page._say_intent(
+            "A very long story about dusk being held back " * 8)
+        self.assertFalse(page.intent.isVisible())
+        self.assertIn("\u2026", page.intent_line.text())
+        page.intent_dot.setChecked(True)
+        self.assertTrue(page.intent.text().startswith("A very long story"))
 
     def test_a_short_intent_needs_no_dot(self):
-        import tempfile
-
-        with tempfile.TemporaryDirectory() as folder:
-            page = self.page_with_intent(Path(folder).resolve())
-            page.resize(1200, 800)
-            page.intent_line.resize(300, 20)
-            page._say_intent("Short.")
-            self.assertFalse(page.intent_dot.isVisibleTo(page))
+        page = self.page_with_intent(self.temporary_root())
+        page.resize(1200, 800)
+        page.intent_line.resize(300, 20)
+        page._say_intent("Short.")
+        self.assertFalse(page.intent_dot.isVisibleTo(page))
 
     def test_switching_treatments_folds_the_story_again(self):
-        import tempfile
-
-        with tempfile.TemporaryDirectory() as folder:
-            page = self.page_with_intent(Path(folder).resolve())
-            page.resize(1200, 800)
-            page._say_intent("A long story " * 30)
-            page.intent_dot.setChecked(True)
-            page._say_intent("Another story " * 30)
-            self.assertFalse(page.intent_dot.isChecked())
-            self.assertFalse(page.intent.isVisible())
+        page = self.page_with_intent(self.temporary_root())
+        page.resize(1200, 800)
+        page._say_intent("A long story " * 30)
+        page.intent_dot.setChecked(True)
+        page._say_intent("Another story " * 30)
+        self.assertFalse(page.intent_dot.isChecked())
+        self.assertFalse(page.intent.isVisible())
 
 
 class TreatmentMarkerTests(unittest.TestCase):
