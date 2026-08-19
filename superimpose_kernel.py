@@ -673,6 +673,120 @@ def _frame_noise(grey: np.ndarray) -> float:
     return float(np.median(np.abs(plane - _box_mean(plane, 3)))) * 1.4826
 
 
+# A turn smaller than this tells you almost nothing about where the
+# sky is turning: the frame barely moved, and dividing by how little it
+# moved amplifies whatever error the vote had into a wild pole.
+LEAST_TURN_FOR_POLE = 0.01
+# How far a frame may sit from where a rigid sky says it should before
+# the model is not describing this sequence at all.
+POLE_FIT_PX = 6.0
+
+
+def pole_shift(pole: tuple[float, float], degrees: float,
+               centre: tuple[float, float]) -> tuple[float, float]:
+    """The shift a turn about that pole implies, with nothing free.
+
+    Turning about a pole and turning about the frame's middle differ
+    by exactly one translation, and this is it. Which means: given the
+    pole, a frame's place is not searched for at all. The clock says
+    how far the sky went and this says where that puts it.
+    """
+    angle = np.radians(degrees)
+    cos, sin = float(np.cos(angle)), float(np.sin(angle))
+    dx = pole[0] - centre[0]
+    dy = pole[1] - centre[1]
+    return ((1.0 - cos) * dx + sin * dy,
+            -sin * dx + (1.0 - cos) * dy)
+
+
+def pole_from(frames: list[dict[str, Any]],
+              centre: tuple[float, float]) -> dict[str, Any] | None:
+    """Where the sky turned about, solved from the frames already placed.
+
+    Every frame was placed as a turn about the middle of the picture
+    followed by a shift, and that pair is not two independent facts:
+    a sky rotates about ONE point, and both the turn and the shift are
+    consequences of where that point is. So each frame contributes two
+    equations in the pole's two coordinates,
+
+        (I - R(theta)) (P - c) = t
+
+    and the whole sequence is one small overdetermined system. Solved
+    together rather than frame by frame, which matters: a frame whose
+    turn is tiny divides by nearly nothing and answers wildly on its
+    own, while in a least-squares fit its rows are simply small and it
+    quietly counts for little.
+
+    On the user's ten-frame album this lands the pole 2705 px from the
+    middle of the picture -- above the top edge, off the photograph,
+    which is exactly where an ordinary night shot's pole is.
+    """
+    rows, answers, kept = [], [], []
+    for item in frames:
+        turn = float(item.get("turn", 0.0) or 0.0)
+        if (int(item.get("agreed", 0)) < LEAST_AGREEING
+                or abs(turn) < LEAST_TURN_FOR_POLE):
+            continue
+        angle = np.radians(turn)
+        cos, sin = float(np.cos(angle)), float(np.sin(angle))
+        rows += [[1.0 - cos, sin], [-sin, 1.0 - cos]]
+        answers += [float(item.get("dx", 0.0)), float(item.get("dy", 0.0))]
+        kept.append(item)
+    if len(kept) < 2:
+        return None
+    matrix = np.asarray(rows, np.float64)
+    wanted = np.asarray(answers, np.float64)
+    # An ill-conditioned system here is not a failure to solve, it is
+    # the sequence genuinely not saying where its pole is -- too short
+    # a span, or too small a turn across all of it.
+    singular = np.linalg.svd(matrix, compute_uv=False)
+    if singular[-1] <= 1e-9 or singular[0] / singular[-1] > 1e6:
+        return None
+    # Fitted more than once, dropping whatever will not agree. A frame
+    # that registered on a handful of coincidentally-matching stars
+    # reports a shift that is simply wrong, and least squares handed a
+    # wrong answer does not ignore it -- it splits the difference, and
+    # the pole ends up somewhere that fits nothing. Measured on the
+    # user's own ten-frame album: one such frame took the fit from
+    # under a pixel to seven and a half, which was enough to make the
+    # whole sequence look like a sky that does not rotate.
+    keep = np.ones(len(kept), bool)
+    offset = np.zeros(2)
+    for _round in range(3):
+        rows_in = np.repeat(keep, 2)
+        if int(keep.sum()) < 2:
+            return None
+        offset, *_ = np.linalg.lstsq(matrix[rows_in], wanted[rows_in],
+                                     rcond=None)
+        apart = np.hypot(*(matrix @ offset - wanted).reshape(-1, 2).T)
+        middle = float(np.median(apart[keep]))
+        # Generous, and with a floor: where every frame agrees to a
+        # tenth of a pixel, three times the median is still a tenth of
+        # a pixel and would throw away good frames for nothing.
+        allowed = max(middle * 3.0, 1.0)
+        fresh = apart <= allowed
+        if bool(np.array_equal(fresh, keep)):
+            break
+        keep = fresh
+    used = int(keep.sum())
+    if used < 2:
+        return None
+    pole = (float(centre[0] + offset[0]), float(centre[1] + offset[1]))
+    agreeing = [float(np.hypot(*(
+        np.asarray(pole_shift(pole, float(item["turn"]), centre))
+        - np.array([float(item["dx"]), float(item["dy"])]))))
+        for item, taken in zip(kept, keep) if taken]
+    return {
+        "x": round(pole[0], 1), "y": round(pole[1], 1),
+        "from_middle_px": round(float(np.hypot(
+            pole[0] - centre[0], pole[1] - centre[1])), 1),
+        "fit_px": round(float(np.median(agreeing)), 2),
+        "worst_px": round(float(max(agreeing)), 2),
+        "frames": used,
+        "set_aside": int(len(kept) - used),
+    }
+
+
 def register(photos: str, pattern: str = "*.RAF", only: str = "",
              focal_mm: float = 0.0, sensor_mm: float = DEFAULT_SENSOR_MM,
              demosaic: bool = True, handheld: bool = False,
@@ -699,16 +813,21 @@ def register(photos: str, pattern: str = "*.RAF", only: str = "",
     centre = ((width - 1) / 2.0, (height - 1) / 2.0)
     anchors = stars_in(reference_grey)
     placed = [{"name": paths[0].name, "dx": 0.0, "dy": 0.0,
-               "turn": 0.0, "agreed": int(len(anchors)),
+               "turn": 0.0, "seconds": 0.0, "agreed": int(len(anchors)),
                "stars": int(len(anchors)),
                "sky": round(float(np.median(reference_grey)), 5),
                "noise": round(_frame_noise(reference_grey), 6)}]
     rate: tuple[float, float] | None = None
+    # Every frame's stars, kept. They cost a few kilobytes each and
+    # they are what lets the pole pass below correct a placement
+    # without opening a single photograph twice.
+    seen_stars: dict[str, np.ndarray] = {}
     for index, path in enumerate(paths[1:], start=1):
         _say(index * 45.0 / max(len(paths) - 1, 1),
              f"registering {index} of {len(paths) - 1}")
         grey = _grey(_frame(path, demosaic))
         moving = stars_in(grey)
+        seen_stars[path.name] = moving
         sky = float(np.median(grey))
         gap = ((taken[index] - taken[0])
                if taken[index] is not None and taken[0] is not None
@@ -766,16 +885,92 @@ def register(photos: str, pattern: str = "*.RAF", only: str = "",
             # and both are what cloud takes away and adds.
             "stars": int(len(moving)),
             "sky": round(sky, 5),
+            # How long after the first frame this one was taken. The
+            # clock is what says how far the sky turned, so a frame
+            # that could not be placed by its stars can still be
+            # placed by its timestamp -- given the pole.
+            "seconds": (round(float(gap), 3) if gap is not None else None),
             # And how grainy it was. A thin haze or a passing car's
             # headlights raise a frame's noise without hiding its
             # stars, and averaging such a frame in as an equal is
             # letting the worst frame set the stack's floor.
             "noise": round(_frame_noise(grey), 6),
         })
+    # Where the sky turned about, solved from the frames that DID
+    # register -- and then used to place the ones that did not.
+    #
+    # A frame with too few stars above its own noise cannot vote for a
+    # shift; that is what a thin cloud, or a longer exposure whose
+    # stars trailed, leaves you with. But a rigid sky has exactly one
+    # pole, and the clock already says how far it turned by the time
+    # that frame was open. Together those leave NOTHING to search for.
+    # The weak frames stop being a search that fails and become
+    # arithmetic that cannot.
+    pole = None if handheld else pole_from(placed, centre)
+    rescued = 0
+    if pole is not None and pole["fit_px"] <= POLE_FIT_PX:
+        spot = (pole["x"], pole["y"])
+        # Which way the sky went, according to the frames that know.
+        ways = [float(item["turn"]) / float(item["seconds"])
+                for item in placed
+                if int(item.get("agreed", 0)) >= LEAST_AGREEING
+                and item.get("seconds") and abs(float(item["turn"])) > 1e-9]
+        way = 1.0 if not ways else (1.0 if np.median(ways) >= 0 else -1.0)
+        # What a frame in this sequence looks like when it really does
+        # register: the middle of what the confident ones managed.
+        confident = [int(item.get("agreed", 0)) for item in placed
+                     if int(item.get("agreed", 0)) >= LEAST_AGREEING]
+        typical = float(np.median(confident)) if confident else 0.0
+        for item in placed:
+            if item.get("seconds") in (None, 0.0):
+                continue
+            agreed = int(item.get("agreed", 0))
+            if agreed >= LEAST_AGREEING:
+                implied = pole_shift(spot, float(item["turn"]), centre)
+                off = float(np.hypot(implied[0] - float(item["dx"]),
+                                     implied[1] - float(item["dy"])))
+                item["pole_off_px"] = round(off, 2)
+                # A frame that registered on a handful of stars where
+                # its neighbours registered on a hundred, and that
+                # landed nowhere near where a rigid sky puts it, did
+                # not register: it found a coincidence. The threshold
+                # is deliberately both -- a frame is only overruled
+                # when it is BOTH unconvincing and wrong, because a
+                # confident frame disagreeing with the model is the
+                # model's problem, not the frame's.
+                if (off <= POLE_FIT_PX * 3.0
+                        or agreed >= max(LEAST_AGREEING * 2.0,
+                                         typical * 0.25)):
+                    continue
+                item["overruled_px"] = round(off, 2)
+            turn = way * sky_rotation(float(item["seconds"]))
+            shift = pole_shift(spot, turn, centre)
+            how = "pole"
+            # The pole says where the frame goes; its own stars say it
+            # more precisely. Having been told where to look, a vote
+            # that had nothing to search now has ten pixels to search,
+            # and a handful of stars is enough to win inside a disc
+            # that small. Where even that finds nothing, the pole's
+            # answer stands on its own -- which is still an answer,
+            # and the frame had none before.
+            moving = seen_stars.get(str(item["name"]))
+            if moving is not None and len(moving):
+                spun = turned(moving, turn, centre)
+                near, agreeing = vote_shift(
+                    anchors, spun, REFINE_PX, centre=shift)
+                if agreeing >= LEAST_AGREEING:
+                    shift, how = near, "pole and stars"
+                    item["agreed"] = int(agreeing)
+            item["dx"] = round(float(shift[0]), 3)
+            item["dy"] = round(float(shift[1]), 3)
+            item["turn"] = round(float(turn), 4)
+            item["placed_by"] = how
+            rescued += 1
     return json.dumps({
         "format": FORMAT, "photos": str(photos), "pattern": pattern,
         "only": only, "focal_mm": focal_mm, "sensor_mm": sensor_mm,
         "demosaic": bool(demosaic), "handheld": bool(handheld),
+        "pole": pole, "placed_by_pole": rescued,
         "frames": placed})
 
 

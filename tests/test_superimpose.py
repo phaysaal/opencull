@@ -1071,5 +1071,135 @@ class FrameWeightTests(unittest.TestCase):
 
 
 
+class PoleTests(unittest.TestCase):
+    """A sky turns about one point, and that point places every frame."""
+
+    TURNS = [0.0, 1.003, 2.005, 3.008, 4.011, 5.014]
+    POLE = (120.0, 480.0)
+    CENTRE = ((WIDTH - 1) / 2.0, (HEIGHT - 1) / 2.0)
+
+    def fog(self, path: Path) -> None:
+        """Leave a frame with a sky and almost nothing in it.
+
+        What a thin cloud does, or an exposure long enough that the
+        stars trailed into the background: the frame is still there and
+        its clock is still right, but nothing in it stands clear enough
+        to vote for where it belongs.
+        """
+        with Image.open(path) as opened:
+            exif = opened.getexif()
+            size = opened.size
+        rng = np.random.default_rng(77)
+        field = np.clip(rng.normal(0.35, 0.02, (size[1], size[0])), 0, 1)
+        Image.fromarray(
+            (np.stack([field] * 3, -1) * 255).astype(np.uint8)
+        ).save(path, quality=98, exif=exif)
+
+    def test_a_turn_about_the_pole_is_a_turn_and_a_shift(self):
+        """The identity the whole thing rests on."""
+        points = np.array([[10.0, 20.0], [300.0, 40.0], [90.0, 250.0]],
+                          np.float32)
+        for degrees in (0.5, 2.0, -3.5):
+            about_pole = spun(points[:, 0], points[:, 1], degrees, *self.POLE)
+            shift = sk.pole_shift(self.POLE, degrees, self.CENTRE)
+            about_middle = sk.turned(points, degrees, self.CENTRE)
+            self.assertTrue(np.allclose(
+                about_pole[0], about_middle[:, 0] + shift[0], atol=1e-3))
+            self.assertTrue(np.allclose(
+                about_pole[1], about_middle[:, 1] + shift[1], atol=1e-3))
+
+    def test_no_turn_asks_for_no_shift(self):
+        self.assertEqual(sk.pole_shift(self.POLE, 0.0, self.CENTRE),
+                         (0.0, 0.0))
+
+    def test_the_pole_is_found_where_the_sky_turned_about(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve()
+            turning_night(root, self.TURNS, pole=self.POLE)
+            told = json.loads(sk.register(
+                folder, "*.jpg", demosaic=False, focal_mm=24.0))
+        pole = told["pole"]
+        self.assertIsNotNone(pole)
+        # Off the picture entirely, which is where a night sky's pole
+        # usually is -- the frame is only 300 rows tall.
+        self.assertAlmostEqual(pole["x"], self.POLE[0], delta=25)
+        self.assertAlmostEqual(pole["y"], self.POLE[1], delta=25)
+        self.assertLess(pole["fit_px"], sk.POLE_FIT_PX)
+
+    def test_a_sequence_that_barely_turned_cannot_say(self):
+        """Six frames seconds apart do not locate a pole, and say so."""
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve()
+            turning_night(root, [0.0] * 4, pole=self.POLE, step=1.0)
+            told = json.loads(sk.register(
+                folder, "*.jpg", demosaic=False, focal_mm=24.0))
+        self.assertIsNone(told["pole"])
+        self.assertEqual(told["placed_by_pole"], 0)
+
+    def test_a_frame_the_stars_cannot_place_is_placed_by_the_clock(self):
+        """The whole point: an unregisterable frame joins the stack."""
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve()
+            turning_night(root, self.TURNS, pole=self.POLE)
+            lost = sorted(root.glob("*.jpg"))[3]
+            self.fog(lost)
+            told = json.loads(sk.register(
+                folder, "*.jpg", demosaic=False, focal_mm=24.0))
+        by_name = {item["name"]: item for item in told["frames"]}
+        rescued = by_name[lost.name]
+        self.assertEqual(rescued.get("placed_by"), "pole")
+        self.assertEqual(told["placed_by_pole"], 1)
+        # And placed WELL. Judged against its own neighbours rather
+        # than against a formula: the sky turns at a constant rate, so
+        # the frame between two placed frames belongs halfway between
+        # them, and that is true whichever way round the registration
+        # writes its transforms.
+        order = sorted(told["frames"], key=lambda item: item["name"])
+        before, after = order[2], order[4]
+        middle = ((before["dx"] + after["dx"]) / 2.0,
+                  (before["dy"] + after["dy"]) / 2.0)
+        apart = float(np.hypot(rescued["dx"] - middle[0],
+                               rescued["dy"] - middle[1]))
+        self.assertLess(apart, 2.0)
+        # Not a coincidence of small numbers: it moved a real distance.
+        self.assertGreater(float(np.hypot(rescued["dx"], rescued["dy"])), 10.0)
+
+    def test_a_frame_that_placed_itself_is_left_alone(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve()
+            turning_night(root, self.TURNS, pole=self.POLE)
+            told = json.loads(sk.register(
+                folder, "*.jpg", demosaic=False, focal_mm=24.0))
+        for item in told["frames"][1:]:
+            self.assertNotEqual(item.get("placed_by"), "pole")
+            # But it is told how far it sits from a rigid sky, which is
+            # how a confident coincidence gives itself away.
+            self.assertIn("pole_off_px", item)
+            self.assertLess(item["pole_off_px"], sk.POLE_FIT_PX)
+
+    def test_a_hand_has_no_pole(self):
+        """Nothing about a handheld sequence is a rigid rotation."""
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve()
+            handheld_night(root, [(0.0, 0.0, 0.0), (7.0, 40.0, -25.0),
+                                  (11.0, -30.0, 18.0)])
+            told = json.loads(sk.register(
+                folder, "*.jpg", demosaic=False, handheld=True))
+        self.assertIsNone(told["pole"])
+        self.assertEqual(told["placed_by_pole"], 0)
+
+    def test_a_pole_needs_more_than_one_frame_to_speak(self):
+        self.assertIsNone(sk.pole_from([], self.CENTRE))
+        self.assertIsNone(sk.pole_from(
+            [{"turn": 2.0, "dx": 5.0, "dy": 5.0, "agreed": 99}],
+            self.CENTRE))
+        # Frames that did not register do not get a vote either.
+        self.assertIsNone(sk.pole_from(
+            [{"turn": 2.0, "dx": 5.0, "dy": 5.0, "agreed": 1},
+             {"turn": 4.0, "dx": 9.0, "dy": 9.0, "agreed": 1}],
+            self.CENTRE))
+
+
+
 if __name__ == "__main__":
     unittest.main()
