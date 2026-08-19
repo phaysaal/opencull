@@ -28,7 +28,7 @@ def _fake_open_preview(path: Path) -> Image.Image:
 class RawPreviewScanTests(unittest.TestCase):
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self._temporary.name)
+        self.root = Path(self._temporary.name).resolve()
         (self.root / "DSCF0001.RAF").write_bytes(b"not-an-image" * 64)
         Image.new("RGB", (80, 60), (40, 80, 110)).save(
             self.root / "B0001.JPG")

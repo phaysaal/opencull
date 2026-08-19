@@ -52,7 +52,7 @@ def write_profile(path: Path, name="Warm documentary") -> Path:
 class StyleProfileStoreTests(unittest.TestCase):
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self._temporary.name)
+        self.root = Path(self._temporary.name).resolve()
         self.results = self.root / "results"
         self.results.mkdir()
         self.store = StyleProfileStore(
@@ -152,7 +152,7 @@ class StyleDialogTests(unittest.TestCase):
         from unittest import mock
 
         self._temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self._temporary.name)
+        self.root = Path(self._temporary.name).resolve()
         self.results = self.root / "results"
         self.results.mkdir()
         # The panel stages photographs that exist, so the fixture makes
@@ -593,7 +593,7 @@ class NamingTests(unittest.TestCase):
 
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self._temporary.name)
+        self.root = Path(self._temporary.name).resolve()
         self.results = self.root / "results"
         self.results.mkdir()
         self.store = StyleProfileStore(
@@ -644,7 +644,7 @@ class StudioTests(unittest.TestCase):
         from unittest import mock
 
         self._temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self._temporary.name)
+        self.root = Path(self._temporary.name).resolve()
         self.results = self.root / "results"
         self.results.mkdir()
         self.store = StyleProfileStore(

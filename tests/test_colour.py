@@ -45,7 +45,7 @@ class WrittenFilesSaySRGBTests(unittest.TestCase):
 
     def test_a_render_is_tagged(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             baseline = root / "baseline.tiff"
             tifffile.imwrite(baseline, np.full((24, 32, 3), 9000, np.uint16))
             result = render_recipe(baseline, {
@@ -60,7 +60,7 @@ class WrittenFilesSaySRGBTests(unittest.TestCase):
 
     def test_a_generated_preview_is_tagged(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos = root / "photos"
             photos.mkdir()
             Image.new("RGB", (900, 600), (110, 90, 70)).save(photos / "A.JPG")
@@ -70,7 +70,7 @@ class WrittenFilesSaySRGBTests(unittest.TestCase):
 
     def test_a_proof_sheet_frame_is_tagged(self):
         with tempfile.TemporaryDirectory() as temporary:
-            path = Path(temporary) / "A.JPG"
+            path = Path(temporary).resolve() / "A.JPG"
             Image.new("RGB", (120, 90), (60, 100, 140)).save(path)
             encoded = _embedded(path)
             self.assertIn("data:image/jpeg;base64,", encoded)
@@ -87,7 +87,7 @@ class TaggingFinishedWorkTests(unittest.TestCase):
 
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self._temporary.name)
+        self.root = Path(self._temporary.name).resolve()
 
     def tearDown(self):
         self._temporary.cleanup()
@@ -202,7 +202,7 @@ class ScreenConversionTests(unittest.TestCase):
         self.colour = colour
         self.forget()
         self._temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self._temporary.name)
+        self.root = Path(self._temporary.name).resolve()
 
     def tearDown(self):
         self.forget()

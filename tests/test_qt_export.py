@@ -31,7 +31,7 @@ class ExportPageTests(unittest.TestCase):
 
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self._temporary.name)
+        self.root = Path(self._temporary.name).resolve()
         self.report_path, self.photos = build_shoot(self.root)
         self.report = load_report(self.report_path)
         self.destination = self.root / "delivered"

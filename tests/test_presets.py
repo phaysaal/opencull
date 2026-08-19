@@ -134,7 +134,7 @@ class SavingTests(unittest.TestCase):
 
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self._temporary.name) / "Presets"
+        self.root = Path(self._temporary.name).resolve() / "Presets"
         self.addCleanup(self._temporary.cleanup)
 
     def test_saving_then_reading_gives_the_same_look_back(self):

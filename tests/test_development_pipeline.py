@@ -13,7 +13,7 @@ from opencull_gui.project import create_project, load_project
 class DevelopmentPipelineTests(unittest.TestCase):
     def test_jpeg_guided_treatment_registers_photo_specific_render(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             source_folder = root / "photos"
             source_folder.mkdir()
             photo = source_folder / "A.JPG"
@@ -46,7 +46,7 @@ class DevelopmentPipelineTests(unittest.TestCase):
 
     def test_jpeg_personal_treatment_is_renderable(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             source_folder = root / "photos"
             source_folder.mkdir()
             photo = source_folder / "A.JPG"
@@ -76,7 +76,7 @@ class DevelopmentPipelineTests(unittest.TestCase):
 
     def test_calibrated_treatment_renders_without_an_ai_recipe(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             source_folder = root / "photos"
             source_folder.mkdir()
             photo = source_folder / "A.JPG"
@@ -129,7 +129,7 @@ class NativeDecodeCacheTests(unittest.TestCase):
         from opencull_gui import development
 
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             workspace, photos = self.workspace(root)
             source = photos / "A.RAF"
             decoded = []
@@ -181,7 +181,7 @@ class NativeDecodeCacheTests(unittest.TestCase):
         from opencull_gui import development
 
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             workspace, photos = self.workspace(root)
             source = photos / "A.RAF"
 

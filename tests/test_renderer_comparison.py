@@ -27,7 +27,7 @@ class RendererComparisonTests(unittest.TestCase):
 
     def test_metrics_report_luminance_clipping_and_detail(self):
         with tempfile.TemporaryDirectory() as temporary:
-            path = Path(temporary) / "image.jpg"
+            path = Path(temporary).resolve() / "image.jpg"
             Image.new("RGB", (20, 10), (80, 120, 160)).save(path)
             metrics = image_metrics(path)
             self.assertEqual((metrics["width"], metrics["height"]), (20, 10))
@@ -36,7 +36,7 @@ class RendererComparisonTests(unittest.TestCase):
 
     def test_comparison_preserves_three_honestly_labelled_paths(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             source = root / "A.JPG"
             Image.new("RGB", (48, 32), (75, 110, 145)).save(source)
 
@@ -66,7 +66,7 @@ class RendererComparisonTests(unittest.TestCase):
 
     def test_full_resolution_pair_does_not_request_a_dimension_limit(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             source = root / "A.RAF"
             reference = root / "A.JPG"
             source.write_bytes(b"raw fixture")

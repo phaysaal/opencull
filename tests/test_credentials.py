@@ -75,7 +75,7 @@ class FileStoreTests(unittest.TestCase):
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()
         self.store = credentials.FileCredentialStore(
-            Path(self._temporary.name) / "secrets" / "creds.json")
+            Path(self._temporary.name).resolve() / "secrets" / "creds.json")
 
     def tearDown(self):
         self._temporary.cleanup()
@@ -147,7 +147,7 @@ class SecretNeverReachesArgumentListTests(unittest.TestCase):
 class ProviderStoreIntegrationTests(unittest.TestCase):
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self._temporary.name)
+        self.root = Path(self._temporary.name).resolve()
         self.store = ProviderStore(
             self.root / "providers.json", self.root,
             keychain=credentials.FileCredentialStore(self.root / "creds.json"))

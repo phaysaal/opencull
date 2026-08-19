@@ -7,9 +7,9 @@ import tifffile
 from PIL import Image
 
 from development_engine import (
-    _curve_lut,
     DevelopmentError,
     _apply_global,
+    _curve_lut,
     apply_adjustment_draft,
     render_recipe,
 )
@@ -35,7 +35,7 @@ class SwitchedOffTests(unittest.TestCase):
     """
 
     def render(self, operations, name):
-        root = Path(self._temporary.name)
+        root = Path(self._temporary.name).resolve()
         baseline = root / "baseline.tiff"
         write_baseline(baseline, np.full((16, 24, 3), 9000, dtype=np.uint16))
         result = render_recipe(baseline, {
@@ -63,7 +63,7 @@ class SwitchedOffTests(unittest.TestCase):
         self.assertAlmostEqual(switched_off, untouched, places=4)
 
     def test_it_is_not_counted_or_named_while_it_is_not_happening(self):
-        root = Path(self._temporary.name)
+        root = Path(self._temporary.name).resolve()
         baseline = root / "baseline.tiff"
         write_baseline(baseline, np.full((16, 24, 3), 9000, dtype=np.uint16))
         seen = []
@@ -168,7 +168,7 @@ class InfraredOperationTests(unittest.TestCase):
         self.assertGreaterEqual(float(out.min()), 0.0)
 
     def test_both_survive_a_whole_render(self):
-        root = Path(self._temporary.name)
+        root = Path(self._temporary.name).resolve()
         baseline = root / "baseline.tiff"
         array = np.zeros((12, 16, 3), dtype=np.uint16)
         array[..., 0], array[..., 1], array[..., 2] = 3000, 3000, 9000
@@ -519,16 +519,16 @@ class WindowedRenderTests(unittest.TestCase):
         self.assertLess(float(diff.mean()), 0.01)
 
     def test_the_windowed_recipe_skips_geometry(self):
-        from development_engine import render_recipe
-
         # Guarded by the caller; the engine simply never reframes a
         # frame that is already a window. Exercised at the API level:
         import tempfile
 
         import tifffile as tf
 
+        from development_engine import render_recipe
+
         with tempfile.TemporaryDirectory() as folder:
-            work = Path(folder)
+            work = Path(folder).resolve()
             field = self.field()
             tf.imwrite(work / "base.tiff",
                        np.uint16(field * 65535))
@@ -969,7 +969,7 @@ class DevelopmentEngineTests(unittest.TestCase):
 
     def test_render_is_new_jpeg_with_provenance(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             baseline = root / "baseline.tiff"
             array = np.full((32, 48, 3), 12000, dtype=np.uint16)
             write_baseline(baseline, array)
@@ -983,7 +983,7 @@ class DevelopmentEngineTests(unittest.TestCase):
 
     def test_unsupported_diagnostics_are_never_executed(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             baseline = root / "baseline.tiff"
             Image.new("RGB", (8, 8), "white").save(baseline)
             with self.assertRaisesRegex(DevelopmentError, "unsupported"):
@@ -991,7 +991,7 @@ class DevelopmentEngineTests(unittest.TestCase):
 
     def test_allow_incomplete_marks_preview_as_incomplete(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             baseline = root / "baseline.tiff"
             Image.new("RGB", (8, 8), "white").save(baseline)
             result = render_recipe(
@@ -1159,7 +1159,7 @@ class DevelopmentEngineTests(unittest.TestCase):
 
     def test_reference_jpeg_is_recorded_as_calibration(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             baseline = root / "baseline.tiff"
             reference = root / "camera.jpg"
             write_baseline(baseline, np.full((12, 16, 3), 7000, dtype=np.uint16))
@@ -1177,7 +1177,7 @@ class DevelopmentEngineTests(unittest.TestCase):
 
     def test_distinct_standard_and_personal_operations_change_pixels(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             baseline = root / "baseline.tiff"
             gradient = np.linspace(2000, 50000, 48, dtype=np.uint16)
             array = np.repeat(gradient[None, :, None], 32, axis=0)

@@ -71,7 +71,7 @@ class AssetFamilyTests(unittest.TestCase):
         from opencull_gui.shortlist import run_phases
 
         with tempfile.TemporaryDirectory() as temporary:
-            trace = Path(temporary) / "trace.jsonl"
+            trace = Path(temporary).resolve() / "trace.jsonl"
             trace.write_text("")
             # Frames still being rated.
             self.assertEqual(
@@ -140,7 +140,7 @@ class AssetFamilyTests(unittest.TestCase):
         from opencull_gui.shortlist import forget_assessment
 
         with tempfile.TemporaryDirectory() as temporary:
-            path = Path(temporary) / "c.json"
+            path = Path(temporary).resolve() / "c.json"
             path.write_text(json_module.dumps({
                 "assessments": [{"photo": "A.JPG"}, {"photo": "B.JPG"}],
                 "completed": True}))
@@ -156,7 +156,7 @@ class AssetFamilyTests(unittest.TestCase):
         from opencull_gui.shortlist import readable_checkpoint
 
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             per_bar = root / "out.json.1788e819.checkpoint.json"
             legacy = root / "out.json.checkpoint.json"
             legacy.write_text("{}")
@@ -171,7 +171,7 @@ class AssetFamilyTests(unittest.TestCase):
         from opencull_gui.shortlist import unfinished_assessments
 
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             output = root / "Shoot.professional-shortlist.json"
             (root / f"{output.name}.abcd1234.checkpoint.json").write_text(
                 json_module.dumps({
@@ -308,7 +308,7 @@ class AssetFamilyTests(unittest.TestCase):
         )
 
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             bar = "gentle bar -- family"
             candidates = [{"photo": "A.JPG", "cluster_id": "group-0001"}]
             bundle = json_module.dumps(
@@ -409,7 +409,7 @@ class AssetFamilyTests(unittest.TestCase):
 
     def test_project_artifacts_are_not_indexed_as_source_assets(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             (root / "A.JPG").write_bytes(b"jpeg")
             managed = root / "Darkimiya" / "Developments"
             managed.mkdir(parents=True)
@@ -420,7 +420,7 @@ class AssetFamilyTests(unittest.TestCase):
 
     def test_pairs_jpeg_and_raf_in_same_directory(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             shoot = root / "shoot"
             shoot.mkdir()
             Image.new("RGB", (20, 10), "green").save(
@@ -442,7 +442,7 @@ class AssetFamilyTests(unittest.TestCase):
 
     def test_does_not_pair_same_stem_across_directories(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             (root / "one").mkdir()
             (root / "two").mkdir()
             (root / "one" / "DSCF0001.JPG").write_bytes(b"jpeg")
@@ -453,7 +453,7 @@ class AssetFamilyTests(unittest.TestCase):
 
     def test_marks_multiple_raw_companions_ambiguous(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             (root / "A.JPG").write_bytes(b"jpeg")
             (root / "A.RAF").write_bytes(b"raf")
             (root / "A.DNG").write_bytes(b"dng")
@@ -463,7 +463,7 @@ class AssetFamilyTests(unittest.TestCase):
 
     def test_refuses_symlink_that_escapes_photo_root(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos = root / "photos"
             photos.mkdir()
             outside = root / "outside.JPG"
@@ -517,7 +517,7 @@ class ShortlistSchemaTests(unittest.TestCase):
 
     def test_loads_and_indexes_valid_shortlist_without_changing_report(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos, report = self.make_context(root)
             original = report.data.copy()
             shortlist = load_shortlist(
@@ -529,7 +529,7 @@ class ShortlistSchemaTests(unittest.TestCase):
 
     def test_rejects_wrong_report_and_unsafe_or_unrelated_files(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos, report = self.make_context(root)
             with self.assertRaisesRegex(ShortlistError, "different"):
                 load_shortlist(
@@ -551,7 +551,7 @@ class ShortlistSchemaTests(unittest.TestCase):
 
     def test_rejects_unknown_photo_and_invalid_ranking(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos, report = self.make_context(root)
             with self.assertRaisesRegex(ShortlistError, "unknown"):
                 load_shortlist(
@@ -698,7 +698,7 @@ class KeyframeTests(unittest.TestCase):
         from opencull_gui import scenes
 
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             shortlist, reviews = self.stores(root)
             told = scenes.detect_keyframes(shortlist, reviews, root)
             self.assertGreaterEqual(told["scenes"], 2)
@@ -713,7 +713,7 @@ class KeyframeTests(unittest.TestCase):
         from opencull_gui import scenes
 
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             shortlist, reviews = self.stores(root)
             first = scenes.detect_keyframes(shortlist, reviews, root)
             hand = next(photo for photo in (
@@ -775,7 +775,7 @@ class MarkAllTests(KeyframeTests):
 
     def test_mark_all_marks_every_frame_in_one_revision(self):
         with tempfile.TemporaryDirectory() as temporary:
-            shortlist, reviews = self.stores(Path(temporary))
+            shortlist, reviews = self.stores(Path(temporary).resolve())
             before = reviews.public_state()["revision"]
             state = reviews.mark_all(True, before)
             self.assertEqual(state["revision"], before + 1)
@@ -785,7 +785,7 @@ class MarkAllTests(KeyframeTests):
 
     def test_unmark_all_takes_only_the_mark(self):
         with tempfile.TemporaryDirectory() as temporary:
-            shortlist, reviews = self.stores(Path(temporary))
+            shortlist, reviews = self.stores(Path(temporary).resolve())
             first = str(shortlist.entries[0]["photo"])
             state = reviews.public_state()
             reviews.update(first, "strong", True, "keep the sky", True,
@@ -800,14 +800,14 @@ class MarkAllTests(KeyframeTests):
 
     def test_nothing_to_change_writes_nothing(self):
         with tempfile.TemporaryDirectory() as temporary:
-            _shortlist, reviews = self.stores(Path(temporary))
+            _shortlist, reviews = self.stores(Path(temporary).resolve())
             before = reviews.public_state()["revision"]
             reviews.mark_all(False, before)      # already all unmarked
             self.assertEqual(reviews.public_state()["revision"], before)
 
     def test_a_subset_can_be_marked_which_is_what_the_detector_uses(self):
         with tempfile.TemporaryDirectory() as temporary:
-            shortlist, reviews = self.stores(Path(temporary))
+            shortlist, reviews = self.stores(Path(temporary).resolve())
             names = [str(e["photo"]) for e in shortlist.entries]
             state = reviews.mark_all(True, reviews.public_state()["revision"],
                                      photos=names[:2])
@@ -819,7 +819,7 @@ class MarkAllTests(KeyframeTests):
         from opencull_gui.shortlist_reviews import ShortlistReviewError
 
         with tempfile.TemporaryDirectory() as temporary:
-            _shortlist, reviews = self.stores(Path(temporary))
+            _shortlist, reviews = self.stores(Path(temporary).resolve())
             with self.assertRaises(ShortlistReviewError):
                 reviews.mark_all(True, 999)
 
@@ -862,7 +862,7 @@ class UnwatchedCompletionTests(unittest.TestCase):
 
     def test_it_is_marked_finished_and_said_to_be(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             output = root / "shortlist.json"
             output.write_text("{}", encoding="utf-8")
             manager = self.manager(root, self.job(root, "running", output))
@@ -876,7 +876,7 @@ class UnwatchedCompletionTests(unittest.TestCase):
 
     def test_a_run_with_no_output_and_no_process_waits_to_be_resumed(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             manager = self.manager(
                 root, self.job(root, "running", root / "absent.json"))
             job = manager.public()["jobs"][0]
@@ -1002,7 +1002,7 @@ class ProfessionalPipelineKernelTests(unittest.TestCase):
 
     def test_effective_policy_uses_human_selection_and_pairs_raw(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos, report_path, report = self.make_context(root)
             review_path = root / "review.json"
             review_path.write_text(json.dumps({
@@ -1028,7 +1028,7 @@ class ProfessionalPipelineKernelTests(unittest.TestCase):
 
     def test_local_softness_is_warning_not_exclusion(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos, report_path, _ = self.make_context(root)
             bundle = json.loads(build_professional_candidates(
                 str(report_path), str(photos), policy="ai_only"))
@@ -1038,7 +1038,7 @@ class ProfessionalPipelineKernelTests(unittest.TestCase):
 
     def test_assessment_calibration_checkpoint_and_report(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos, report_path, report = self.make_context(root)
             bundle = build_professional_candidates(
                 str(report_path), str(photos), policy="ai_only")
@@ -1131,7 +1131,7 @@ class ProfessionalBackendTests(unittest.TestCase):
 
     def test_edit_directions_fall_back_and_allocate_versioned_retry(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos_root, _, report, shortlist_path, _ = self.make_context(root)
             photos = PhotoStore(photos_root, root / "cache")
             reviews = ReviewStore(root / "review.json", report, photos_root)
@@ -1185,7 +1185,7 @@ class ProfessionalBackendTests(unittest.TestCase):
 
     def test_human_review_is_separate_revision_protected_and_exportable(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             _, _, _, _, shortlist = self.make_context(root)
             review_path = root / "professional.review.json"
             store = ShortlistReviewStore(review_path, shortlist)
@@ -1214,7 +1214,7 @@ class ProfessionalBackendTests(unittest.TestCase):
 
     def test_legacy_review_merge_preserves_newer_project_decisions(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             _, _, _, shortlist_path, shortlist = self.make_context(root)
             legacy_path = shortlist_path.with_suffix(".review.json")
             legacy = ShortlistReviewStore(legacy_path, shortlist)
@@ -1244,7 +1244,7 @@ class ProfessionalBackendTests(unittest.TestCase):
 
     def test_review_server_shortlist_api_and_conflict(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos_root, _, report, shortlist_path, _ = self.make_context(root)
             photos = PhotoStore(photos_root, root / "cache")
             reviews = ReviewStore(root / "review.json", report, photos_root)
@@ -1306,7 +1306,7 @@ class ProfessionalBackendTests(unittest.TestCase):
 
     def test_professional_job_is_queued_and_command_is_resumable(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos, report_path, _, _, _ = self.make_context(root)
             manager = JobManager(
                 root / "jobs.json", Path(__file__).resolve().parents[1],

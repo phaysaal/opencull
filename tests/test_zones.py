@@ -66,7 +66,7 @@ class ZoneTests(unittest.TestCase):
 
     def test_the_per_photo_file_is_read_from_beside_the_recipes(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             path = zones.zones_path(root, "DSC00703.ARW")
             path.parent.mkdir(parents=True)
             path.write_text(json.dumps({
@@ -81,7 +81,7 @@ class ZoneTests(unittest.TestCase):
 
     def test_a_missing_file_is_the_defaults_for_everything(self):
         with tempfile.TemporaryDirectory() as temporary:
-            told = zones.load(Path(temporary), "DSC00703.ARW")
+            told = zones.load(Path(temporary).resolve(), "DSC00703.ARW")
             self.assertEqual(set(told), set(RANGES))
 
 
@@ -304,7 +304,7 @@ class OverlayTests(unittest.TestCase):
         from opencull_gui import maskpaint
 
         with tempfile.TemporaryDirectory() as temporary:
-            source = Path(temporary) / "frame.png"
+            source = Path(temporary).resolve() / "frame.png"
             Image.new("RGB", (300, 200), (40, 40, 60)).save(source)
             png = maskpaint.overlay_png(
                 source, "radial",
@@ -325,7 +325,7 @@ class OverlayTests(unittest.TestCase):
         from opencull_gui import maskpaint
 
         with tempfile.TemporaryDirectory() as temporary:
-            source = Path(temporary) / "frame.png"
+            source = Path(temporary).resolve() / "frame.png"
             Image.new("RGB", (300, 200), (40, 40, 60)).save(source)
             png = maskpaint.overlay_png(
                 source, "radial",

@@ -13,7 +13,7 @@ from opencull_gui.report import load_report
 class ProjectCatalogTests(unittest.TestCase):
     def test_add_project_is_persistent_and_does_not_create_a_culling_job(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos = root / "Family"; photos.mkdir()
             catalog = ProjectCatalog(root / "support" / "projects.json")
 
@@ -30,7 +30,7 @@ class ProjectCatalogTests(unittest.TestCase):
 
     def test_manual_selection_groups_jpeg_and_raw_without_ai(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos = root / "Shoot"; photos.mkdir()
             Image.new("RGB", (32, 24), "red").save(photos / "A.JPG")
             (photos / "A.RAF").write_bytes(b"raw-placeholder")
@@ -53,7 +53,7 @@ class ProjectCatalogTests(unittest.TestCase):
 
     def test_legacy_queue_project_is_imported_but_job_remains_activity(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos = root / "Legacy"; photos.mkdir()
             manifest = project_manifest_path(photos)
             catalog = ProjectCatalog(root / "support" / "projects.json")
@@ -78,7 +78,7 @@ class ProjectCatalogTests(unittest.TestCase):
 
     def test_the_manual_selection_report_is_flagged_as_manual(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos = root / "Shoot"; photos.mkdir()
             from PIL import Image
             Image.new("RGB", (60, 40), (90, 110, 130)).save(
@@ -94,7 +94,7 @@ class ProjectCatalogTests(unittest.TestCase):
     def test_an_old_failure_does_not_shadow_the_run_that_succeeded(self):
         """The current job is the one in flight, else the newest by order."""
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos = root / "Shoot"; photos.mkdir()
             manifest = project_manifest_path(photos)
             catalog = ProjectCatalog(root / "support" / "projects.json")
@@ -121,7 +121,7 @@ class ProjectCatalogTests(unittest.TestCase):
 
     def test_legacy_recent_report_never_overwrites_newer_project_report(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos = root / "Shoot"; photos.mkdir()
             Image.new("RGB", (32, 24), "red").save(photos / "A.JPG")
             catalog = ProjectCatalog(root / "support" / "projects.json")
@@ -142,7 +142,7 @@ class ProjectCatalogTests(unittest.TestCase):
 
     def test_partial_legacy_report_is_attached_with_recovery_warning(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos = root / "Shoot"; photos.mkdir()
             Image.new("RGB", (32, 24), "red").save(photos / "A.JPG")
             report = root / "partial.json"
@@ -161,7 +161,7 @@ class ProjectCatalogTests(unittest.TestCase):
 
     def test_completed_legacy_cull_without_project_id_becomes_project(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos = root / "Legacy"; photos.mkdir()
             Image.new("RGB", (32, 24), "red").save(photos / "A.JPG")
             report = root / "result.json"
@@ -187,7 +187,7 @@ class ProjectCatalogTests(unittest.TestCase):
 
     def test_disconnected_historical_project_remains_discoverable(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos = root / "Unmounted volume" / "Family"
             report = root / "result.json"
             report.write_text(json.dumps({

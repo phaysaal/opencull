@@ -61,7 +61,7 @@ class MeasuringTests(unittest.TestCase):
 
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self._temporary.name)
+        self.root = Path(self._temporary.name).resolve()
         self.addCleanup(self._temporary.cleanup)
 
     def test_it_finds_the_light_and_how_far_it_stands_out(self):
@@ -98,7 +98,7 @@ class SeparationTests(unittest.TestCase):
 
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self._temporary.name)
+        self.root = Path(self._temporary.name).resolve()
         self.addCleanup(self._temporary.cleanup)
 
     def test_dropping_the_whole_frame_does_not_count_as_separating_it(self):
@@ -227,7 +227,7 @@ class AnswerShapeTests(unittest.TestCase):
 
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self._temporary.name)
+        self.root = Path(self._temporary.name).resolve()
         self.addCleanup(self._temporary.cleanup)
 
     def test_the_recipe_is_read_out_of_the_answers_field(self):
@@ -711,7 +711,7 @@ class UnculledFolderTests(unittest.TestCase):
 
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self._temporary.name)
+        self.root = Path(self._temporary.name).resolve()
         self.addCleanup(self._temporary.cleanup)
         (self.root / "DSCF1221.RAF").write_bytes(b"not really a raw")
         self.layout = {"Reports": self.root / ".darkimiya" / "Reports"}
@@ -822,7 +822,7 @@ class GateTests(unittest.TestCase):
 
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self._temporary.name)
+        self.root = Path(self._temporary.name).resolve()
         self.addCleanup(self._temporary.cleanup)
 
     def test_a_frame_already_right_is_left_alone(self):
@@ -903,7 +903,7 @@ class ZoneTests(unittest.TestCase):
 
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self._temporary.name)
+        self.root = Path(self._temporary.name).resolve()
         self.addCleanup(self._temporary.cleanup)
 
     def gradient(self, name, quantise=0):
@@ -1009,7 +1009,7 @@ class MaskMeasureTests(unittest.TestCase):
 
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self._temporary.name)
+        self.root = Path(self._temporary.name).resolve()
         self.addCleanup(self._temporary.cleanup)
         self.origin = frame(self.root / "start.jpg")   # light at 700,400 of 900x600
 
@@ -1078,7 +1078,7 @@ class ContactSheetTests(unittest.TestCase):
 
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self._temporary.name)
+        self.root = Path(self._temporary.name).resolve()
         self.addCleanup(self._temporary.cleanup)
         frame(self.root / "start.jpg")
         self.records = []
@@ -1115,7 +1115,7 @@ class BoundaryTests(unittest.TestCase):
 
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self._temporary.name)
+        self.root = Path(self._temporary.name).resolve()
         self.addCleanup(self._temporary.cleanup)
 
     def test_data_reads_all_three_shapes(self):
@@ -1166,7 +1166,7 @@ class KeepingTheWorkingTests(unittest.TestCase):
 
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self._temporary.name)
+        self.root = Path(self._temporary.name).resolve()
         self.addCleanup(self._temporary.cleanup)
 
     def directory(self) -> str:

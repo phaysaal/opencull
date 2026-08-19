@@ -9,9 +9,16 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from development_engine import (_apply_global, _correlated, _decoded,
-                                _encoded, _LUMA, _resized_shape,
-                                _star_keeps, _star_shape)
+from development_engine import (
+    _LUMA,
+    _apply_global,
+    _correlated,
+    _decoded,
+    _encoded,
+    _resized_shape,
+    _star_keeps,
+    _star_shape,
+)
 from opencull_gui import nightstart
 
 
@@ -206,7 +213,7 @@ class BackgroundTests(unittest.TestCase):
     def test_an_even_sky_is_left_alone_by_the_night_start(self):
         with tempfile.TemporaryDirectory() as folder:
             held = night_frame(sky=(0.02, 0.02, 0.02), noise=0.003)
-            path = Path(folder) / "even.png"
+            path = Path(folder).resolve() / "even.png"
             Image.fromarray(
                 (held * 255 + 0.5).astype(np.uint8)).save(path)
             told = nightstart.night_start(path, shown=held)
@@ -242,7 +249,7 @@ class NightStartTests(unittest.TestCase):
     def test_a_dark_sky_is_lifted_to_where_a_sky_sits(self):
         with tempfile.TemporaryDirectory() as folder:
             shown = night_frame(sky=(0.02, 0.02, 0.02), noise=0.004)
-            path = self.written(Path(folder), shown)
+            path = self.written(Path(folder).resolve(), shown)
             told = nightstart.night_start(path, shown=shown, frames=1)
             out = developed(shown, told["operations"])
             lifted = float(np.median(
@@ -255,7 +262,7 @@ class NightStartTests(unittest.TestCase):
     def test_light_pollution_is_taken_off_before_it_is_multiplied(self):
         with tempfile.TemporaryDirectory() as folder:
             shown = night_frame(sky=(0.01, 0.04, 0.16), noise=0.004)
-            path = self.written(Path(folder), shown)
+            path = self.written(Path(folder).resolve(), shown)
             told = nightstart.night_start(path, shown=shown, frames=1)
             names = [item["op"] for item in told["operations"]]
             # Before anything multiplies it -- whatever else the
@@ -274,7 +281,7 @@ class NightStartTests(unittest.TestCase):
             # Almost no signal and a great deal of noise.
             shown = night_frame(sky=(0.004, 0.004, 0.004), noise=0.02,
                                 stars=10)
-            path = self.written(Path(folder), shown)
+            path = self.written(Path(folder).resolve(), shown)
             told = nightstart.night_start(path, shown=shown, frames=1)
             self.assertFalse(told["reached_target"])
             self.assertIn("noise allows", told["note"])
@@ -295,7 +302,7 @@ class NightStartTests(unittest.TestCase):
         being quieter.
         """
         with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
+            root = Path(folder).resolve()
             noisy = night_frame(sky=(0.02, 0.02, 0.02), noise=0.006,
                                 seed=4)
             clean = night_frame(sky=(0.02, 0.02, 0.02), noise=0.002,
@@ -321,7 +328,7 @@ class NightStartTests(unittest.TestCase):
         coming out.
         """
         with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
+            root = Path(folder).resolve()
             noisy = night_frame(sky=(0.02, 0.02, 0.02), noise=0.006,
                                 seed=4)
             clean = night_frame(sky=(0.02, 0.02, 0.02), noise=0.002,
@@ -336,7 +343,7 @@ class NightStartTests(unittest.TestCase):
     def test_a_black_frame_is_refused_rather_than_amplified(self):
         with tempfile.TemporaryDirectory() as folder:
             shown = np.zeros((60, 80, 3), np.float32)
-            path = self.written(Path(folder), shown)
+            path = self.written(Path(folder).resolve(), shown)
             told = nightstart.night_start(path, shown=shown)
             self.assertEqual(told["operations"], [])
             self.assertIn("nothing to lift", told["note"])
@@ -344,7 +351,7 @@ class NightStartTests(unittest.TestCase):
     def test_the_note_says_what_was_decided_and_why(self):
         with tempfile.TemporaryDirectory() as folder:
             shown = night_frame(sky=(0.02, 0.02, 0.02), noise=0.005)
-            path = self.written(Path(folder), shown)
+            path = self.written(Path(folder).resolve(), shown)
             told = nightstart.night_start(path, shown=shown, frames=4)
             self.assertIn("black point", told["note"])
             self.assertIn("4 frames were averaged", told["note"])
@@ -359,7 +366,7 @@ class NightStartTests(unittest.TestCase):
 class CameraFactsTests(unittest.TestCase):
     def test_the_settings_are_read_from_an_ordinary_frame(self):
         with tempfile.TemporaryDirectory() as folder:
-            path = Path(folder) / "F.jpg"
+            path = Path(folder).resolve() / "F.jpg"
             exif = Image.Exif()
             exif[34855] = 1600
             exif[33434] = 3.0
@@ -374,11 +381,11 @@ class CameraFactsTests(unittest.TestCase):
 
     def test_a_file_with_nothing_to_say_says_nothing(self):
         with tempfile.TemporaryDirectory() as folder:
-            path = Path(folder) / "plain.jpg"
+            path = Path(folder).resolve() / "plain.jpg"
             Image.new("RGB", (20, 20), (5, 5, 5)).save(path)
             self.assertEqual(nightstart.camera_facts(path), {})
             self.assertEqual(
-                nightstart.camera_facts(Path(folder) / "gone.jpg"), {})
+                nightstart.camera_facts(Path(folder).resolve() / "gone.jpg"), {})
 
 
 class MeasuredOperationsTests(unittest.TestCase):
@@ -553,7 +560,7 @@ class StarShapeTests(unittest.TestCase):
     def test_night_start_publishes_the_shape_before_the_quieting(self):
         held = self.starry(noise=0.02, stars=60)
         with tempfile.TemporaryDirectory() as folder:
-            path = Path(folder) / "sky.png"
+            path = Path(folder).resolve() / "sky.png"
             Image.fromarray(
                 (np.clip(held, 0, 1) * 255).astype(np.uint8)).save(path)
             result = nightstart.night_start(path, shown=held)

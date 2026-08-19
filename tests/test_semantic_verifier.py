@@ -26,7 +26,7 @@ class SemanticVerifierTests(unittest.TestCase):
 
     def test_triplet_payload_and_certificate_are_hashed(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             original, thumb, developed = (root / name for name in ("a.jpg", "a-thumb.jpg", "b.jpg"))
             for path, color in ((original, "red"), (thumb, "red"), (developed, "blue")):
                 Image.new("RGB", (8, 8), color).save(path)
@@ -50,7 +50,7 @@ class SemanticVerifierTests(unittest.TestCase):
 
     def test_rejects_missing_credential_without_transport(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             original = root / "a.jpg"
             developed = root / "b.jpg"
             Image.new("RGB", (2, 2)).save(original)
@@ -60,7 +60,7 @@ class SemanticVerifierTests(unittest.TestCase):
 
     def test_consensus_requires_majority_and_retains_judgments(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             original, developed = root / "a.jpg", root / "b.jpg"
             Image.new("RGB", (2, 2), "red").save(original)
             Image.new("RGB", (2, 2), "blue").save(developed)

@@ -46,7 +46,7 @@ class LimbFitTests(unittest.TestCase):
 
     def grey(self, **kwargs):
         with tempfile.TemporaryDirectory() as temporary:
-            path = Path(temporary) / "frame.jpg"
+            path = Path(temporary).resolve() / "frame.jpg"
             crescent(path, **kwargs)
             return np.asarray(Image.open(path).convert("L"),
                               dtype=np.float32)
@@ -99,7 +99,7 @@ class PlanTests(unittest.TestCase):
 
     def test_every_crop_is_identical_even_sized_and_contained(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             centres = [(430, 300), (470, 290), (450, 320), (445, 305)]
             plan = json.loads(timelapse.crop_plan(
                 self.sequence(root, centres)))
@@ -114,7 +114,7 @@ class PlanTests(unittest.TestCase):
 
     def test_the_sun_sits_at_the_same_offset_in_every_crop(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             centres = [(430, 300), (470, 290), (450, 320)]
             told = json.loads(self.sequence(root, centres))
             plan = json.loads(timelapse.crop_plan(json.dumps(told)))
@@ -130,7 +130,7 @@ class PlanTests(unittest.TestCase):
     def test_the_right_margin_carries_all_three_terms(self):
         """The step-11 fix: the crop must never cut into the subject."""
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             plan = json.loads(timelapse.crop_plan(self.sequence(
                 root, [(200, 300), (700, 300)])))
             self.assertNotIn("error", plan)
@@ -174,7 +174,7 @@ class PlanTests(unittest.TestCase):
         new scale are folded in, each carrying the factor that maps its
         own sun to the sequence's; a lone wild fit is still excluded."""
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             # Eight normal frames, then a run of five zoomed to half the
             # sun's size -- a real lens change, not a spike.
             for index in range(8):
@@ -193,7 +193,7 @@ class PlanTests(unittest.TestCase):
 
     def test_a_lone_wild_fit_is_still_excluded_as_a_failed_find(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             for index in range(8):
                 crescent(root / f"frame-{index:03d}.jpg",
                          centre=(430, 300), radius=90)
@@ -210,7 +210,7 @@ class PlanTests(unittest.TestCase):
         suspect flanked by a suspect of nearly its own extent is a
         zoom, not a botched fit, and is kept and normalised."""
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             # Normals on both sides so the median stays put; a two-frame
             # burst at double the sun's radius in the middle.
             for index in list(range(5)) + list(range(7, 12)):
@@ -229,7 +229,7 @@ class PlanTests(unittest.TestCase):
         them on nothing -- not the smoothed track, not each other -- so
         both are still excluded as failed finds."""
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             for index in list(range(5)) + list(range(7, 12)):
                 crescent(root / f"frame-{index:03d}.jpg",
                          centre=(430, 300), radius=90)
@@ -246,7 +246,7 @@ class PlanTests(unittest.TestCase):
         So the border test runs on the bright mask, before any fit is
         believed, and the frame is set aside by name."""
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             crescent(root / "frame-000.jpg", centre=(450, 300))
             crescent(root / "frame-001.jpg", centre=(60, 300))
             told = json.loads(timelapse.survey(str(root), "frame-*.jpg"))
@@ -278,7 +278,7 @@ class ProgressMarkerTests(unittest.TestCase):
         import io
 
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             for index, centre in enumerate([(430, 300), (470, 300),
                                             (450, 320)]):
                 crescent(root / f"frame-{index:03d}.jpg", centre=centre)
@@ -302,7 +302,7 @@ class ProgressMarkerTests(unittest.TestCase):
         from opencull_gui.jobs import JobManager
 
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             log = root / "run.log"
             log.write_text(
                 "some noise\n"
@@ -328,7 +328,7 @@ class ProgressMarkerTests(unittest.TestCase):
         from opencull_gui.jobs import JobManager
 
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             log = root / "run.log"
             log.write_text(
                 "starting supervised command\n"
@@ -351,7 +351,7 @@ class ProgressMarkerTests(unittest.TestCase):
         from opencull_gui.jobs import JobManager
 
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             log = root / "run.log"
             log.write_text(
                 "starting supervised command\n"
@@ -370,7 +370,7 @@ class SequenceTests(unittest.TestCase):
 
     def test_frames_land_numbered_sized_and_complete(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             for index, centre in enumerate([(430, 300), (470, 300)]):
                 crescent(root / f"frame-{index:03d}.jpg", centre=centre)
             plan = timelapse.crop_plan(
@@ -385,7 +385,7 @@ class SequenceTests(unittest.TestCase):
 
     def test_the_colour_shift_is_applied_and_masks_are_skipped(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             crescent(root / "frame-000.jpg")
             crescent(root / "frame-001.jpg", centre=(460, 310))
             recipe = root / "shift.recipe.json"
@@ -420,7 +420,7 @@ class SequenceTests(unittest.TestCase):
 
     def _ultimate_quality_develops_each_frame_once(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             for index, centre in enumerate([(430, 300), (470, 300)]):
                 crescent(root / f"frame-{index:03d}.jpg", centre=centre)
             plan = timelapse.crop_plan(
@@ -459,7 +459,7 @@ class SequenceTests(unittest.TestCase):
         with mock.patch.dict(
                 "os.environ", {"DARKIMIYA_TIMELAPSE_WORKERS": "1"}), \
                 tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             crescent(root / "frame-000.jpg")
             crescent(root / "frame-001.jpg", centre=(460, 310))
             plan = timelapse.crop_plan(
@@ -475,7 +475,7 @@ class SequenceTests(unittest.TestCase):
         import hashlib
 
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             for index, centre in enumerate([(430, 300), (470, 300),
                                             (450, 320)]):
                 crescent(root / f"frame-{index:03d}.jpg", centre=centre)
@@ -504,7 +504,7 @@ class SequenceTests(unittest.TestCase):
         that read as "the look was not applied" and that ffmpeg's
         numbered pattern would splice into the end of the video."""
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             crescent(root / "frame-000.jpg")
             crescent(root / "frame-001.jpg", centre=(460, 310))
             out = root / "out"
@@ -523,7 +523,7 @@ class SequenceTests(unittest.TestCase):
 
     def test_the_model_proofs_live_beside_the_frames_not_among_them(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             crescent(root / "frame-000.jpg")
             proof = timelapse.keyframe_proof(
                 str(root), "frame-000.jpg", str(root / "frames"))
@@ -532,7 +532,7 @@ class SequenceTests(unittest.TestCase):
 
     def test_a_missing_frame_fails_completeness(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             crescent(root / "frame-000.jpg")
             crescent(root / "frame-001.jpg", centre=(460, 310))
             plan = timelapse.crop_plan(
@@ -563,7 +563,7 @@ class AssembleVideoTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg is not installed")
     def test_the_video_is_encoded_and_its_path_recorded(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             film = json.loads(timelapse.assemble_video(self._rendered(root)))
             made = film.get("video")
             self.assertTrue(made, film.get("video_note"))
@@ -574,7 +574,7 @@ class AssembleVideoTests(unittest.TestCase):
 
     def test_a_missing_ffmpeg_keeps_the_frames_and_the_command(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             report = self._rendered(root)
             with mock.patch("timelapse_kernel.shutil.which",
                             return_value=None):
@@ -605,7 +605,7 @@ class AssembleVideoTests(unittest.TestCase):
         self.assertEqual(timelapse._fps_of(500), 60)    # bounded
         self.assertEqual(timelapse._fps_of(-3), 1)
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             film = json.loads(timelapse.assemble_video(
                 self._rendered(root), fps=6.0))
             if film.get("video"):                       # ffmpeg installed
@@ -642,7 +642,7 @@ class TrackTests(unittest.TestCase):
         file, every measurer's listing holds only those names -- the
         whole folder is not the default aim of a culled project."""
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             self.sequence(root, [(100, 100), (120, 100), (140, 104),
                                  (160, 110)])
             chosen = root / "selection.json"
@@ -660,7 +660,7 @@ class TrackTests(unittest.TestCase):
 
     def test_an_empty_only_means_the_whole_folder(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             self.sequence(root, [(100, 100), (130, 100)])
             listed = timelapse.list_frames(str(root), "frame-*.jpg", only="")
             self.assertEqual(len(listed), 2)
@@ -670,7 +670,7 @@ class TrackTests(unittest.TestCase):
         earlier version decoded every frame's embedded rendering just to
         spell the date -- half a minute before any work began."""
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             self.sequence(root, [(100, 100), (130, 100)])
             with mock.patch.object(
                     timelapse, "_preview",
@@ -685,7 +685,7 @@ class TrackTests(unittest.TestCase):
         is set aside by name, and the template is cut where the mark
         was made rather than from background."""
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             # Frames 0-1 have no subject at all; it appears at frame 2.
             positions = [(0, 0), (0, 0), (200, 150), (240, 160), (270, 180)]
             self.sequence(root, positions, missing={0, 1})
@@ -704,7 +704,7 @@ class TrackTests(unittest.TestCase):
 
     def test_an_unknown_marked_frame_refuses_rather_than_guessing(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             self.sequence(root, [(100, 100), (130, 100)])
             with self.assertRaisesRegex(ValueError, "not among the frames"):
                 timelapse.track_survey(
@@ -713,7 +713,7 @@ class TrackTests(unittest.TestCase):
 
     def test_the_tracker_follows_the_subject_within_pixels(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             positions = [(100, 100), (130, 96), (170, 118), (210, 140)]
             seed = self.sequence(root, positions)
             told = json.loads(timelapse.track_survey(
@@ -725,7 +725,7 @@ class TrackTests(unittest.TestCase):
 
     def test_a_vanished_subject_is_set_aside_and_reacquired(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             positions = [(100, 100), (130, 100), (150, 104), (165, 110)]
             seed = self.sequence(root, positions, missing={2})
             told = json.loads(timelapse.track_survey(
@@ -743,7 +743,7 @@ class TrackTests(unittest.TestCase):
         """A template that follows its matches drifts onto whatever it
         matched. The seed box must survive to the last frame."""
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             positions = [(80 + 12 * i, 90 + 6 * i) for i in range(10)]
             seed = self.sequence(root, positions)
             told = json.loads(timelapse.track_survey(
@@ -754,7 +754,7 @@ class TrackTests(unittest.TestCase):
 
     def test_a_degenerate_seed_box_is_refused(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             self.sequence(root, [(100, 100)])
             with self.assertRaises(ValueError):
                 timelapse.track_survey(str(root), "frame-*.jpg",
@@ -762,7 +762,7 @@ class TrackTests(unittest.TestCase):
 
     def test_the_tracked_survey_feeds_the_same_plan_core(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             positions = [(100, 100), (140, 110), (180, 120)]
             seed = self.sequence(root, positions)
             plan = json.loads(timelapse.crop_plan(timelapse.track_survey(
@@ -793,7 +793,7 @@ class ShiftNameTests(unittest.TestCase):
 
     def test_a_relative_path_resolves_beside_the_photos(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             (root / "my-look.recipe.json").write_text(json.dumps({
                 "recipe": {"operations": [
                     {"op": "tone.exposure", "value": -0.5, "unit": "EV",
@@ -837,7 +837,7 @@ class AnchoredTests(unittest.TestCase):
 
     def test_keyframes_are_first_last_and_every_nth(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             self.sequence(root, [(100 + 6 * i, 100) for i in range(9)])
             chosen = timelapse.keyframes(
                 str(root), "frame-*.jpg", every=4)
@@ -846,7 +846,7 @@ class AnchoredTests(unittest.TestCase):
 
     def test_an_anchor_is_scaled_from_the_proofs_pixels(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             self.sequence(root, [(100, 100)])
             proof = timelapse.keyframe_proof(
                 str(root), "frame-000.jpg", str(root / "anchors"),
@@ -859,7 +859,7 @@ class AnchoredTests(unittest.TestCase):
 
     def test_a_useless_answer_records_why_instead_of_pretending(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             self.sequence(root, [(100, 100)])
             proof = timelapse.keyframe_proof(
                 str(root), "frame-000.jpg", str(root / "anchors"))
@@ -885,7 +885,7 @@ class AnchoredTests(unittest.TestCase):
         import io
 
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             positions = [(80 + 10 * i, 90 + 4 * i) for i in range(9)]
             self.sequence(root, positions)
             out = io.StringIO()
@@ -918,7 +918,7 @@ class AnchoredTests(unittest.TestCase):
         import io
 
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             self.sequence(root, [(100, 100), (130, 100), (150, 104)])
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
@@ -931,7 +931,7 @@ class AnchoredTests(unittest.TestCase):
 
     def test_the_tracker_carries_between_anchors_and_resets_on_them(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             positions = [(80 + 10 * i, 90 + 4 * i) for i in range(9)]
             self.sequence(root, positions)
             anchors = "[]"
@@ -954,7 +954,7 @@ class AnchoredTests(unittest.TestCase):
 
     def test_frames_before_the_first_anchor_are_named_not_guessed(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             positions = [(100, 100), (110, 104), (120, 108)]
             self.sequence(root, positions)
             x, y = positions[1]
@@ -973,7 +973,7 @@ class AnchoredTests(unittest.TestCase):
 
     def test_the_prompt_names_the_subject_and_the_proofs_size(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             self.sequence(root, [(100, 100)])
             proof = timelapse.keyframe_proof(
                 str(root), "frame-000.jpg", str(root / "anchors"),

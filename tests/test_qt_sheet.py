@@ -30,7 +30,7 @@ class ContactSheetTests(unittest.TestCase):
 
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self._temporary.name)
+        self.root = Path(self._temporary.name).resolve()
         self.report_path, self.photos_path = build_shoot(self.root)
         self.store = PhotoStore(self.photos_path, self.root / "cache")
         self.addCleanup(self._temporary.cleanup)

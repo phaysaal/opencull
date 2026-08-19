@@ -260,7 +260,7 @@ class SelectionIsNotACullTests(unittest.TestCase):
 
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self._temporary.name)
+        self.root = Path(self._temporary.name).resolve()
         self.addCleanup(self._temporary.cleanup)
 
     def bench(self, mode: str):

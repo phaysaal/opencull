@@ -43,7 +43,7 @@ class SuggestionsPageTests(unittest.TestCase):
 
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self._temporary.name)
+        self.root = Path(self._temporary.name).resolve()
         self.report_path, self.photos = build_shoot(self.root)
         self.addCleanup(self._temporary.cleanup)
 

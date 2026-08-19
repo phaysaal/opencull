@@ -48,7 +48,7 @@ class RememberedTests(unittest.TestCase):
 
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()
-        self.photos = Path(self._temporary.name) / "photos"
+        self.photos = Path(self._temporary.name).resolve() / "photos"
         self.photos.mkdir(parents=True)
         self.manifest, _ = load_or_create_folder_project(self.photos, "Shoot")
         self.addCleanup(self._temporary.cleanup)
@@ -117,7 +117,7 @@ class ReachesTheRunTests(unittest.TestCase):
 
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self._temporary.name)
+        self.root = Path(self._temporary.name).resolve()
         self.photos = self.root / "photos"
         self.photos.mkdir(parents=True)
         Image.fromarray(

@@ -19,9 +19,9 @@ import json
 from pathlib import Path
 
 from PySide6.QtCore import (
-    QRectF,
     QEasingCurve,
     QObject,
+    QRectF,
     QRunnable,
     QSize,
     Qt,
@@ -1773,9 +1773,8 @@ class DevelopPage(QWidget):
         except Exception:                            # noqa: BLE001 - fall back
             pass
         try:
-            from shortlist_kernel import chosen_photographs
-
             from opencull_gui.reviews import default_review_path
+            from shortlist_kernel import chosen_photographs
 
             review = default_review_path(self.report.path)
             value = (json.loads(review.read_text(encoding="utf-8"))

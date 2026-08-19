@@ -64,7 +64,7 @@ class ReviewPageTests(unittest.TestCase):
 
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()
-        root = Path(self._temporary.name)
+        root = Path(self._temporary.name).resolve()
         self.report_path, self.photos_path = build_shoot(root)
         self.report = load_report(self.report_path)
         self.photos = PhotoStore(self.photos_path, root / "cache")
@@ -534,7 +534,7 @@ class PreviewLoaderTests(unittest.TestCase):
 
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()
-        root = Path(self._temporary.name)
+        root = Path(self._temporary.name).resolve()
         _report, photos = build_shoot(root)
         self.store = PhotoStore(photos, root / "cache")
         self.addCleanup(self._temporary.cleanup)

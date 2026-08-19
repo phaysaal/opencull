@@ -154,8 +154,7 @@ class DialogButtonTests(unittest.TestCase):
         self.addCleanup(button.deleteLater)
         self.application.processEvents()
         fill = QColor(button.grab().toImage().pixel(12, 20))
-        hexfill = "#{:02X}{:02X}{:02X}".format(
-            fill.red(), fill.green(), fill.blue())
+        hexfill = f"#{fill.red():02X}{fill.green():02X}{fill.blue():02X}"
         self.assertGreaterEqual(
             contrast(theme.PAPER, hexfill), AA_TEXT,
             f"a bare button's label ({theme.PAPER}) reads at "

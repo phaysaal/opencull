@@ -23,13 +23,13 @@ class MoveSelectedTests(unittest.TestCase):
 
     def test_extracts_unique_selected_names(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             report = self.make_report(root, ["A.JPG", "A.JPG", "B.RAF"])
             self.assertEqual(selected_names(report), ["A.JPG", "B.RAF"])
 
     def test_build_and_execute_move_plan(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos = root / "photos"
             photos.mkdir()
             (photos / "A.JPG").write_bytes(b"photo")
@@ -48,7 +48,7 @@ class MoveSelectedTests(unittest.TestCase):
 
     def test_refuses_existing_destination(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos = root / "photos"
             (photos / "selected").mkdir(parents=True)
             (photos / "A.JPG").write_bytes(b"original")
@@ -60,7 +60,7 @@ class MoveSelectedTests(unittest.TestCase):
 
     def test_refuses_ambiguous_recursive_filename(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos = root / "photos"
             (photos / "one").mkdir(parents=True)
             (photos / "two").mkdir()
@@ -73,7 +73,7 @@ class MoveSelectedTests(unittest.TestCase):
 
     def test_refuses_path_traversal(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             report = self.make_report(root, ["../A.JPG"])
             with self.assertRaisesRegex(MoveSelectedError, "unsafe"):
                 selected_names(report)

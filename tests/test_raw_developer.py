@@ -35,7 +35,7 @@ class RawDeveloperTests(unittest.TestCase):
 
     def test_baseline_is_atomic_and_never_targets_source_folder(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             source_dir = root / "source"
             source_dir.mkdir()
             source = source_dir / "A.RAF"

@@ -85,7 +85,7 @@ class ShortlistPageTests(unittest.TestCase):
 
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()
-        root = Path(self._temporary.name)
+        root = Path(self._temporary.name).resolve()
         self.report_path, self.photos_path, self.shortlist_path = build(root)
         self.report = load_report(self.report_path)
         self.photos = PhotoStore(self.photos_path, root / "cache")
@@ -528,7 +528,7 @@ class SuggestTests(unittest.TestCase):
 
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self._temporary.name)
+        self.root = Path(self._temporary.name).resolve()
         self.report_path, self.photos_path, self.shortlist_path = build(
             self.root)
         self.report = load_report(self.report_path)

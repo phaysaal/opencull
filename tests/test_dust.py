@@ -42,7 +42,7 @@ def dusty_shoot(folder: Path, frames: int = 8,
 class SurveyTests(unittest.TestCase):
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()
-        self.folder = Path(self._temporary.name)
+        self.folder = Path(self._temporary.name).resolve()
         self.addCleanup(self._temporary.cleanup)
 
     def test_fixed_dust_is_found_and_the_mover_is_not(self):
@@ -81,7 +81,7 @@ class MapTests(unittest.TestCase):
 
     def test_the_map_lives_beside_the_photographs(self):
         with tempfile.TemporaryDirectory() as folder:
-            kept = dust.save_map(self.report(Path(folder)))
+            kept = dust.save_map(self.report(Path(folder).resolve()))
             self.assertEqual(kept.parent.name, ".darkimiya")
             loaded = dust.load_map(folder)
             self.assertEqual(loaded["spots"][0]["x"], 0.5)
@@ -132,7 +132,7 @@ class KernelTests(unittest.TestCase):
         import dust_kernel
 
         with tempfile.TemporaryDirectory() as folder:
-            dusty_shoot(Path(folder))
+            dusty_shoot(Path(folder).resolve())
             told = dust_kernel.survey_dust(folder, "*.jpg", 640)
             self.assertIsInstance(told, str)
             self.assertTrue(dust_kernel.map_valid(told))

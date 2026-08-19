@@ -586,7 +586,7 @@ class ShortlistPage(QWidget):
         if not hasattr(self, "_taken"):
             root = photos_root_of(self.shortlist)
             names = [str(entry["photo"]) for entry in self.entries]
-            untimed: dict[str, float | None] = {name: None for name in names}
+            untimed: dict[str, float | None] = dict.fromkeys(names)
             self._taken = (capture_times(Path(root), names) if root
                            else untimed)
 

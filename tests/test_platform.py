@@ -225,7 +225,7 @@ class DarktableDiscoveryTests(unittest.TestCase):
 class TrashLocationTests(unittest.TestCase):
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self._temporary.name)
+        self.root = Path(self._temporary.name).resolve()
 
     def tearDown(self):
         self._temporary.cleanup()

@@ -124,9 +124,9 @@ class SkyBoundTests(unittest.TestCase):
 class StarFindingTests(unittest.TestCase):
     def test_the_stars_are_found_where_they_were_put(self):
         with tempfile.TemporaryDirectory() as folder:
-            night(Path(folder), [(0.0, 0.0)])
+            night(Path(folder).resolve(), [(0.0, 0.0)])
             grey = sk._grey(sk._frame(
-                Path(folder) / "N000.jpg", demosaic=False))
+                Path(folder).resolve() / "N000.jpg", demosaic=False))
             found = sk.stars_in(grey)
             self.assertGreater(len(found), 70)      # 80 were planted
             self.assertLessEqual(len(found), sk.STARS_WANTED)
@@ -142,7 +142,7 @@ class RegistrationTests(unittest.TestCase):
 
     def test_a_known_drift_is_recovered_to_a_fraction_of_a_pixel(self):
         with tempfile.TemporaryDirectory() as folder:
-            night(Path(folder), self.DRIFTS)
+            night(Path(folder).resolve(), self.DRIFTS)
             told = json.loads(sk.register(
                 folder, "*.jpg", demosaic=False))
             for item, (dx, dy) in zip(told["frames"], self.DRIFTS):
@@ -155,7 +155,7 @@ class RegistrationTests(unittest.TestCase):
 
     def test_one_frame_needs_no_registering(self):
         with tempfile.TemporaryDirectory() as folder:
-            night(Path(folder), [(0.0, 0.0)])
+            night(Path(folder).resolve(), [(0.0, 0.0)])
             told = json.loads(sk.register(
                 folder, "*.jpg", demosaic=False))
             self.assertEqual(len(told["frames"]), 1)
@@ -183,7 +183,7 @@ class StackingTests(unittest.TestCase):
 
     def test_averaging_buys_the_square_root_of_the_count(self):
         with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
+            root = Path(folder).resolve()
             night(root, self.DRIFTS)
             placed = sk.register(folder, "*.jpg", demosaic=False)
             told = json.loads(sk.superimpose(
@@ -196,7 +196,7 @@ class StackingTests(unittest.TestCase):
     def test_clipping_leaves_the_satellite_out(self):
         ruined = 4
         with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
+            root = Path(folder).resolve()
             night(root, self.DRIFTS, streak_on=ruined)
             placed = sk.register(folder, "*.jpg", demosaic=False)
             plain = json.loads(sk.superimpose(
@@ -219,7 +219,7 @@ class StackingTests(unittest.TestCase):
 
     def test_trails_keep_the_brightest_thing_that_ever_crossed(self):
         with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
+            root = Path(folder).resolve()
             night(root, self.DRIFTS, streak_on=4)
             placed = sk.register(folder, "*.jpg", demosaic=False)
             told = json.loads(sk.superimpose(
@@ -232,7 +232,7 @@ class StackingTests(unittest.TestCase):
 
     def test_the_stack_is_written_as_a_developable_tiff(self):
         with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
+            root = Path(folder).resolve()
             night(root, self.DRIFTS[:4])
             placed = sk.register(folder, "*.jpg", demosaic=False)
             told = json.loads(sk.superimpose(
@@ -245,7 +245,7 @@ class StackingTests(unittest.TestCase):
 
     def test_an_unknown_mode_is_refused_by_name(self):
         with tempfile.TemporaryDirectory() as folder:
-            night(Path(folder), self.DRIFTS[:3])
+            night(Path(folder).resolve(), self.DRIFTS[:3])
             placed = sk.register(folder, "*.jpg", demosaic=False)
             told = json.loads(sk.superimpose(placed, "cheese"))
             self.assertIn("cheese", told["error"])
@@ -264,7 +264,7 @@ class RotationTests(unittest.TestCase):
 
     def test_a_turning_sky_is_registered_by_its_timestamps(self):
         with tempfile.TemporaryDirectory() as folder:
-            turning_night(Path(folder), self.TURNS)
+            turning_night(Path(folder).resolve(), self.TURNS)
             told = json.loads(sk.register(
                 folder, "*.jpg", demosaic=False, focal_mm=24.0))
             for index, item in enumerate(told["frames"]):
@@ -275,7 +275,7 @@ class RotationTests(unittest.TestCase):
 
     def test_rotation_keeps_the_stars_as_points(self):
         with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
+            root = Path(folder).resolve()
             turning_night(root, self.TURNS)
             placed = json.loads(sk.register(
                 folder, "*.jpg", demosaic=False, focal_mm=24.0))
@@ -297,7 +297,7 @@ class RotationTests(unittest.TestCase):
         held = [(0.0, 0, 0), (7.0, 60, -40), (-11.0, -80, 55),
                 (16.0, 120, 90)]
         with tempfile.TemporaryDirectory() as folder:
-            handheld_night(Path(folder), held)
+            handheld_night(Path(folder).resolve(), held)
             told = json.loads(sk.register(
                 folder, "*.jpg", demosaic=False, handheld=True))
             for item, (degrees, _dx, _dy) in zip(told["frames"], held):
@@ -318,7 +318,7 @@ class RotationTests(unittest.TestCase):
 
     def test_a_wrong_lens_widens_rather_than_failing(self):
         with tempfile.TemporaryDirectory() as folder:
-            turning_night(Path(folder), self.TURNS)
+            turning_night(Path(folder).resolve(), self.TURNS)
             # 200mm on a sky shot at 24: the bound is far too tight,
             # and without the widening every frame would come back
             # unregistered.
@@ -355,8 +355,8 @@ class ModelAnchorTests(unittest.TestCase):
 
     def test_the_prompt_asks_for_recognition_not_registration(self):
         with tempfile.TemporaryDirectory() as folder:
-            night(Path(folder), [(0.0, 0.0)])
-            asked = sk.group_prompt(str(Path(folder) / "N000.jpg"))
+            night(Path(folder).resolve(), [(0.0, 0.0)])
+            asked = sk.group_prompt(str(Path(folder).resolve() / "N000.jpg"))
             self.assertIn("recognise", asked)
             self.assertIn(f"{WIDTH}x{HEIGHT}", asked)
             # A guess is worse than nothing, and it says so.
@@ -364,7 +364,7 @@ class ModelAnchorTests(unittest.TestCase):
 
     def test_two_frames_seeing_one_group_give_a_coarse_shift(self):
         with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
+            root = Path(folder).resolve()
             night(root, [(0.0, 0.0), (0.0, 0.0)])
             first = str(root / "N000.jpg")
             second = str(root / "N001.jpg")
@@ -383,9 +383,9 @@ class ModelAnchorTests(unittest.TestCase):
 
     def test_a_frame_recognising_nothing_says_nothing(self):
         with tempfile.TemporaryDirectory() as folder:
-            night(Path(folder), [(0.0, 0.0)])
+            night(Path(folder).resolve(), [(0.0, 0.0)])
             hints = sk.collect_group(
-                "", folder, "N000.jpg", str(Path(folder) / "N000.jpg"),
+                "", folder, "N000.jpg", str(Path(folder).resolve() / "N000.jpg"),
                 {"group": "", "x0": 0, "y0": 0, "x1": 0, "y1": 0,
                  "visible": False})
             self.assertFalse(sk.hints_usable(hints))
@@ -393,7 +393,7 @@ class ModelAnchorTests(unittest.TestCase):
 
     def test_different_groups_are_not_compared_with_each_other(self):
         with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
+            root = Path(folder).resolve()
             night(root, [(0.0, 0.0), (0.0, 0.0)])
             hints = sk.collect_group(
                 "", folder, "N000.jpg", str(root / "N000.jpg"),
@@ -437,7 +437,7 @@ class CalibrationTests(unittest.TestCase):
 
     def test_a_flat_takes_the_vignetting_out(self):
         with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
+            root = Path(folder).resolve()
             lit = root / "lights"
             lit.mkdir()
             shape = self.vignetted()
@@ -476,7 +476,7 @@ class CalibrationTests(unittest.TestCase):
         warm = np.zeros((HEIGHT, WIDTH, 3), np.float32)
         warm[..., 0], warm[..., 1], warm[..., 2] = 0.8, 0.6, 0.4
         with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
+            root = Path(folder).resolve()
             flats = self.calibration(root, "flats", warm)
             made = sk._master_flat(flats, "*.jpg", False)
             for channel in range(3):
@@ -485,7 +485,7 @@ class CalibrationTests(unittest.TestCase):
 
     def test_a_dark_is_subtracted_and_a_bias_before_it(self):
         with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
+            root = Path(folder).resolve()
             lit = root / "lights"
             lit.mkdir()
             for index in range(3):
@@ -508,7 +508,7 @@ class CalibrationTests(unittest.TestCase):
 
     def test_one_calibration_frame_is_not_a_master(self):
         with tempfile.TemporaryDirectory() as folder:
-            alone = self.calibration(Path(folder), "darks", 0.08, count=1)
+            alone = self.calibration(Path(folder).resolve(), "darks", 0.08, count=1)
             self.assertIsNone(sk._median_of(alone, "*.jpg", False))
 
 
@@ -544,7 +544,7 @@ class CloudScreenTests(unittest.TestCase):
 
     def test_a_frame_set_aside_is_not_in_the_stack(self):
         with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
+            root = Path(folder).resolve()
             night(root, [(0.0, 0.0)] * 4)
             placed = json.loads(sk.register(
                 folder, "*.jpg", demosaic=False))
@@ -556,7 +556,7 @@ class CloudScreenTests(unittest.TestCase):
 
     def test_a_sky_nobody_could_use_refuses_rather_than_pretends(self):
         with tempfile.TemporaryDirectory() as folder:
-            night(Path(folder), [(0.0, 0.0)] * 3)
+            night(Path(folder).resolve(), [(0.0, 0.0)] * 3)
             placed = json.loads(sk.register(
                 folder, "*.jpg", demosaic=False))
             for item in placed["frames"]:
@@ -567,7 +567,7 @@ class CloudScreenTests(unittest.TestCase):
 
     def test_the_screen_reads_star_counts_the_registration_took(self):
         with tempfile.TemporaryDirectory() as folder:
-            night(Path(folder), [(0.0, 0.0), (4.0, 1.0)])
+            night(Path(folder).resolve(), [(0.0, 0.0), (4.0, 1.0)])
             placed = json.loads(sk.register(
                 folder, "*.jpg", demosaic=False))
             for item in placed["frames"]:
@@ -649,7 +649,7 @@ class DrizzleTests(unittest.TestCase):
 
     def test_the_grid_really_is_finer(self):
         with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
+            root = Path(folder).resolve()
             self.dithered(root, count=6)
             placed = sk.register(folder, "*.jpg", demosaic=False)
             told = json.loads(sk.superimpose(
@@ -676,7 +676,7 @@ class DrizzleTests(unittest.TestCase):
         reaching for when there are dozens of frames, not a handful.
         """
         with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
+            root = Path(folder).resolve()
             self.dithered(root, count=20)
             placed = sk.register(folder, "*.jpg", demosaic=False)
             plain = json.loads(sk.superimpose(
@@ -702,8 +702,8 @@ class DrizzleTests(unittest.TestCase):
         guard that says the good resampler is still in place.
         """
         with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
-            offsets = self.dithered(root, count=12)
+            root = Path(folder).resolve()
+            self.dithered(root, count=12)
             placed = sk.register(folder, "*.jpg", demosaic=False)
             told = json.loads(sk.superimpose(
                 placed, "average", output=str(root / "avg")))
@@ -728,7 +728,7 @@ class DrizzleTests(unittest.TestCase):
 
     def test_the_finer_grid_is_filled_by_enough_frames(self):
         with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
+            root = Path(folder).resolve()
             self.dithered(root, count=16)
             placed = sk.register(folder, "*.jpg", demosaic=False)
             told = json.loads(sk.superimpose(
@@ -738,7 +738,7 @@ class DrizzleTests(unittest.TestCase):
 
     def test_a_drop_cannot_be_larger_than_a_pixel_or_smaller_than_a_speck(self):
         with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
+            root = Path(folder).resolve()
             self.dithered(root, count=4)
             placed = sk.register(folder, "*.jpg", demosaic=False)
             wide = json.loads(sk.superimpose(
@@ -749,7 +749,7 @@ class DrizzleTests(unittest.TestCase):
 
     def test_drizzle_honours_the_calibration_and_the_screen(self):
         with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
+            root = Path(folder).resolve()
             self.dithered(root, count=6)
             placed = json.loads(sk.register(
                 folder, "*.jpg", demosaic=False))
@@ -780,7 +780,7 @@ class DrizzleTests(unittest.TestCase):
 class ProgramTests(unittest.TestCase):
     def test_a_finished_stack_passes_its_check_and_says_so(self):
         with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
+            root = Path(folder).resolve()
             night(root, [(0.0, 0.0), (5.0, 2.0), (10.0, 4.0)])
             placed = sk.register(folder, "*.jpg", demosaic=False)
             told = sk.superimpose(placed, "clipped",
@@ -818,12 +818,12 @@ class DialogTests(unittest.TestCase):
         from opencull_qt.superimpose import SuperimposeDialog
 
         with tempfile.TemporaryDirectory() as folder:
-            night(Path(folder), [(0.0, 0.0), (4.0, 1.0)])
+            night(Path(folder).resolve(), [(0.0, 0.0), (4.0, 1.0)])
             dialog = SuperimposeDialog(folder, selection=["N000.jpg"])
             self.addCleanup(dialog.deleteLater)
             dialog.clipped.setChecked(True)
             dialog.focal.setValue(24.0)
-            dialog.where.setText(str(Path(folder) / "out"))
+            dialog.where.setText(str(Path(folder).resolve() / "out"))
             request = dialog.run_request()
             self.assertEqual(request["program"], "superimpose.kim")
             told = request["parameters"]
@@ -960,7 +960,7 @@ class ResamplingTests(unittest.TestCase):
             y = rng.uniform(20, HEIGHT - 20)
             bright = rng.uniform(0.2, 0.8)
             field += (bright * np.exp(
-                -(((grid_x - x) ** 2 + (grid_y - y) ** 2)) / 3.2)
+                -((grid_x - x) ** 2 + (grid_y - y) ** 2) / 3.2)
             )[..., None].astype(np.float32)
         return np.clip(field, 0, 1)
 
@@ -977,25 +977,17 @@ class ResamplingTests(unittest.TestCase):
         self.assertLess(self.peak_kept(soft, held), 0.92)
         self.assertGreater(self.peak_kept(sharp, held), 0.97)
 
-    def test_half_a_pixel_there_and_back_comes_back(self):
+    def round_trip_error(self, move):
+        """Half a pixel there and half a pixel back, against the original."""
         held = self.starry()
         inner = (slice(20, -20), slice(20, -20))
-        for tag, move in (("bilinear", lambda a, s: sk._warped(a, 0.0, s)),
-                          ("lanczos", sk._lanczos_shift)):
-            back = move(move(held, (0.5, 0.5)), (-0.5, -0.5))
-            error = float(np.abs(back[inner] - held[inner]).mean())
-            if tag == "lanczos":
-                self.assertLess(error, sharp_error)
-            else:
-                sharp_error = error
-        # Named so the failure reads: lanczos must beat bilinear.
-        self.assertLess(
-            float(np.abs(sk._lanczos_shift(sk._lanczos_shift(
-                held, (0.5, 0.5)), (-0.5, -0.5))[inner]
-                - held[inner]).mean()),
-            float(np.abs(sk._warped(sk._warped(
-                held, 0.0, (0.5, 0.5)), 0.0, (-0.5, -0.5))[inner]
-                - held[inner]).mean()))
+        back = move(move(held, (0.5, 0.5)), (-0.5, -0.5))
+        return float(np.abs(back[inner] - held[inner]).mean())
+
+    def test_half_a_pixel_there_and_back_comes_back(self):
+        soft = self.round_trip_error(lambda a, s: sk._warped(a, 0.0, s))
+        sharp = self.round_trip_error(sk._lanczos_shift)
+        self.assertLess(sharp, soft)
 
     def test_a_whole_pixel_move_is_not_a_resample(self):
         held = self.starry()
@@ -1070,7 +1062,7 @@ class FrameWeightTests(unittest.TestCase):
 
     def test_registering_writes_down_how_grainy_each_frame_was(self):
         with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
+            root = Path(folder).resolve()
             turning_night(root, [0.0, 0.0, 0.0])
             told = json.loads(sk.register(folder, "*.jpg", demosaic=False))
         for item in told["frames"]:

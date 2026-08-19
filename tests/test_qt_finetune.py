@@ -46,7 +46,7 @@ class FineTunePageTests(unittest.TestCase):
 
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self._temporary.name)
+        self.root = Path(self._temporary.name).resolve()
         self.report_path, self.photos_path = build_shoot(self.root)
         self.report = load_report(self.report_path)
         self.photos = PhotoStore(self.photos_path, self.root / "cache")
@@ -588,7 +588,8 @@ class FineTunePageTests(unittest.TestCase):
         gui_thread = threading.get_ident()
         seen = {}
 
-        outbox = self.deliverable(page)
+        # Called for the folder it prepares, not for what it returns.
+        self.deliverable(page)
 
         def slow_render(*args, **kw):
             seen["thread"] = threading.get_ident()
@@ -609,9 +610,7 @@ class FineTunePageTests(unittest.TestCase):
         self.assertIn("Exported", page.status.text())
 
     def test_an_adjusted_as_shot_export_is_its_own_variant(self):
-        import time
 
-        from PySide6.QtWidgets import QApplication
 
         page = self.page()
         page.show_photo(NAMES[0])
@@ -903,8 +902,8 @@ class FineTunePageTests(unittest.TestCase):
     def test_a_clipped_wb_click_refuses(self):
         page = self.page()
         page._picking_for = "@wb"
-        from PySide6.QtGui import QColor, QImage, QPixmap
         from PySide6.QtCore import QPointF
+        from PySide6.QtGui import QColor, QImage, QPixmap
 
         image = QImage(64, 48, QImage.Format.Format_RGB888)
         image.fill(QColor(255, 255, 255))
@@ -2038,7 +2037,7 @@ class RecipeFileTests(FineTunePageTests):
         page.changes = {"+insert": [{"op": "detail.dehaze", "value": 12.0}]}
         applied = adjustments.apply(page.recipe, page.changes)
         with temporary_files.TemporaryDirectory() as temporary:
-            target = Path(temporary) / "look.recipe.json"
+            target = Path(temporary).resolve() / "look.recipe.json"
             with unittest.mock.patch(
                     "PySide6.QtWidgets.QFileDialog.getSaveFileName",
                     return_value=(str(target), "")):

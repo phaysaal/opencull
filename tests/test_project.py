@@ -26,14 +26,14 @@ class PortableProjectTests(unittest.TestCase):
 
     def test_a_new_project_hides_its_managed_directory(self):
         with tempfile.TemporaryDirectory() as temporary:
-            source = Path(temporary) / "photos"
+            source = Path(temporary).resolve() / "photos"
             source.mkdir()
             path, _ = load_or_create_folder_project(source, "Shoot")
             self.assertEqual(path.parent.name, ".darkimiya")
 
     def test_a_visible_era_project_keeps_its_directory(self):
         with tempfile.TemporaryDirectory() as temporary:
-            source = Path(temporary) / "photos"
+            source = Path(temporary).resolve() / "photos"
             (source / "Darkimiya").mkdir(parents=True)
             path, _ = load_or_create_folder_project(source, "Shoot")
             self.assertEqual(path.parent.name, "Darkimiya")
@@ -41,7 +41,7 @@ class PortableProjectTests(unittest.TestCase):
 
     def test_a_moved_folder_re_anchors_every_recorded_path(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             old_home = root / "on-the-laptop"
             old_home.mkdir()
             path, _ = load_or_create_folder_project(old_home, "Tour")
@@ -66,7 +66,7 @@ class PortableProjectTests(unittest.TestCase):
 
     def test_healing_leaves_paths_outside_the_folder_alone(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             old_home = root / "before"
             old_home.mkdir()
             path, _ = load_or_create_folder_project(old_home, "Tour")
@@ -83,7 +83,7 @@ class PortableProjectTests(unittest.TestCase):
     def test_a_sibling_prefix_folder_is_not_rewritten(self):
         """/home/a must never capture /home/a-archive's paths."""
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             old_home = root / "tour"
             old_home.mkdir()
             path, _ = load_or_create_folder_project(old_home, "Tour")
@@ -101,7 +101,7 @@ class PortableProjectTests(unittest.TestCase):
         from opencull_gui.project_catalog import ProjectCatalog
 
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             old_home = root / "photos"
             old_home.mkdir()
             catalog = ProjectCatalog(root / "support" / "projects.json")
@@ -121,7 +121,7 @@ class PortableProjectTests(unittest.TestCase):
 class ProjectTests(unittest.TestCase):
     def test_project_is_versioned_and_updateable(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             source = root / "photos"
             source.mkdir()
             manifest = root / "project.json"
@@ -145,7 +145,7 @@ class ProjectTests(unittest.TestCase):
 
     def test_folder_project_creates_inspectable_managed_layout(self):
         with tempfile.TemporaryDirectory() as temporary:
-            source = Path(temporary) / "photos"
+            source = Path(temporary).resolve() / "photos"
             source.mkdir()
             path, value = load_or_create_folder_project(source, "Family")
             self.assertEqual(path, project_manifest_path(source))
@@ -158,7 +158,7 @@ class ProjectTests(unittest.TestCase):
 
     def test_existing_legacy_manifest_is_opened_without_silent_migration(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             source = root / "photos"; source.mkdir()
             legacy = root / "trip.opencull-project.json"
             legacy.write_text(
@@ -170,7 +170,7 @@ class ProjectTests(unittest.TestCase):
 
     def test_explicit_legacy_migration_preserves_manifest_and_unknown_evidence(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             source = root / "photos"; source.mkdir()
             evidence = root / "report.json"; evidence.write_text('{"report":true}\n')
             legacy = root / "trip.opencull-project.json"
@@ -220,7 +220,7 @@ class ProjectTests(unittest.TestCase):
 
     def test_render_registration_appends_history(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary); source = root / "photos"; source.mkdir()
+            root = Path(temporary).resolve(); source = root / "photos"; source.mkdir()
             manifest = root / "project.json"; create_project(manifest, "Trip", source)
             output = root / "render.jpg"; output.write_bytes(b"render")
             value = register_render(manifest, {"created_at": "now",
@@ -232,7 +232,7 @@ class ProjectTests(unittest.TestCase):
 
     def test_intact_legacy_renders_are_linked_without_moving_files(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary); source = root / "photos"; source.mkdir()
+            root = Path(temporary).resolve(); source = root / "photos"; source.mkdir()
             current = root / "current.json"
             legacy = root / "legacy.json"
             create_project(current, "Trip", source)
@@ -258,7 +258,7 @@ class ProjectTests(unittest.TestCase):
 
     def test_supervised_outputs_are_registered_by_stage_without_duplicates(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary); source = root / "photos"; source.mkdir()
+            root = Path(temporary).resolve(); source = root / "photos"; source.mkdir()
             manifest = root / "project.json"; create_project(manifest, "Trip", source)
             report = root / "report.json"; report.write_text('{"ok":true}\n')
             first = register_job_output(manifest, {

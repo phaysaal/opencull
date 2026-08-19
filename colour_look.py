@@ -466,7 +466,8 @@ def main(argv: list[str] | None = None) -> int:
     std.add_argument("--name", default="Darkimiya Standard")
     std.add_argument("--camera", default="",
                      help="also assign as this camera model's default")
-    listing = sub.add_parser("cameras", help="which cameras wear a look")
+    # Registered for its side effect; the parser object is not needed.
+    sub.add_parser("cameras", help="which cameras wear a look")
     args = parser.parse_args(argv)
     if args.command == "cameras":
         from opencull_gui import cameralooks

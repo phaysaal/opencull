@@ -12,7 +12,7 @@ from opencull_gui.tuning import TuningLedger
 class TuningLedgerTests(unittest.TestCase):
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()
-        self.path = Path(self._temporary.name) / "finetune-state.json"
+        self.path = Path(self._temporary.name).resolve() / "finetune-state.json"
         self.addCleanup(self._temporary.cleanup)
 
     def test_a_profile_round_trips_through_disk(self):

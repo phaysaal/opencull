@@ -32,7 +32,7 @@ KEEP = {"g1": ["A1.JPG"], "g2": ["B1.JPG"], "g3": ["C1.JPG", "C2.JPG"]}
 class NarrowSelectionTests(unittest.TestCase):
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()
-        root = Path(self._temporary.name)
+        root = Path(self._temporary.name).resolve()
         self.photos = root / "photos"
         self.photos.mkdir()
         for names in CLUSTERS.values():

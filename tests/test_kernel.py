@@ -249,7 +249,7 @@ class KernelTests(unittest.TestCase):
             "manifest-1", groups, [first], 1, "family")
 
         with tempfile.TemporaryDirectory() as temporary:
-            path = Path(temporary) / "checkpoint.json"
+            path = Path(temporary).resolve() / "checkpoint.json"
             path.write_text(checkpoint, encoding="utf-8")
             loaded = kernel.load_checkpoint(
                 str(path), "manifest-1", groups, 1, "family", True)

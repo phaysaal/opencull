@@ -183,12 +183,12 @@ class MimicTests(unittest.TestCase):
 
     def test_raws_find_their_sibling_jpegs(self):
         with tempfile.TemporaryDirectory() as folder:
-            raw = Path(folder) / "DSCF0001.RAF"
+            raw = Path(folder).resolve() / "DSCF0001.RAF"
             raw.write_bytes(b"x")
-            (Path(folder) / "DSCF0001.JPG").write_bytes(b"x")
+            (Path(folder).resolve() / "DSCF0001.JPG").write_bytes(b"x")
             pairs = cl._paired([str(raw)])
             self.assertEqual(pairs[0][1].name, "DSCF0001.JPG")
-            lonely = Path(folder) / "DSCF0002.RAF"
+            lonely = Path(folder).resolve() / "DSCF0002.RAF"
             lonely.write_bytes(b"x")
             with self.assertRaises(cl.LookError):
                 cl._paired([str(lonely)])
@@ -206,9 +206,9 @@ class KeepingALookTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             kept = cl.save_look(
                 "Test standard", cl.standard_look(100.0),
-                intent="test", root=Path(folder))
+                intent="test", root=Path(folder).resolve())
             self.assertEqual(kept["name"], "Test standard")
-            listed = presets.saved(Path(folder))
+            listed = presets.saved(Path(folder).resolve())
             self.assertEqual(len(listed), 1)
             ops = listed[0]["operations"]
             self.assertEqual(ops[-1]["op"], "color.warp")
@@ -221,8 +221,8 @@ class LookThroughTheStripTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as folder:
             cl.save_look("Fuji daylight", cl.standard_look(100.0),
-                         root=Path(folder))
-            look = presets.saved(Path(folder))[0]
+                         root=Path(folder).resolve())
+            look = presets.saved(Path(folder).resolve())[0]
             recipe = presets.recipe_for(look, "A.RAF", "raw")
             self.assertIn("color.warp",
                           [op["op"] for op in recipe["operations"]])
@@ -262,7 +262,7 @@ class LearnLookProgramTests(unittest.TestCase):
         import look_kernel
 
         with tempfile.TemporaryDirectory() as folder:
-            with self.shoot(Path(folder)):
+            with self.shoot(Path(folder).resolve()):
                 told = look_kernel.learn_look(
                     folder, "*.tif", "Warm test look", 12)
             self.assertTrue(look_kernel.look_valid(told))
@@ -276,7 +276,7 @@ class LearnLookProgramTests(unittest.TestCase):
             import os
             held = os.environ.get("DARKIMIYA_PRESETS")
             os.environ["DARKIMIYA_PRESETS"] = str(
-                Path(folder) / "presets")
+                Path(folder).resolve() / "presets")
             try:
                 where = Path(look_kernel.look_home(told))
                 where.write_text(told, encoding="utf-8")

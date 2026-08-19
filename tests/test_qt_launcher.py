@@ -1377,7 +1377,7 @@ class ProvidersDialogTests(unittest.TestCase):
 
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()
-        root = Path(self._temporary.name)
+        root = Path(self._temporary.name).resolve()
         self.store = ProviderStore(
             root / "providers.json", root,
             keychain=credentials.FileCredentialStore(root / "creds.json"))
@@ -1441,7 +1441,7 @@ class CatalogRemovalTests(unittest.TestCase):
 
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self._temporary.name)
+        self.root = Path(self._temporary.name).resolve()
         self.shoot = self.root / "shoot"
         self.shoot.mkdir()
         for index in range(3):

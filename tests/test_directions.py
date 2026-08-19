@@ -46,7 +46,7 @@ class FakeReviews:
 class DirectionsTests(unittest.TestCase):
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self._temporary.name)
+        self.root = Path(self._temporary.name).resolve()
         self.recipes = self.root / "Recipes"
         self.recipes.mkdir(parents=True)
         self.shortlist_path = self.root / "shoot.professional-shortlist.json"

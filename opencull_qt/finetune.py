@@ -24,7 +24,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QObject, QRunnable, QSize, Qt, QThreadPool, Signal
+from PySide6.QtCore import QSize, Qt, QThreadPool, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -519,7 +519,7 @@ class PaintOverlay(QWidget):
             self.stroke_done.emit()
 
     def paintEvent(self, event) -> None:       # noqa: N802 - Qt naming
-        from PySide6.QtGui import QColor, QPainter, QPixmap
+        from PySide6.QtGui import QPainter, QPixmap
 
         if self.map is None:
             return

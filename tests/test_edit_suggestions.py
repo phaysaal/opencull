@@ -62,7 +62,7 @@ class EditSuggestionKernelTests(unittest.TestCase):
 
     def test_selected_photos_become_bound_candidates(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos, shortlist, review = self.make_context(root)
             request = build_edit_request(
                 str(shortlist), str(review), str(photos))
@@ -72,7 +72,7 @@ class EditSuggestionKernelTests(unittest.TestCase):
 
     def test_three_distinct_directions_form_valid_report(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos, shortlist, review = self.make_context(root)
             request = build_edit_request(
                 str(shortlist), str(review), str(photos))
@@ -165,7 +165,7 @@ class EditSuggestionKernelTests(unittest.TestCase):
 
     def test_targeted_request_and_kimiya_rejection_marker(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos, shortlist, review = self.make_context(root)
             request = json.loads(build_edit_request(
                 str(shortlist), str(review), str(photos), "", "A.JPG"))
@@ -181,7 +181,7 @@ class EditSuggestionKernelTests(unittest.TestCase):
 
     def test_invalid_generation_is_a_reportable_per_photo_rejection(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos, shortlist, review = self.make_context(root)
             request = build_edit_request(
                 str(shortlist), str(review), str(photos))
@@ -194,7 +194,7 @@ class EditSuggestionKernelTests(unittest.TestCase):
 
     def test_report_records_personal_style_provenance(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos, shortlist, review = self.make_context(root)
             style = root / "style.json"
             style.write_text(json.dumps({
@@ -222,7 +222,7 @@ class WhatTheModelSeesTests(EditSuggestionKernelTests):
         # workspace can be built: the honest answer is the camera's own
         # rendering, said out loud on the entry rather than assumed.
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos, shortlist, review = self.make_context(root)
             request = build_edit_request(
                 str(shortlist), str(review), str(photos))
@@ -236,7 +236,7 @@ class WhatTheModelSeesTests(EditSuggestionKernelTests):
 
     def test_the_prompt_says_which_rendering_is_on_the_table(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos, shortlist, review = self.make_context(root)
             request = build_edit_request(
                 str(shortlist), str(review), str(photos))
@@ -247,7 +247,7 @@ class WhatTheModelSeesTests(EditSuggestionKernelTests):
 
     def test_a_baseline_is_shown_and_named_when_one_can_be_rendered(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos, shortlist, review = self.make_context(root)
             request = build_edit_request(
                 str(shortlist), str(review), str(photos))
@@ -294,7 +294,7 @@ class InertAnswerTests(EditSuggestionKernelTests):
     def test_a_recipe_that_compiles_to_nothing_is_refused(self):
         """The exact answer one live frame came back with."""
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos, shortlist, review = self.make_context(root)
             request = build_edit_request(
                 str(shortlist), str(review), str(photos))
@@ -311,7 +311,7 @@ class InertAnswerTests(EditSuggestionKernelTests):
 
     def test_a_recipe_with_a_real_adjustment_is_accepted(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos, shortlist, review = self.make_context(root)
             request = build_edit_request(
                 str(shortlist), str(review), str(photos))
@@ -331,7 +331,7 @@ class InertAnswerTests(EditSuggestionKernelTests):
 
     def test_the_prompt_asks_for_an_empty_section_not_a_sentence(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos, shortlist, review = self.make_context(root)
             request = build_edit_request(
                 str(shortlist), str(review), str(photos))
@@ -348,7 +348,7 @@ class InertAnswerTests(EditSuggestionKernelTests):
         than the frames they started from -- every one of them.
         """
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos, shortlist, review = self.make_context(root)
             request = build_edit_request(
                 str(shortlist), str(review), str(photos))
@@ -416,7 +416,7 @@ class PersonalStyleChoiceTests(EditSuggestionKernelTests):
 
     def test_every_style_is_offered_to_every_photograph(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             _request, candidate = self.request_with(
                 root, "Coastal twilight", "Heritage street", "Child portrait")
             offered = candidate["style_profiles"]
@@ -441,7 +441,7 @@ class PersonalStyleChoiceTests(EditSuggestionKernelTests):
         profile and never reached the model meant to be using them.
         """
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             _request, candidate = self.request_with(root, "Heritage street")
             menu = edit_direction_prompt(candidate, "professional")
             self.assertIn("which colours Heritage street leads with", menu)
@@ -450,7 +450,7 @@ class PersonalStyleChoiceTests(EditSuggestionKernelTests):
 
     def test_the_chosen_style_is_resolved_to_the_file_it_came_from(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             request, candidate = self.request_with(
                 root, "Coastal twilight", "Heritage street")
             direction = self.direction(2, "stone village in hard midday sun")
@@ -474,7 +474,7 @@ class PersonalStyleChoiceTests(EditSuggestionKernelTests):
 
     def test_a_style_nobody_offered_is_not_a_provenance(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             _request, candidate = self.request_with(root, "Coastal twilight")
             for invented in (2, 0, -1, 99):
                 self.assertFalse(
@@ -484,7 +484,7 @@ class PersonalStyleChoiceTests(EditSuggestionKernelTests):
 
     def test_no_styles_offered_means_the_only_honest_choice_is_none(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos, shortlist, review = self.make_context(root)
             request = build_edit_request(
                 str(shortlist), str(review), str(photos))
@@ -496,7 +496,7 @@ class PersonalStyleChoiceTests(EditSuggestionKernelTests):
 
     def test_an_unreadable_choice_is_no_choice_rather_than_the_first(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             _request, candidate = self.request_with(root, "Coastal twilight")
             direction = self.direction("the first one")
             self.assertEqual(direction["personal_style_choice"], -1)

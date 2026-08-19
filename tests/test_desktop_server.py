@@ -74,7 +74,7 @@ class FakeProviders:
 class DesktopBridgeTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self.temporary.name)
+        self.root = Path(self.temporary.name).resolve()
         self.jobs = FakeJobs()
         self.providers = FakeProviders()
         self.projects = ProjectCatalog(self.root / "projects.json")
@@ -195,7 +195,7 @@ class DesktopBridgeTests(unittest.TestCase):
 
     def test_completed_job_returns_an_embeddable_review_session(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             report = root / "shoot-results.json"
             photos = root / "photos"
             report.write_text("{}", encoding="utf-8")
@@ -249,7 +249,7 @@ class DesktopBridgeTests(unittest.TestCase):
 class JobRelinkTests(unittest.TestCase):
     def test_stopped_job_source_is_relinked_only_by_explicit_request(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             original = root / "Original"
             replacement = root / "Reconnected"
             original.mkdir()
@@ -270,7 +270,7 @@ class JobRelinkTests(unittest.TestCase):
 
     def test_remove_preserves_photos_and_result_but_can_clean_resume_files(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos = root / "Photos"
             photos.mkdir()
             source_photo = photos / "A.JPG"
@@ -299,7 +299,7 @@ class JobRelinkTests(unittest.TestCase):
 
     def test_new_jobs_keep_results_in_the_folder_owned_project(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             resources = root / "BundleResources"
             results = root / "ApplicationSupportResults"
             photos = root / "Photos"

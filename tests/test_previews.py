@@ -29,7 +29,7 @@ def write_photo(path: Path, size: tuple[int, int] = (3000, 2000)) -> Path:
 class DecodeOnceTests(unittest.TestCase):
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self._temporary.name)
+        self.root = Path(self._temporary.name).resolve()
         self.photos = self.root / "photos"
         write_photo(self.photos / "A.JPG")
         self.store = PhotoStore(self.photos, self.root / "cache")
@@ -73,7 +73,7 @@ class DecodeOnceTests(unittest.TestCase):
 class CacheStatsTests(unittest.TestCase):
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self._temporary.name)
+        self.root = Path(self._temporary.name).resolve()
         self.photos = self.root / "photos"
         write_photo(self.photos / "A.JPG")
         self.store = PhotoStore(self.photos, self.root / "cache")
@@ -173,7 +173,7 @@ class FolderClassificationTests(unittest.TestCase):
 
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self._temporary.name)
+        self.root = Path(self._temporary.name).resolve()
 
     def tearDown(self):
         self._temporary.cleanup()
@@ -222,7 +222,7 @@ class FolderSampleTests(unittest.TestCase):
 
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self._temporary.name)
+        self.root = Path(self._temporary.name).resolve()
 
     def tearDown(self):
         self._temporary.cleanup()

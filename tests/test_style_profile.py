@@ -46,7 +46,7 @@ class StyleProfileTests(unittest.TestCase):
 
     def test_request_accepts_kimiya_numeric_limit_for_selection_manifest(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             first = root / "a.jpg"
             second = root / "b.jpg"
             Image.new("RGB", (8, 8), "teal").save(first)
@@ -65,7 +65,7 @@ class StyleProfileTests(unittest.TestCase):
 
     def test_request_hashes_examples_and_profile_updates_revision(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             Image.new("RGB", (8, 8), "teal").save(root / "a.jpg")
             request = build_style_request(str(root))
             fields = {

@@ -67,7 +67,7 @@ class RecipeCompilerTests(unittest.TestCase):
 
     def test_compiles_three_styles_per_checkpoint_entry(self):
         with tempfile.TemporaryDirectory() as temporary:
-            path = Path(temporary) / "checkpoint.json"
+            path = Path(temporary).resolve() / "checkpoint.json"
             entry = {"photo": "A.JPG", "guardrails": "Preserve subject."}
             for style in ("standard", "signature", "creative"):
                 entry[f"{style}_title"] = style
@@ -114,7 +114,7 @@ class RecipeCompilerTests(unittest.TestCase):
 
     def test_checkpoint_includes_personal_recipe_when_present(self):
         with tempfile.TemporaryDirectory() as temporary:
-            path = Path(temporary) / "checkpoint.json"
+            path = Path(temporary).resolve() / "checkpoint.json"
             entry = {"photo": "A.JPG", "guardrails": "Preserve subject."}
             for style in ("standard", "signature", "creative", "personal"):
                 entry[f"{style}_title"] = style

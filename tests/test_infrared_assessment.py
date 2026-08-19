@@ -51,7 +51,7 @@ class NeutralisingTests(unittest.TestCase):
 
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self._temporary.name)
+        self.root = Path(self._temporary.name).resolve()
         self.addCleanup(self._temporary.cleanup)
 
     def channels(self, image):
@@ -105,7 +105,7 @@ class WhatIsShownTests(unittest.TestCase):
 
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self._temporary.name)
+        self.root = Path(self._temporary.name).resolve()
         self.addCleanup(self._temporary.cleanup)
 
     def test_the_two_renderings_are_filed_apart(self):
@@ -147,7 +147,7 @@ class MeasuredEvidenceTests(unittest.TestCase):
 
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self._temporary.name)
+        self.root = Path(self._temporary.name).resolve()
         self.addCleanup(self._temporary.cleanup)
 
     def test_infrared_evidence_is_taken_from_the_neutralised_frame(self):
@@ -205,7 +205,7 @@ class BundleTests(unittest.TestCase):
 
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self._temporary.name)
+        self.root = Path(self._temporary.name).resolve()
         self.photos = self.root / "photos"
         self.photos.mkdir(parents=True)
         infrared_frame(self.photos / "A.JPG")

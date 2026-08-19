@@ -20,7 +20,7 @@ from darktable_engine import (
 class DarktableEngineTests(unittest.TestCase):
     def test_isolated_default_render_records_engine_and_does_not_write_sidecar(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             executable = root / "darktable-cli"
             executable.write_text("test executable", encoding="utf-8")
             executable.chmod(0o755)

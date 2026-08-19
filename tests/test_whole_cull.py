@@ -65,7 +65,7 @@ def build_context(root: Path):
 class ApproveRemainingTests(unittest.TestCase):
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self._temporary.name)
+        self.root = Path(self._temporary.name).resolve()
         self.report, self.photos, self.reviews = build_context(self.root)
         self.addCleanup(self._temporary.cleanup)
 
@@ -100,7 +100,7 @@ class ReviewPageWholeCullTests(unittest.TestCase):
 
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self._temporary.name)
+        self.root = Path(self._temporary.name).resolve()
         self.report, self.photos_root, self.reviews = build_context(self.root)
         self.addCleanup(self._temporary.cleanup)
 

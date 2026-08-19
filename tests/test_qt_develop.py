@@ -139,7 +139,7 @@ class SuggestedTreatmentTests(unittest.TestCase):
 
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self._temporary.name)
+        self.root = Path(self._temporary.name).resolve()
         self.report_path, self.photos_path = build_shoot(self.root)
         self.report = load_report(self.report_path)
         self.photos = PhotoStore(self.photos_path, self.root / "cache")
@@ -235,7 +235,7 @@ class TreatmentEntryTests(unittest.TestCase):
 
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()
-        root = Path(self._temporary.name)
+        root = Path(self._temporary.name).resolve()
         self.report_path, self.photos_path = build_shoot(root)
         self.report = load_report(self.report_path)
         self.photos = PhotoStore(self.photos_path, root / "cache")
@@ -376,7 +376,7 @@ class TreatmentRoundsTests(unittest.TestCase):
 
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()
-        root = Path(self._temporary.name)
+        root = Path(self._temporary.name).resolve()
         self.report_path, self.photos_path = build_shoot(root)
         self.report = load_report(self.report_path)
         self.photos = PhotoStore(self.photos_path, root / "cache")
@@ -512,7 +512,7 @@ class FinetuneDoorTests(unittest.TestCase):
 
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()
-        root = Path(self._temporary.name)
+        root = Path(self._temporary.name).resolve()
         self.report_path, self.photos_path = build_shoot(root)
         self.report = load_report(self.report_path)
         self.photos = PhotoStore(self.photos_path, root / "cache")
@@ -740,7 +740,6 @@ class TimelapseDoorTests(FinetuneDoorTests):
         self.assertLessEqual(y1, 2640)
 
     def test_marking_a_box_fills_the_field_from_the_picker(self):
-        from PySide6.QtCore import QRect
 
         from opencull_qt.timelapse import BoxPicker, TimelapseDialog
 
@@ -845,7 +844,7 @@ class FoldedIntentTests(unittest.TestCase):
         import tempfile
 
         with tempfile.TemporaryDirectory() as folder:
-            page = self.page_with_intent(Path(folder))
+            page = self.page_with_intent(Path(folder).resolve())
             page.resize(1200, 800)
             page._say_intent(
                 "A very long story about dusk being held back " * 8)
@@ -859,7 +858,7 @@ class FoldedIntentTests(unittest.TestCase):
         import tempfile
 
         with tempfile.TemporaryDirectory() as folder:
-            page = self.page_with_intent(Path(folder))
+            page = self.page_with_intent(Path(folder).resolve())
             page.resize(1200, 800)
             page.intent_line.resize(300, 20)
             page._say_intent("Short.")
@@ -869,7 +868,7 @@ class FoldedIntentTests(unittest.TestCase):
         import tempfile
 
         with tempfile.TemporaryDirectory() as folder:
-            page = self.page_with_intent(Path(folder))
+            page = self.page_with_intent(Path(folder).resolve())
             page.resize(1200, 800)
             page._say_intent("A long story " * 30)
             page.intent_dot.setChecked(True)
@@ -887,7 +886,7 @@ class TreatmentMarkerTests(unittest.TestCase):
 
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()
-        root = Path(self._temporary.name)
+        root = Path(self._temporary.name).resolve()
         self.report_path, self.photos_path = build_shoot(root)
         self.report = load_report(self.report_path)
         self.photos = PhotoStore(self.photos_path, root / "cache")
@@ -1022,7 +1021,7 @@ class VerificationTests(unittest.TestCase):
 
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self._temporary.name)
+        self.root = Path(self._temporary.name).resolve()
         self.report_path, self.photos_path = build_shoot(self.root)
         self.report = load_report(self.report_path)
         self.photos = PhotoStore(self.photos_path, self.root / "cache")
@@ -1173,7 +1172,7 @@ class DevelopPageTests(unittest.TestCase):
 
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()
-        root = Path(self._temporary.name)
+        root = Path(self._temporary.name).resolve()
         self.report_path, self.photos_path = build_shoot(root)
         self.report = load_report(self.report_path)
         self.photos = PhotoStore(self.photos_path, root / "cache")
@@ -1202,7 +1201,7 @@ class DevelopPageTests(unittest.TestCase):
         from opencull_qt.previews import PreviewLoader
 
         assess_and_suggest(
-            Path(self._temporary.name), self.report_path, self.photos_path,
+            Path(self._temporary.name).resolve(), self.report_path, self.photos_path,
             marked=marked)
         loader = PreviewLoader(self.photos)
         page = DevelopPage(
@@ -1516,7 +1515,7 @@ class DevelopPageTests(unittest.TestCase):
 
         # Its own folder: a preset saved here must not still be in the
         # list when the next test asks what is offered.
-        mine = Path(self._temporary.name) / "my-presets"
+        mine = Path(self._temporary.name).resolve() / "my-presets"
         self.enterContext(mock.patch.dict(
             "os.environ", {presets.PRESETS_ENVIRONMENT: str(mine)}))
         presets.save("My own look", [{
@@ -1544,9 +1543,9 @@ class DevelopPageTests(unittest.TestCase):
 
         from opencull_gui.development import full_size
 
-        raw = Path(self._temporary.name) / "DSC00001.ARW"
+        raw = Path(self._temporary.name).resolve() / "DSC00001.ARW"
         raw.write_bytes(b"not really a raw")
-        small = Path(self._temporary.name) / "preview.jpg"
+        small = Path(self._temporary.name).resolve() / "preview.jpg"
         Image.new("RGB", (1616, 1080), (30, 30, 40)).save(small)
 
         class Sizes:
@@ -1567,9 +1566,9 @@ class DevelopPageTests(unittest.TestCase):
 
         from opencull_gui.development import full_size
 
-        raw = Path(self._temporary.name) / "DSC00002.ARW"
+        raw = Path(self._temporary.name).resolve() / "DSC00002.ARW"
         raw.write_bytes(b"damaged")
-        small = Path(self._temporary.name) / "preview2.jpg"
+        small = Path(self._temporary.name).resolve() / "preview2.jpg"
         Image.new("RGB", (1616, 1080), (30, 30, 40)).save(small)
         with mock.patch.dict(
             "sys.modules",
@@ -1580,7 +1579,7 @@ class DevelopPageTests(unittest.TestCase):
     def test_an_ordinary_photograph_is_its_own_size(self):
         from opencull_gui.development import full_size
 
-        path = Path(self._temporary.name) / "B.JPG"
+        path = Path(self._temporary.name).resolve() / "B.JPG"
         Image.new("RGB", (900, 600), (60, 60, 60)).save(path)
         self.assertEqual(full_size(path, path), 900)
 
@@ -1615,7 +1614,7 @@ class DevelopPageTests(unittest.TestCase):
         import opencull_gui.development as development
 
         assess_and_suggest(
-            Path(self._temporary.name), self.report_path, self.photos_path)
+            Path(self._temporary.name).resolve(), self.report_path, self.photos_path)
         from opencull_qt.develop import workspace_for
         workspace = workspace_for(self.report, self.photos.root, decoders=set())
 

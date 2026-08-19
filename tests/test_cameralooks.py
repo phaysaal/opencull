@@ -24,7 +24,7 @@ LOOK_OPS = [
 class StoreTests(unittest.TestCase):
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self._temporary.name)
+        self.root = Path(self._temporary.name).resolve()
         self.addCleanup(self._temporary.cleanup)
 
     def test_a_look_round_trips_by_camera_name(self):
@@ -112,7 +112,7 @@ class CameraModelTests(unittest.TestCase):
         from opencull_gui.scenes import camera_model
 
         with tempfile.TemporaryDirectory() as folder:
-            path = Path(folder) / "frame.jpg"
+            path = Path(folder).resolve() / "frame.jpg"
             exif = Image.Exif()
             exif[0x0110] = "FUJIFILM X-T5"
             Image.new("RGB", (32, 24), (90, 80, 70)).save(path, exif=exif)
@@ -122,10 +122,10 @@ class CameraModelTests(unittest.TestCase):
         from opencull_gui.scenes import camera_model
 
         with tempfile.TemporaryDirectory() as folder:
-            path = Path(folder) / "plain.jpg"
+            path = Path(folder).resolve() / "plain.jpg"
             Image.new("RGB", (32, 24), (90, 80, 70)).save(path)
             self.assertIsNone(camera_model(path))
-            self.assertIsNone(camera_model(Path(folder) / "absent.jpg"))
+            self.assertIsNone(camera_model(Path(folder).resolve() / "absent.jpg"))
 
 
 class PortabilityTests(unittest.TestCase):
@@ -149,7 +149,7 @@ class WornUnderEveryRenderTests(unittest.TestCase):
             self.skipTest("PySide6 is not installed")
         self.application = QApplication.instance() or QApplication([])
         self._temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self._temporary.name)
+        self.root = Path(self._temporary.name).resolve()
         self.addCleanup(self._temporary.cleanup)
         self._held = os.environ.get(cameralooks.LOOKS_ENVIRONMENT)
         os.environ[cameralooks.LOOKS_ENVIRONMENT] = str(

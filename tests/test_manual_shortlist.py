@@ -28,7 +28,7 @@ from tests.test_qt_develop import NAMES, build_shoot  # noqa: E402
 class ManualShortlistTests(unittest.TestCase):
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self._temporary.name)
+        self.root = Path(self._temporary.name).resolve()
         self.report_path, self.photos = build_shoot(self.root)
         self.report = load_report(self.report_path)
         self.destination = self.root / "by-hand.professional-shortlist.json"

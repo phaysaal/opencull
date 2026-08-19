@@ -15,10 +15,11 @@ from unittest.mock import patch
 
 import numpy as np
 import tifffile
+from kimiya_probe import kimiya_runs
 from PIL import Image
 
 from delivery_export_pipeline import run_delivery_export
-from opencull_desktop import run_release_smoke_test
+from opencull_desktop import run_release_smoke_test  # noqa: E402
 from opencull_gui.actions import (
     ActionController,
     ActionError,
@@ -99,7 +100,7 @@ class GuiReportTests(unittest.TestCase):
 
     def test_validates_and_indexes_report(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             report = load_report(self.write_report(root))
             self.assertEqual(report.photo_names, ("A.JPG", "B.JPG"))
             self.assertEqual(
@@ -107,14 +108,14 @@ class GuiReportTests(unittest.TestCase):
 
     def test_rejects_path_traversal(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             with self.assertRaisesRegex(ReportError, "unsafe"):
                 load_report(self.write_report(
                     root, report_data(("../outside.JPG", "B.JPG"))))
 
     def test_rejects_unknown_keeper(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             data = report_data()
             data["keep"][0]["photos"] = ["UNKNOWN.JPG"]
             with self.assertRaisesRegex(ReportError, "unknown selected"):
@@ -122,7 +123,7 @@ class GuiReportTests(unittest.TestCase):
 
     def test_indexes_1500_photo_report(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             names = [f"P{number:04d}.JPG" for number in range(1500)]
             data = {
                 "format": "opencull-report-v2",
@@ -149,7 +150,7 @@ class GuiReportTests(unittest.TestCase):
 class GuiPhotoTests(unittest.TestCase):
     def test_creates_and_reuses_thumbnail(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos = root / "photos"
             photos.mkdir()
             Image.new("RGB", (1200, 800), "orange").save(photos / "A.JPG")
@@ -164,7 +165,7 @@ class GuiPhotoTests(unittest.TestCase):
 
     def test_refuses_escape_and_missing_photo(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos = root / "photos"
             photos.mkdir()
             store = PhotoStore(photos, root / "cache")
@@ -175,7 +176,7 @@ class GuiPhotoTests(unittest.TestCase):
 
     def test_corrupt_cache_is_regenerated(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos = root / "photos"
             photos.mkdir()
             Image.new("RGB", (200, 100), "purple").save(photos / "A.JPG")
@@ -189,7 +190,7 @@ class GuiPhotoTests(unittest.TestCase):
 
     def test_external_drive_disconnect_and_reconnect(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos = root / "photos"
             photos.mkdir()
             Image.new("RGB", (80, 60), "red").save(photos / "A.JPG")
@@ -205,7 +206,7 @@ class GuiPhotoTests(unittest.TestCase):
 class RawSourceStoreTests(unittest.TestCase):
     def test_matches_external_raws_by_case_insensitive_filename_stem(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             report_path = root / "shoot-results.json"
             report_path.write_text(
                 json.dumps(report_data(("nested/DSCF0001.JPG", "DSCF0002.jpg"))),
@@ -232,7 +233,7 @@ class RawSourceStoreTests(unittest.TestCase):
 
     def test_persists_folder_and_reports_ambiguous_stem_matches(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             report_path = root / "shoot-results.json"
             report_path.write_text(
                 json.dumps(report_data(("A.JPG", "B.JPG"))),
@@ -377,7 +378,7 @@ class PreviewManagerTests(unittest.TestCase):
 class GuiManifestTests(unittest.TestCase):
     def test_loads_matching_measurements_and_rejects_mismatch(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             report_path = root / "report.json"
             report_path.write_text(json.dumps(report_data()), encoding="utf-8")
             report = load_report(report_path)
@@ -407,7 +408,7 @@ class GuiReviewTests(unittest.TestCase):
 
     def test_atomically_saves_and_reloads_human_decision(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             store, report = self.make_store(root)
             updated = store.update_cluster(
                 "group-0001", ["B.JPG"], "better smile", True, 0)
@@ -421,7 +422,7 @@ class GuiReviewTests(unittest.TestCase):
 
     def test_rejects_unknown_keeper_and_revision_conflict(self):
         with tempfile.TemporaryDirectory() as temporary:
-            store, _ = self.make_store(Path(temporary))
+            store, _ = self.make_store(Path(temporary).resolve())
             with self.assertRaisesRegex(ReviewError, "Unknown human keeper"):
                 store.update_cluster(
                     "group-0001", ["UNKNOWN.JPG"], "", True, 0)
@@ -432,7 +433,7 @@ class GuiReviewTests(unittest.TestCase):
 
     def test_stale_report_sidecar_is_read_only(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             store, report = self.make_store(root)
             store.update_cluster("group-0001", ["A.JPG"], "", True, 0)
             changed_data = report_data()
@@ -446,7 +447,7 @@ class GuiReviewTests(unittest.TestCase):
 
     def test_export_labels_human_and_unreviewed_sources(self):
         with tempfile.TemporaryDirectory() as temporary:
-            store, _ = self.make_store(Path(temporary))
+            store, _ = self.make_store(Path(temporary).resolve())
             store.update_cluster(
                 "group-0001", ["B.JPG"], "human choice", True, 0)
             exported = store.export()
@@ -455,7 +456,7 @@ class GuiReviewTests(unittest.TestCase):
 
     def test_photo_judgments_history_statistics_and_undo(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             store, _ = self.make_store(root)
             state = store.update_cluster(
                 "group-0001", ["B.JPG"], "better expression", True, 0,
@@ -484,7 +485,7 @@ class GuiReviewTests(unittest.TestCase):
 
     def test_old_review_sidecar_migrates_optional_phase5_fields(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             store, report = self.make_store(root)
             store.update_cluster(
                 "group-0001", ["A.JPG"], "legacy", True, 0)
@@ -500,7 +501,7 @@ class GuiReviewTests(unittest.TestCase):
 
     def test_rejects_invalid_photo_judgment(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             store, _ = self.make_store(root)
             with self.assertRaisesRegex(ReviewError, "between 0 and 5"):
                 store.update_cluster(
@@ -509,7 +510,7 @@ class GuiReviewTests(unittest.TestCase):
 
     def test_lightroom_xmp_zip_is_deterministic_and_nonmutating(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             store, _ = self.make_store(root)
             store.update_cluster(
                 "group-0001", ["B.JPG"], "", True, 0,
@@ -527,7 +528,7 @@ class GuiReviewTests(unittest.TestCase):
 
     def test_1500_cluster_review_history_reloads_after_restart(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             names = [f"P{number:04d}.JPG" for number in range(1500)]
             data = {
                 "format": "opencull-report-v2",
@@ -588,7 +589,7 @@ class GuiActionTests(unittest.TestCase):
 
     def test_selection_policies_and_nonmutating_exports(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             _, _, reviews = self.make_context(root)
             self.assertEqual(
                 policy_clusters(reviews, "human_only")[0]["keepers"], [])
@@ -605,7 +606,7 @@ class GuiActionTests(unittest.TestCase):
 
     def test_preflight_detects_collision(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             report, photos, reviews = self.make_context(root)
             reviews.update_cluster(
                 "group-0001", ["A.JPG"], "", True, 0)
@@ -621,7 +622,7 @@ class GuiActionTests(unittest.TestCase):
 
     def test_verified_copy_and_move_rollback(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             report, photos, reviews = self.make_context(root)
             reviews.update_cluster(
                 "group-0001", ["A.JPG"], "", True, 0)
@@ -657,7 +658,7 @@ class GuiActionTests(unittest.TestCase):
 
     def test_move_unselected_only(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             report, photos, reviews = self.make_context(root)
             reviews.update_cluster(
                 "group-0001", ["A.JPG"], "", True, 0)
@@ -679,7 +680,7 @@ class GuiActionTests(unittest.TestCase):
 
     def test_project_filter_quarantines_rejections_and_reserves_raws(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             report, photos, reviews = self.make_context(root)
             reviews.update_cluster(
                 "group-0001", ["A.JPG"], "final review", True, 0)
@@ -750,7 +751,7 @@ class GuiActionTests(unittest.TestCase):
 
     def test_final_cleanup_preserves_useful_raws_and_can_keep_every_raw(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             report, photos, reviews = self.make_context(root)
             reviews.update_cluster(
                 "group-0001", ["A.JPG"], "final review", True, 0)
@@ -830,7 +831,7 @@ class GuiActionTests(unittest.TestCase):
 
     def test_trash_unselected_is_verified_and_rollbackable(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             report, photos, reviews = self.make_context(root)
             reviews.update_cluster(
                 "group-0001", ["A.JPG"], "", True, 0)
@@ -859,7 +860,7 @@ class GuiActionTests(unittest.TestCase):
 
     def test_trash_refuses_selected_scope(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             report, photos, reviews = self.make_context(root)
             with self.assertRaisesRegex(
                     ActionError, "limited to unselected"):
@@ -870,7 +871,7 @@ class GuiActionTests(unittest.TestCase):
 
     def test_resume_finishes_pending_journal_items(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             report, photos, reviews = self.make_context(root)
             reviews.update_cluster(
                 "group-0001", ["A.JPG", "B.JPG"], "", True, 0)
@@ -890,7 +891,7 @@ class GuiActionTests(unittest.TestCase):
 
     def test_controller_discovers_only_valid_incomplete_report_journals(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             report, photos, reviews = self.make_context(root)
             reviews.update_cluster(
                 "group-0001", ["A.JPG", "B.JPG"], "", True, 0)
@@ -912,7 +913,7 @@ class GuiActionTests(unittest.TestCase):
 
     def test_companion_and_cluster_inspection_layout(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             report, photos, reviews = self.make_context(root)
             (photos.root / "A.RAF").write_bytes(b"raw companion")
             reviews.update_cluster(
@@ -934,7 +935,7 @@ class GuiActionTests(unittest.TestCase):
 
     def test_contact_sheet_export(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             _, photos, reviews = self.make_context(root)
             reviews.update_cluster(
                 "group-0001", ["A.JPG", "B.JPG"], "", True, 0)
@@ -1018,7 +1019,7 @@ class GuiFaceTests(unittest.TestCase):
 
     def test_local_index_clusters_and_never_exposes_embeddings(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             engine = FakeFaceEngine()
             store, _, _ = self.make_store(root, engine)
             try:
@@ -1041,7 +1042,7 @@ class GuiFaceTests(unittest.TestCase):
 
     def test_empty_database_can_rebind_report_hash_only(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             store, report, reviews = self.make_store(root)
             database = store.path
             photos = store.photos
@@ -1068,7 +1069,7 @@ class GuiFaceTests(unittest.TestCase):
 
     def test_populated_database_never_rebinds_report_hash(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             store, report, reviews = self.make_store(root)
             database = store.path
             photos = store.photos
@@ -1092,7 +1093,7 @@ class GuiFaceTests(unittest.TestCase):
 
     def test_rename_split_merge_forget_and_coverage(self):
         with tempfile.TemporaryDirectory() as temporary:
-            store, _, reviews = self.make_store(Path(temporary))
+            store, _, reviews = self.make_store(Path(temporary).resolve())
             try:
                 reviews.update_cluster(
                     "group-0001", ["A.JPG"], "", True, 0)
@@ -1126,7 +1127,7 @@ class GuiFaceTests(unittest.TestCase):
 
     def test_restart_skips_unchanged_photos_and_delete_all(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             first_engine = FakeFaceEngine()
             store, report, reviews = self.make_store(root, first_engine)
             store.start()
@@ -1149,7 +1150,7 @@ class GuiFaceTests(unittest.TestCase):
 
     def test_face_crop_and_report_binding(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             store, _, _ = self.make_store(root)
             try:
                 store.start()
@@ -1184,7 +1185,7 @@ class GuiFaceTests(unittest.TestCase):
                 }]
 
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos = root / "photos"
             photos.mkdir()
             names = [f"P{number:04d}.JPG" for number in range(1500)]
@@ -1267,7 +1268,7 @@ class GuiProviderTests(unittest.TestCase):
 
     def test_secret_is_write_only_and_never_materialized(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             store, keychain = self.make_store(root)
             secret = "super-secret-provider-token"
             public = store.save(provider_data(), 0, secret)
@@ -1287,7 +1288,7 @@ class GuiProviderTests(unittest.TestCase):
 
     def test_migrates_only_opencull_default_models_to_affordable_panel(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             store, keychain = self.make_store(root)
             saved = store.save(provider_data(), 0, "private-token")
             profile_id = saved["profiles"][0]["id"]
@@ -1329,7 +1330,7 @@ class GuiProviderTests(unittest.TestCase):
 
     def test_materializes_professional_program_without_credentials(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             store, _ = self.make_store(root)
             saved = store.save(provider_data(), 0, "private-token")
             profile = saved["profiles"][0]
@@ -1346,7 +1347,7 @@ class GuiProviderTests(unittest.TestCase):
 
     def test_materializes_per_job_openrouter_model_override(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             store, _ = self.make_store(root)
             saved = store.save(provider_data(), 0, "private-token")
             profile = saved["profiles"][0]
@@ -1368,7 +1369,7 @@ class GuiProviderTests(unittest.TestCase):
 
     def test_materializes_immutable_custom_judgment_policy(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             store, _ = self.make_store(root)
             saved = store.save(provider_data(), 0, "private-token")
             profile = saved["profiles"][0]
@@ -1387,17 +1388,22 @@ class GuiProviderTests(unittest.TestCase):
                 (Path(manifest["program_path"]).parent / "manifest.json")
                 .read_text(encoding="utf-8"))
             self.assertEqual(stored["judgment_policy"], policy)
-            checker = JobManager(
-                root / "check-jobs.json", Path(__file__).resolve().parents[1],
-                autostart=False)
-            try:
-                checker._check_program(Path(manifest["program_path"]))
-            finally:
-                checker.shutdown()
+            # And it compiles -- where there is a compiler to ask. The
+            # Kimiya runtime is a separate checkout beside this one, so a
+            # build machine that has only this repository can still hold
+            # everything above to account.
+            if kimiya_runs():
+                checker = JobManager(
+                    root / "check-jobs.json",
+                    Path(__file__).resolve().parents[1], autostart=False)
+                try:
+                    checker._check_program(Path(manifest["program_path"]))
+                finally:
+                    checker.shutdown()
 
     def test_rejects_invalid_judgment_policy(self):
         with tempfile.TemporaryDirectory() as temporary:
-            store, _ = self.make_store(Path(temporary))
+            store, _ = self.make_store(Path(temporary).resolve())
             saved = store.save(provider_data(), 0, "private-token")
             profile_id = saved["profiles"][0]["id"]
             with self.assertRaisesRegex(ProviderError, "duplicate"):
@@ -1414,7 +1420,7 @@ class GuiProviderTests(unittest.TestCase):
 
     def test_validates_endpoint_and_revision_conflicts(self):
         with tempfile.TemporaryDirectory() as temporary:
-            store, _ = self.make_store(Path(temporary))
+            store, _ = self.make_store(Path(temporary).resolve())
             with self.assertRaisesRegex(ProviderError, "without credentials"):
                 store.save(provider_data(
                     "openai", "https://user:pass@example.com/v1"), 0)
@@ -1429,7 +1435,7 @@ class GuiProviderTests(unittest.TestCase):
 
     def test_queue_binds_immutable_provider_hash(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             store, _ = self.make_store(root)
             saved = store.save(
                 provider_data("ollama", "http://127.0.0.1:11434"), 0)
@@ -1471,7 +1477,7 @@ class GuiProviderTests(unittest.TestCase):
     def test_a_treatment_is_queued_for_one_frame_with_a_bounded_budget(self):
         """The develop page's door to the Kimiya Treatment."""
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             store, _ = self.make_store(root)
             photos = root / "photos"
             photos.mkdir()
@@ -1517,7 +1523,7 @@ class GuiProviderTests(unittest.TestCase):
     def test_treatment_progress_is_read_off_the_rounds_on_disk(self):
         """The run writes its work down as it goes; the queue reads it."""
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             run = (root / ".darkimiya" / "Treatments"
                    / "DSC00702.protect-then-reveal.20260814T153200Z")
             run.mkdir(parents=True)
@@ -1543,7 +1549,7 @@ class GuiProviderTests(unittest.TestCase):
     def test_a_stale_treatment_directory_is_not_this_runs_progress(self):
         """A failed run an hour ago must not report the new run started."""
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             stale = (root / ".darkimiya" / "Treatments"
                      / "DSC00702.protect-then-reveal.20260814T104519Z")
             stale.mkdir(parents=True)
@@ -1559,7 +1565,7 @@ class GuiProviderTests(unittest.TestCase):
 
     def test_queue_binds_custom_judgment_policy_to_generated_program(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             store, _ = self.make_store(root)
             saved = store.save(
                 provider_data("ollama", "http://127.0.0.1:11434"), 0)
@@ -1614,7 +1620,7 @@ class GuiProviderTests(unittest.TestCase):
         thread.start()
         try:
             with tempfile.TemporaryDirectory() as temporary:
-                store, _ = self.make_store(Path(temporary))
+                store, _ = self.make_store(Path(temporary).resolve())
                 profile = provider_data(
                     "openai", f"http://127.0.0.1:{server.server_port}/v1")
                 saved = store.save(profile, 0)
@@ -1640,7 +1646,7 @@ class GuiMacOSAppTests(unittest.TestCase):
 
     def test_application_paths_are_private_and_separated(self):
         with tempfile.TemporaryDirectory() as temporary:
-            paths = MacOSPaths.create(Path(temporary))
+            paths = MacOSPaths.create(Path(temporary).resolve())
             self.assertTrue(paths.support.is_dir())
             self.assertTrue(paths.cache.is_dir())
             self.assertTrue(paths.logs.is_dir())
@@ -1657,7 +1663,7 @@ class GuiMacOSAppTests(unittest.TestCase):
 
     def test_single_instance_lock_is_exclusive_and_releasable(self):
         with tempfile.TemporaryDirectory() as temporary:
-            path = Path(temporary) / "desktop.lock"
+            path = Path(temporary).resolve() / "desktop.lock"
             first = InstanceLock(path)
             second = InstanceLock(path)
             self.assertTrue(first.acquire())
@@ -1671,9 +1677,13 @@ class GuiMacOSAppTests(unittest.TestCase):
         sys.platform == "darwin",
         "the release smoke test validates a macOS bundle layout",
     )
+    @unittest.skipUnless(
+        (Path(__file__).parents[1] / ".opencull-models").is_dir(),
+        "the face models are not in a source checkout, only in a bundle",
+    )
     def test_release_smoke_validates_runtime_and_writes_receipt(self):
         with tempfile.TemporaryDirectory() as temporary:
-            receipt = Path(temporary) / "release-smoke.json"
+            receipt = Path(temporary).resolve() / "release-smoke.json"
             self.assertEqual(run_release_smoke_test(receipt), 0)
             result = json.loads(receipt.read_text(encoding="utf-8"))
             self.assertEqual(result["format"], "opencull-macos-smoke-v1")
@@ -2465,7 +2475,7 @@ class GuiDesignFoundationTests(unittest.TestCase):
 class GuiJobTests(unittest.TestCase):
     def test_development_recipe_preview_is_bounded_local_and_cached(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos = root / "photos"; photos.mkdir()
             Image.new("RGB", (320, 200), (70, 110, 150)).save(photos / "A.JPG")
             workspace = development_workspace(photos, entries=[{"photo": "A.JPG"}])
@@ -2486,7 +2496,7 @@ class GuiJobTests(unittest.TestCase):
 
     def test_treatments_offer_only_what_can_actually_be_rendered(self):
         with tempfile.TemporaryDirectory() as temporary:
-            photos = Path(temporary) / "photos"; photos.mkdir()
+            photos = Path(temporary).resolve() / "photos"; photos.mkdir()
             workspace = development_workspace(photos, entries=[{
                 "photo": "A.JPG",
                 "standard_recipe": "warm it slightly",
@@ -2507,7 +2517,7 @@ class GuiJobTests(unittest.TestCase):
         # is the ordinary case. Develop must still mean something there: the
         # baseline interprets nothing, so it needs nothing suggested first.
         with tempfile.TemporaryDirectory() as temporary:
-            photos = Path(temporary) / "photos"; photos.mkdir()
+            photos = Path(temporary).resolve() / "photos"; photos.mkdir()
             workspace = development_workspace(photos)
             # Presets are offered everywhere, whatever anybody has said
             # about the frame; what this is about is the suggestions.
@@ -2518,7 +2528,7 @@ class GuiJobTests(unittest.TestCase):
 
     def test_the_baseline_renders_without_any_edit_direction(self):
         with tempfile.TemporaryDirectory() as temporary:
-            photos = Path(temporary) / "photos"; photos.mkdir()
+            photos = Path(temporary).resolve() / "photos"; photos.mkdir()
             Image.new("RGB", (240, 160), (90, 120, 80)).save(photos / "A.JPG")
             workspace = development_workspace(photos)
             rendered = workspace.recipe_preview(
@@ -2532,7 +2542,7 @@ class GuiJobTests(unittest.TestCase):
 
     def test_the_three_decoders_are_ranked_and_named_honestly(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos = root / "photos"; photos.mkdir()
             raws = root / "raws"; raws.mkdir()
             (raws / "A.ARW").write_bytes(b"raw")
@@ -2562,7 +2572,7 @@ class GuiJobTests(unittest.TestCase):
         from opencull_gui import development
 
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos = root / "photos"; photos.mkdir()
             # A blue reference JPEG beside a RAW that decodes to red. If the
             # render comes out blue, the decoder was never called.
@@ -2591,7 +2601,7 @@ class GuiJobTests(unittest.TestCase):
 
     def test_a_full_render_is_the_photograph_s_own_size_and_is_recorded(self):
         with tempfile.TemporaryDirectory() as temporary:
-            photos = Path(temporary) / "photos"; photos.mkdir()
+            photos = Path(temporary).resolve() / "photos"; photos.mkdir()
             Image.new("RGB", (400, 260), (90, 110, 130)).save(photos / "A.JPG")
             workspace = development_workspace(photos)
 
@@ -2608,7 +2618,7 @@ class GuiJobTests(unittest.TestCase):
 
     def test_only_a_registered_render_can_be_exported(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos = root / "photos"; photos.mkdir()
             workspace = development_workspace(photos)
             stranger = root / "somebody-elses.jpg"
@@ -2619,7 +2629,7 @@ class GuiJobTests(unittest.TestCase):
 
     def test_exporting_writes_the_render_where_it_was_asked_for(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos = root / "photos"; photos.mkdir()
             Image.new("RGB", (120, 90), (90, 110, 130)).save(photos / "A.JPG")
             workspace = development_workspace(photos)
@@ -2638,7 +2648,7 @@ class GuiJobTests(unittest.TestCase):
 
     def test_an_export_never_writes_over_a_file_that_is_already_there(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos = root / "photos"; photos.mkdir()
             Image.new("RGB", (120, 90), (90, 110, 130)).save(photos / "A.JPG")
             workspace = development_workspace(photos)
@@ -2671,7 +2681,7 @@ class GuiJobTests(unittest.TestCase):
         from opencull_gui.development import shrink_linear
 
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             source = root / "big.tiff"
             # Half the frame at full white, half at black. Averaged in linear
             # light the result is 0.5; averaged after display encoding it
@@ -2689,7 +2699,7 @@ class GuiJobTests(unittest.TestCase):
         from opencull_gui.development import shrink_linear
 
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             source = root / "small.tiff"
             tifffile.imwrite(
                 source, np.full((40, 60, 3), 12345, dtype=np.uint16))
@@ -2715,7 +2725,7 @@ class GuiJobTests(unittest.TestCase):
 
     def test_delivery_export_is_queued_and_rejects_an_active_duplicate(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos = root / "photos"; photos.mkdir()
             reference = photos / "A.JPG"
             Image.new("RGB", (32, 24), (80, 100, 120)).save(reference)
@@ -2760,7 +2770,7 @@ class GuiJobTests(unittest.TestCase):
 
     def test_delivery_export_atomically_copies_and_records_an_existing_render(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos = root / "photos"; photos.mkdir()
             reference = photos / "A.JPG"
             Image.new("RGB", (32, 24), (80, 100, 120)).save(reference)
@@ -2848,7 +2858,7 @@ class GuiJobTests(unittest.TestCase):
 
     def test_development_image_is_not_parsed_as_json_progress(self):
         with tempfile.TemporaryDirectory() as temporary:
-            output = Path(temporary) / "A.standard.jpg"
+            output = Path(temporary).resolve() / "A.standard.jpg"
             output.write_bytes(b"\xff\xd8\xff\xe0binary-jpeg")
 
             progress = JobManager._progress({
@@ -2864,7 +2874,7 @@ class GuiJobTests(unittest.TestCase):
 
     def test_sequential_queue_completes_in_order(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             first = root / "first"
             second = root / "second"
             first.mkdir()
@@ -2901,7 +2911,7 @@ class GuiJobTests(unittest.TestCase):
 
     def test_command_builder_failure_does_not_kill_queue_worker(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             first = root / "first"
             second = root / "second"
             first.mkdir()
@@ -2935,7 +2945,7 @@ class GuiJobTests(unittest.TestCase):
 
     def test_queued_root_style_output_is_migrated_to_results(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             results = root / "Results"
             results.mkdir()
             state_path = root / "jobs.json"
@@ -2964,7 +2974,7 @@ class GuiJobTests(unittest.TestCase):
 
     def test_worker_receives_private_job_specific_kimiya_workspace(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos = root / "photos"
             photos.mkdir()
             workspaces = root / "private-kimiya"
@@ -2998,7 +3008,7 @@ class GuiJobTests(unittest.TestCase):
 
     def test_recovers_legacy_bundle_report_from_committed_certificate(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             state_path = root / "jobs.json"
             workspaces = root / "Kimiya"
             results = root / "Results"
@@ -3071,7 +3081,7 @@ class GuiJobTests(unittest.TestCase):
 
     def test_pause_and_resume_uses_checkpoint(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos = root / "photos"
             photos.mkdir()
 
@@ -3117,7 +3127,7 @@ class GuiJobTests(unittest.TestCase):
 
     def test_restart_marks_dead_process_paused(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos = root / "photos"
             photos.mkdir()
             state_path = root / "jobs.json"
@@ -3151,7 +3161,7 @@ class GuiJobTests(unittest.TestCase):
 
     def test_rejects_duplicate_folder_and_existing_output(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos = root / "photos"
             photos.mkdir()
             manager = JobManager(
@@ -3173,7 +3183,7 @@ class GuiJobTests(unittest.TestCase):
     def test_a_failed_run_does_not_push_the_default_output_aside(self):
         """The retry inherits the failed run's output, and its checkpoint."""
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos = root / "photos"
             photos.mkdir()
             reports = root / "Reports"
@@ -3202,7 +3212,7 @@ class GuiJobTests(unittest.TestCase):
         import sys
 
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos = root / "photos"
             photos.mkdir()
             script = ("import sys; "
@@ -3226,7 +3236,7 @@ class GuiJobTests(unittest.TestCase):
 
     def test_a_refused_certification_is_retried_once_with_a_fresh_panel(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos = root / "photos"
             photos.mkdir()
             manager = JobManager(
@@ -3276,7 +3286,7 @@ class GuiJobTests(unittest.TestCase):
         import opencull_gui.jobs as jobs_module
 
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             output = root / "timelapse.json"
             output.write_text("{}")               # last run's report
             state = {
@@ -3313,7 +3323,7 @@ class GuiJobTests(unittest.TestCase):
 
     def test_a_detached_run_can_be_paused_when_the_pid_is_provably_ours(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             manager = JobManager(
                 root / "jobs.json", root, command_builder=lambda job: [],
                 autostart=False)
@@ -3345,7 +3355,7 @@ class GuiJobTests(unittest.TestCase):
 
     def test_the_queue_guard_says_what_is_actually_happening(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos = root / "photos"
             photos.mkdir()
             manager = JobManager(
@@ -3369,7 +3379,7 @@ class GuiJobTests(unittest.TestCase):
     def test_queue_guard_tolerates_jobs_that_have_no_folder(self):
         """A verification job carries no photos; it must not break culling."""
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos = root / "photos"
             photos.mkdir()
             manager = JobManager(
@@ -3390,7 +3400,7 @@ class GuiJobTests(unittest.TestCase):
 class GuiHttpTests(unittest.TestCase):
     def test_development_payload_reloads_worker_registered_render(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos = root / "photos"
             photos.mkdir()
             workspace = development_workspace(photos)
@@ -3417,7 +3427,7 @@ class GuiHttpTests(unittest.TestCase):
 
     def test_export_payload_shows_latest_semantic_render_only(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos = root / "photos"
             photos.mkdir()
             workspace = development_workspace(photos)
@@ -3446,7 +3456,7 @@ class GuiHttpTests(unittest.TestCase):
 
     def test_private_people_api_indexes_locally_and_serves_only_crops(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             faces, report, reviews = GuiFaceTests().make_store(
                 root, FakeFaceEngine())
             photo_store = faces.photos
@@ -3522,7 +3532,7 @@ class GuiHttpTests(unittest.TestCase):
 
     def test_provider_api_never_returns_submitted_secret(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos = root / "photos"
             photos.mkdir()
             Image.new("RGB", (80, 60), "blue").save(photos / "A.JPG")
@@ -3574,7 +3584,7 @@ class GuiHttpTests(unittest.TestCase):
 
     def test_review_stays_responsive_during_background_culling(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos = root / "photos"
             photos.mkdir()
             Image.new("RGB", (80, 60), "blue").save(photos / "A.JPG")
@@ -3658,7 +3668,7 @@ class GuiHttpTests(unittest.TestCase):
 
     def test_serves_report_image_and_protected_review_mutation(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             photos = root / "photos"
             photos.mkdir()
             Image.new("RGB", (100, 80), "blue").save(photos / "A.JPG")

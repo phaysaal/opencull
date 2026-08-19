@@ -8,6 +8,7 @@ bundle and credential handling as every shipped program.
 
 from __future__ import annotations
 
+import os
 import sys
 import tempfile
 import unittest
@@ -15,6 +16,8 @@ import unittest.mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from kimiya_probe import kimiya_runs  # noqa: E402
 
 from opencull_gui.jobs import JobError, JobManager, kimiya_arguments  # noqa: E402
 from opencull_gui.programs import (  # noqa: E402
@@ -26,13 +29,18 @@ from opencull_gui.programs import (  # noqa: E402
 ROOT = Path(__file__).resolve().parent.parent
 
 
+KIMIYA_RUNS = kimiya_runs()
+
+
 class StoreTests(unittest.TestCase):
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()
-        self.directory = Path(self._temporary.name) / "Programs"
+        self.directory = Path(self._temporary.name).resolve() / "Programs"
         self.addCleanup(self._temporary.cleanup)
+        # The interpreter running these tests, not a venv that may not
+        # be there: a build machine installs into its own environment.
         self.store = ProgramStore(self.directory, ROOT,
-                                  python=str(ROOT / ".venv/bin/python"))
+                                  python=sys.executable)
 
     def test_the_builtins_are_all_listed_with_their_purposes(self):
         names = [item["name"] for item in self.store.catalogue()
@@ -101,6 +109,7 @@ class StoreTests(unittest.TestCase):
                                     agents=ROOT / "agents.kim")
         self.assertIn("nowhere_kernel.py", str(caught.exception))
 
+    @unittest.skipUnless(KIMIYA_RUNS, "no Kimiya compiler here")
     def test_the_compiler_accepts_a_builtin_and_a_duplicate(self):
         ok, said = self.store.check("protect_then_reveal.kim")
         self.assertTrue(ok, said)
@@ -108,6 +117,7 @@ class StoreTests(unittest.TestCase):
         ok, said = self.store.check("my-zones.kim")
         self.assertTrue(ok, said)
 
+    @unittest.skipUnless(KIMIYA_RUNS, "no Kimiya compiler here")
     def test_the_compiler_refuses_a_broken_program_verbatim(self):
         self.store.save("broken", "-- broken\nthis is not kimiya at all\n")
         ok, said = self.store.check("broken.kim")
@@ -135,7 +145,7 @@ class RunRailTests(unittest.TestCase):
 
     def test_a_run_without_an_output_is_refused(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             store = ProgramStore(root / "Programs", ROOT)
             store.save("my-run", "-- x\nparam output: text\n")
             manager = self.manager(root)
@@ -147,7 +157,7 @@ class RunRailTests(unittest.TestCase):
 
     def test_a_run_is_queued_with_its_parameters_and_log(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             store = ProgramStore(root / "Programs", ROOT)
             store.save("my-run", "-- x\nparam output: text\n")
             manager = self.manager(root)
@@ -166,7 +176,7 @@ class RunRailTests(unittest.TestCase):
 
     def test_a_kernel_the_program_cannot_reach_fails_at_queue_time(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             store = ProgramStore(root / "Programs", ROOT)
             store.save("my-run", '-- x\nuse python "nowhere.py"\n')
             manager = self.manager(root)
@@ -197,7 +207,6 @@ class CaptionTests(unittest.TestCase):
         self.assertEqual(caption_for("frames_dir"), "Frames directory")
 
     def test_the_raw_name_still_rides_the_field(self):
-        import os
 
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
         from PySide6.QtWidgets import QApplication

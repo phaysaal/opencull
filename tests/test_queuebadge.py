@@ -54,7 +54,7 @@ class LabelTests(unittest.TestCase):
 class CompletionTests(unittest.TestCase):
     def test_a_finished_timelapse_offers_its_video(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             video = root / "timelapse.mp4"
             video.write_bytes(b"film")
             report = root / "timelapse.json"
@@ -180,7 +180,7 @@ class PopoverTests(unittest.TestCase):
 
     def test_a_finished_timelapse_row_reveals_its_video(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             video = root / "timelapse.mp4"
             video.write_bytes(b"film")
             report = root / "timelapse.json"

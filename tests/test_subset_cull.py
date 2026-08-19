@@ -20,7 +20,7 @@ NAMES = ("A0001.JPG", "A0002.JPG", "A0003.JPG")
 class SubsetScanTests(unittest.TestCase):
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self._temporary.name)
+        self.root = Path(self._temporary.name).resolve()
         for index, name in enumerate(NAMES):
             Image.new("RGB", (80, 60), (30 + 40 * index, 80, 110)).save(
                 self.root / name)
@@ -78,7 +78,7 @@ class SubsetJobTests(unittest.TestCase):
         from opencull_gui.jobs import JobManager
 
         self._temporary = tempfile.TemporaryDirectory()
-        root = Path(self._temporary.name)
+        root = Path(self._temporary.name).resolve()
         self.photos = root / "shoot"
         self.photos.mkdir()
         for name in NAMES:
