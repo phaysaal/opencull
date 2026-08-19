@@ -341,6 +341,70 @@ def vote_shift(reference: np.ndarray, moving: np.ndarray,
 
 # --- the run --------------------------------------------------------------
 
+def _linear(shown: np.ndarray) -> np.ndarray:
+    """Light, from a picture of light.
+
+    Frames are read display-referred, which is right for storing them
+    and wrong for doing arithmetic on them: an encoded value is a
+    lightness, and lightnesses do not add. Two exposures of the same
+    star do not average to the encoded middle of their two encodings,
+    and a pedestal the sensor added to the LIGHT does not come off the
+    lightness by subtraction.
+    """
+    from development_engine import _decoded
+
+    return np.clip(_decoded(np.clip(shown, 0.0, None)), 0.0, None
+                   ).astype(np.float32)
+
+
+def _shown(light: np.ndarray) -> np.ndarray:
+    """And back again, for anything that has to be looked at."""
+    from development_engine import _encoded
+
+    return np.clip(_encoded(np.clip(light, 0.0, None)), 0.0, 1.0
+                   ).astype(np.float32)
+
+
+def light_scales(paths: list[Path]) -> list[float]:
+    """How much light each frame gathered, against the first.
+
+    A six-and-a-half second frame is not a noisier three second frame;
+    it is a different measurement. It holds more than twice the light
+    -- sky and stars together -- and averaging it in as though it were
+    the same quantity does two things, both bad. The mean lands
+    between two scales, so the stars lose contrast against a sky that
+    was lifted more than they were; and the sigma clip, which throws
+    out whatever sits far from what the frames agree on, now sees a
+    spread at EVERY pixel that is the exposure difference rather than
+    a satellite. It rejects good light and keeps what it was built to
+    remove.
+
+    Shutter, sensitivity and aperture together, because all three
+    decide how much light arrived. Where any frame cannot say, they
+    all count the same -- which is what this did before, and a guess
+    applied to some frames and not others is worse than no guess.
+    """
+    from opencull_gui.nightstart import camera_facts
+
+    gathered = []
+    for path in paths:
+        facts = camera_facts(path)
+        seconds = float(facts.get("seconds", 0.0) or 0.0)
+        if seconds <= 0.0:
+            return [1.0] * len(paths)
+        speed = float(facts.get("iso", 0) or 0) or 100.0
+        stop = float(facts.get("aperture", 0.0) or 0.0)
+        # Light per unit area goes as the square of the aperture ratio;
+        # an unknown aperture is simply left out of the comparison,
+        # which is right when it did not change and unknowable when it
+        # did.
+        gathered.append(seconds * speed / (stop ** 2 if stop > 0 else 1.0))
+    first = gathered[0]
+    if first <= 0.0 or not all(level > 0.0 for level in gathered):
+        return [1.0] * len(paths)
+    return [first / level for level in gathered]
+
+
 def _capture_seconds(paths: list[Path]) -> list[float | None]:
     from opencull_gui.scenes import capture_time
 
@@ -360,8 +424,12 @@ def _median_of(folder: str, pattern: str,
     frames = frames_of(folder, pattern)
     if len(frames) < 2:
         return None
+    # In light, not in lightness. A bias is a pedestal the sensor adds
+    # to the LIGHT it measured, and a flat is a factor the light was
+    # multiplied by; neither is a statement about the encoded picture,
+    # so both are read back into light before they are used.
     return np.median(
-        np.stack([_frame(path, demosaic) for path in frames]),
+        np.stack([_linear(_frame(path, demosaic)) for path in frames]),
         axis=0).astype(np.float32)
 
 
@@ -463,6 +531,46 @@ def _lanczos_line(length: int, offset: float,
     return taken, weights.astype(np.float32)
 
 
+def _corner_bounds(frame: np.ndarray, y0: np.ndarray,
+                   x0: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """The range of the four pixels a sample sits between."""
+    a = frame[y0, x0]
+    b = frame[y0, x0 + 1]
+    c = frame[y0 + 1, x0]
+    d = frame[y0 + 1, x0 + 1]
+    low = np.minimum(np.minimum(a, b), np.minimum(c, d))
+    high = np.maximum(np.maximum(a, b), np.maximum(c, d))
+    return low, high
+
+
+def _unrung(out: np.ndarray, frame: np.ndarray,
+            dx: float, dy: float) -> np.ndarray:
+    """Hold a resampled pixel inside the range it was drawn from.
+
+    A Lanczos kernel is negative either side of its peak, which is
+    where its sharpness comes from and also where its ringing does: at
+    a steep enough edge it overshoots above and undershoots below, and
+    the undershoot leaves a dark rim. Against a night sky that hardly
+    showed while the arithmetic was done on ENCODED values, because
+    encoding compresses a star's range to something gentle. Done in
+    light it is not gentle at all -- a star is two thousand times its
+    sky -- and the rims became visible enough to widen every star by a
+    fifth on a synthetic field.
+
+    So a sample is held between the smallest and largest of the four
+    pixels it sits between. Interpolation cannot honestly produce a
+    value outside the values it interpolated, and refusing to lets the
+    kernel keep all of its sharpness and none of its overshoot.
+    """
+    height, width = frame.shape[:2]
+    base_x = int(np.floor(dx))
+    base_y = int(np.floor(dy))
+    columns = np.clip(np.arange(width) + base_x, 0, width - 2)
+    rows = np.clip(np.arange(height) + base_y, 0, height - 2)
+    low, high = _corner_bounds(frame, rows[:, None], columns[None, :])
+    return np.clip(out, low, high)
+
+
 def _lanczos_shift(frame: np.ndarray, shift: tuple[float, float],
                    taps: int = LANCZOS_TAPS) -> np.ndarray:
     """A frame moved by a subpixel amount, separably and sharply."""
@@ -492,6 +600,7 @@ def _lanczos_shift(frame: np.ndarray, shift: tuple[float, float],
             continue
         out[good] += middle[source[good]] * weight
         seen[good] += covered[source[good]] * weight
+    out = _unrung(out, frame, -float(shift[0]), -float(shift[1]))
     # Where the kernel hung off the edge it collected less than a
     # whole pixel's worth, and the frame would darken at its rim.
     # Anything not fully covered is outside, and outside is black --
@@ -547,11 +656,13 @@ def _lanczos_warp(frame: np.ndarray, degrees: float,
                 weight = wx * wy
                 piece += frame[rows_at, x0c + dx] * weight[..., None]
                 total += weight
+        floor, ceiling = _corner_bounds(frame, y0c, x0c)
         # The tabulated kernel does not sum to exactly one at an
         # arbitrary offset, and an unnormalised resample brightens and
         # darkens in a fine pattern across the frame -- which on a
         # flat sky is the one place there is nothing to hide it behind.
         piece /= np.maximum(total, 1e-6)[..., None]
+        piece = np.clip(piece, floor, ceiling)
         out[top:low] = np.where(inside[..., None], piece, 0.0)
     return out
 
@@ -633,7 +744,8 @@ def _best_placement(anchors: np.ndarray, moving: np.ndarray,
     return best
 
 
-def _frame_weights(frames: list[dict[str, Any]]) -> np.ndarray:
+def _frame_weights(frames: list[dict[str, Any]],
+                   scales: list[float] | None = None) -> np.ndarray:
     """What each frame is worth in an average: one over its variance.
 
     The least-noise way to combine measurements of one quantity is to
@@ -655,7 +767,16 @@ def _frame_weights(frames: list[dict[str, Any]]) -> np.ndarray:
         return np.ones(len(told), np.float64)
     middle = float(np.median(usable))
     floor = middle / 2.0
-    weights = np.array([1.0 / max(level, floor) ** 2 for level in told],
+    kept = [max(level, floor) for level in told]
+    # Putting a frame on the common scale multiplies its noise by the
+    # same factor it multiplies its signal by, so the noise being
+    # weighed here is the noise AFTER that -- otherwise a long
+    # exposure, scaled down and thereby quietened, would be given the
+    # weight of the noisy thing it was before.
+    if scales is not None and len(scales) == len(kept):
+        kept = [level * abs(float(scale)) if scale else level
+                for level, scale in zip(kept, scales)]
+    weights = np.array([1.0 / level ** 2 for level in kept],
                        dtype=np.float64)
     return weights / float(weights.max())
 
@@ -669,7 +790,9 @@ def _frame_noise(grey: np.ndarray) -> float:
     """
     from development_engine import _box_mean
 
-    plane = np.asarray(grey, np.float32)
+    # Measured in light rather than in lightness, because light is
+    # what the stack averages and what the weights below are about.
+    plane = _linear(np.asarray(grey, np.float32))
     return float(np.median(np.abs(plane - _box_mean(plane, 3)))) * 1.4826
 
 
@@ -1033,13 +1156,17 @@ def superimpose(register_text: str, mode: str = "trails",
             "format": FORMAT,
             "error": "every frame was set aside; nothing to stack"})
     paths = [root / str(item["name"]) for item in frames]
+    # What each frame is worth photometrically, against the first. All
+    # ones where the frames were shot alike, which is the usual case
+    # and costs nothing.
+    scales = light_scales(paths)
     shifts = [(float(item.get("dx", 0.0)), float(item.get("dy", 0.0)))
               if aligned else (0.0, 0.0) for item in frames]
     turns = [float(item.get("turn", 0.0)) if aligned else 0.0
              for item in frames]
 
     def calibrated(index: int) -> np.ndarray:
-        held = _frame(paths[index], demosaic)
+        held = _linear(_frame(paths[index], demosaic))
         # The order calibration is done in is not a taste: the dark is
         # what the sensor adds, so it comes off first; the flat is what
         # the light was multiplied by, so it comes off after.
@@ -1050,7 +1177,10 @@ def superimpose(register_text: str, mode: str = "trails",
         held = np.clip(held, 0.0, None)
         if flat is not None and flat.shape == held.shape:
             held = np.clip(held / flat, 0.0, None)
-        return held
+        # And on to one scale, so that what is averaged below is the
+        # same quantity in every frame.
+        scale = scales[index]
+        return held if scale == 1.0 else (held * scale).astype(np.float32)
 
     def read(index: int) -> np.ndarray:
         held = calibrated(index)
@@ -1105,7 +1235,7 @@ def superimpose(register_text: str, mode: str = "trails",
         # one over its own variance is the least-noise way to combine
         # measurements of the same thing, and the noise was measured
         # while registering, so it costs nothing to ask.
-        weights = _frame_weights(frames)
+        weights = _frame_weights(frames, scales)
         share = max(float(weights.sum()), 1e-9)
         stack = read(0).astype(np.float32)
         summed = stack.astype(np.float64) * weights[0]
@@ -1149,7 +1279,10 @@ def superimpose(register_text: str, mode: str = "trails",
     home = (Path(output).expanduser() if output
             else root / ".darkimiya" / "Superimpose")
     home.mkdir(parents=True, exist_ok=True)
-    shown = np.clip(stack, 0.0, 1.0)
+    # Back into lightness for anything that has to be looked at or
+    # opened elsewhere: the stack is written display-referred, as it
+    # always was, and only the arithmetic above changed.
+    shown = _shown(stack)
     tiff = home / f"{mode}.tiff"
     _write_tiff(tiff, shown)
     proof = home / f"{mode}.jpg"
