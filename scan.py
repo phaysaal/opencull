@@ -331,6 +331,39 @@ def sips_preview(path: Path) -> Image.Image:
 Image.init()
 
 
+def _warm_the_decoder() -> None:
+    """Open one tiny picture here, so no thread opens its first one.
+
+    Image.init() above registers the plugins, and that removed most of
+    this crash but not all of it: the plugins are only the first lazy
+    thing on the path. Decoding a JPEG also reaches the codec itself,
+    the EXIF machinery and the mode conversions, and each of those
+    imports on first use too. Under PySide's import hook, on two
+    worker threads at once, with a collection landing in the middle,
+    that is the same segfault by a different door -- and it came back
+    on a build machine after Image.init() alone.
+
+    So a one-pixel picture is written and read here, on the main
+    thread, through the same calls open_preview makes. Everything the
+    path needs is imported and resolved before any worker exists.
+    """
+    import io
+
+    try:
+        buffer = io.BytesIO()
+        Image.new("RGB", (1, 1), (128, 128, 128)).save(buffer, format="JPEG")
+        buffer.seek(0)
+        with Image.open(buffer) as image:
+            ImageOps.exif_transpose(image).convert("RGB").getexif()
+    except Exception:                    # noqa: BLE001 - warming only
+        # A failure here is not a reason not to start; it only means
+        # the first real decode pays what this would have paid.
+        pass
+
+
+_warm_the_decoder()
+
+
 def open_preview(path: Path) -> Image.Image:
     if path.suffix.lower() in RAW_EXTENSIONS:
         return raw_preview(path)
