@@ -658,7 +658,23 @@ class DrizzleTests(unittest.TestCase):
                 self.assertEqual(opened.size, (WIDTH * 2, HEIGHT * 2))
             self.assertEqual(told["drizzle"]["scale"], 2.0)
 
-    def test_dithered_drops_beat_an_interpolated_average(self):
+    def test_a_sharp_average_is_not_beaten_by_drizzle_on_a_few_frames(self):
+        """The claim this test used to make, corrected by measurement.
+
+        It once asserted that drizzle came back with narrower stars
+        than an average upsampled after the fact -- and it did, by
+        about 6%, for as long as the averaging path aligned its frames
+        BILINEARLY. That was drizzle beating a handicap, not drizzle
+        beating interpolation. With the frames aligned properly the
+        result reverses: on the user's own ten frames the average came
+        back at 2.44 px against drizzle's 2.65, and on this synthetic
+        the same way round.
+
+        Which is what drizzle's own theory says. It reconstructs from
+        many well-dithered samples, and a finer grid filled by ten
+        frames hears from too few drops per output pixel. It is worth
+        reaching for when there are dozens of frames, not a handful.
+        """
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             self.dithered(root, count=20)
@@ -673,10 +689,42 @@ class DrizzleTests(unittest.TestCase):
                 opened.resize((WIDTH * 2, HEIGHT * 2),
                               Image.Resampling.BICUBIC).save(
                     upsampled, quality=99)
-            blunt = self.star_sigma(upsampled, 2.0)
-            sharp = self.star_sigma(drizzled["proof"], 2.0)
-            # Nothing is interpolated, so nothing is blurred.
-            self.assertLess(sharp, blunt * 0.97)
+            averaged = self.star_sigma(upsampled, 2.0)
+            drizzle = self.star_sigma(drizzled["proof"], 2.0)
+            self.assertLessEqual(averaged, drizzle)
+
+    def test_the_stack_is_sharper_than_a_bilinear_one_would_be(self):
+        """What the averaging path's resampler is actually worth.
+
+        The frames are dithered by fractions of a pixel, so every one
+        of them is resampled on the way into the stack. Aligning them
+        bilinearly softens each frame before it is added; this is the
+        guard that says the good resampler is still in place.
+        """
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            offsets = self.dithered(root, count=12)
+            placed = sk.register(folder, "*.jpg", demosaic=False)
+            told = json.loads(sk.superimpose(
+                placed, "average", output=str(root / "avg")))
+            sharp = self.star_sigma(told["proof"], 1.0)
+            # The same frames, aligned the old blurry way.
+            frames = json.loads(placed)["frames"]
+            blunt_stack = None
+            for item in frames:
+                held = np.asarray(Image.open(
+                    root / item["name"]).convert("RGB"), np.float32) / 255.0
+                moved = sk._warped(
+                    held, float(item.get("turn", 0.0)),
+                    (float(item["dx"]), float(item["dy"])))
+                blunt_stack = moved if blunt_stack is None \
+                    else blunt_stack + moved
+            blunt_path = root / "blunt.jpg"
+            Image.fromarray(
+                (np.clip(blunt_stack / len(frames), 0, 1) * 255
+                 ).astype(np.uint8)).save(blunt_path, quality=99)
+            blunt = self.star_sigma(blunt_path, 1.0)
+            self.assertLess(sharp, blunt)
 
     def test_the_finer_grid_is_filled_by_enough_frames(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -898,6 +946,137 @@ class DialogTests(unittest.TestCase):
             told = dialog.run_request()["parameters"]
             self.assertEqual(told["scale"], "2.0")
             self.assertEqual(told["pixfrac"], "0.8")
+
+
+class ResamplingTests(unittest.TestCase):
+    """A frame moved between its pixels should not lose its stars."""
+
+    def starry(self, seed=4, count=60):
+        rng = np.random.default_rng(seed)
+        field = np.zeros((HEIGHT, WIDTH, 3), np.float32) + 0.03
+        grid_y, grid_x = np.mgrid[0:HEIGHT, 0:WIDTH]
+        for _ in range(count):
+            x = rng.uniform(20, WIDTH - 20)
+            y = rng.uniform(20, HEIGHT - 20)
+            bright = rng.uniform(0.2, 0.8)
+            field += (bright * np.exp(
+                -(((grid_x - x) ** 2 + (grid_y - y) ** 2)) / 3.2)
+            )[..., None].astype(np.float32)
+        return np.clip(field, 0, 1)
+
+    def peak_kept(self, moved, held):
+        """What became of the brightest star's peak."""
+        inner = (slice(12, -12), slice(12, -12))
+        return (float(moved[inner].max()) / float(held[inner].max()))
+
+    def test_lanczos_keeps_a_star_where_bilinear_softens_it(self):
+        held = self.starry()
+        shift = (0.37, 0.29)
+        soft = sk._warped(held, 0.0, shift)
+        sharp = sk._lanczos_shift(held, shift)
+        self.assertLess(self.peak_kept(soft, held), 0.92)
+        self.assertGreater(self.peak_kept(sharp, held), 0.97)
+
+    def test_half_a_pixel_there_and_back_comes_back(self):
+        held = self.starry()
+        inner = (slice(20, -20), slice(20, -20))
+        for tag, move in (("bilinear", lambda a, s: sk._warped(a, 0.0, s)),
+                          ("lanczos", sk._lanczos_shift)):
+            back = move(move(held, (0.5, 0.5)), (-0.5, -0.5))
+            error = float(np.abs(back[inner] - held[inner]).mean())
+            if tag == "lanczos":
+                self.assertLess(error, sharp_error)
+            else:
+                sharp_error = error
+        # Named so the failure reads: lanczos must beat bilinear.
+        self.assertLess(
+            float(np.abs(sk._lanczos_shift(sk._lanczos_shift(
+                held, (0.5, 0.5)), (-0.5, -0.5))[inner]
+                - held[inner]).mean()),
+            float(np.abs(sk._warped(sk._warped(
+                held, 0.0, (0.5, 0.5)), 0.0, (-0.5, -0.5))[inner]
+                - held[inner]).mean()))
+
+    def test_a_whole_pixel_move_is_not_a_resample(self):
+        held = self.starry()
+        moved = sk._lanczos_shift(held, (3.0, -2.0))
+        plain = sk._shifted(held, (3.0, -2.0))
+        inner = (slice(12, -12), slice(12, -12))
+        self.assertTrue(np.allclose(moved[inner], plain[inner], atol=1e-5))
+
+    def test_what_falls_outside_is_black_not_dim(self):
+        """A rim that collected half a kernel would darken the edge."""
+        held = self.starry()
+        moved = sk._lanczos_shift(held, (6.4, 0.0))
+        # The left edge came from outside the frame entirely.
+        self.assertTrue(np.all(moved[:, :5] == 0.0))
+        # And what remains is not dimmed at the seam.
+        self.assertGreater(float(moved[:, 20:40].mean()),
+                           float(held[:, 14:34].mean()) * 0.9)
+
+    def test_a_turn_is_resampled_too(self):
+        held = self.starry()
+        turned = sk._lanczos_warp(held, 3.0, (0.0, 0.0))
+        soft = sk._warped(held, 3.0, (0.0, 0.0))
+        inner = (slice(30, -30), slice(30, -30))
+        self.assertGreater(float(turned[inner].max()),
+                           float(soft[inner].max()))
+        # And a turn of nothing changes nothing.
+        still = sk._lanczos_warp(held, 0.0, (0.0, 0.0))
+        self.assertTrue(np.allclose(still[inner], held[inner], atol=1e-4))
+
+    def test_the_kernel_does_not_ring_a_star_into_a_dark_halo(self):
+        held = self.starry(count=8)
+        moved = sk._lanczos_shift(held, (0.5, 0.5))
+        inner = (slice(12, -12), slice(12, -12))
+        # Nothing may dip meaningfully below the sky it sits on.
+        self.assertGreater(float(moved[inner].min()), 0.02)
+
+
+class FrameWeightTests(unittest.TestCase):
+    """Frames are not all worth the same, and the noise says so."""
+
+    def weights(self, noises):
+        return sk._frame_weights([{"noise": n} for n in noises])
+
+    def test_equal_frames_weigh_equally(self):
+        self.assertTrue(np.allclose(self.weights([0.01] * 4), 1.0))
+
+    def test_a_grainier_frame_counts_by_the_square(self):
+        weights = self.weights([0.01, 0.01, 0.02])
+        # Twice the noise is a quarter the weight, not half.
+        self.assertAlmostEqual(float(weights[2] / weights[0]), 0.25, places=3)
+
+    def test_no_frame_may_run_away_with_the_stack(self):
+        weights = self.weights([0.01, 0.01, 0.01, 1e-9])
+        self.assertLessEqual(float(weights.max() / weights[0]), 4.001)
+
+    def test_frames_that_said_nothing_weigh_the_same(self):
+        self.assertTrue(np.allclose(self.weights([0.0] * 4), 1.0))
+        # One silent frame and the whole set falls back to plain.
+        self.assertTrue(np.allclose(self.weights([0.01, 0.0, 0.01]), 1.0))
+
+    def test_weighting_is_quieter_than_averaging_when_frames_differ(self):
+        rng = np.random.default_rng(7)
+        noises = np.array([0.008, 0.010, 0.014, 0.030])
+        weights = self.weights(list(noises))
+        plain, weighted = [], []
+        for _ in range(1500):
+            seen = 0.5 + rng.normal(0, noises)
+            plain.append(seen.mean())
+            weighted.append(float((seen * weights).sum() / weights.sum()))
+        self.assertLess(float(np.std(weighted)),
+                        float(np.std(plain)) * 0.85)
+
+    def test_registering_writes_down_how_grainy_each_frame_was(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            turning_night(root, [0.0, 0.0, 0.0])
+            told = json.loads(sk.register(folder, "*.jpg", demosaic=False))
+        for item in told["frames"]:
+            self.assertIn("noise", item)
+            self.assertGreater(float(item["noise"]), 0.0)
+
 
 
 if __name__ == "__main__":

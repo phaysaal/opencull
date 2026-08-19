@@ -401,6 +401,161 @@ def _master_dark(folder: str, pattern: str,
     return _median_of(folder, pattern, demosaic)
 
 
+# How far a Lanczos kernel reaches, in pixels either side. Three is
+# the photographic standard: two is visibly softer on a point source
+# and four buys nothing back but ringing.
+LANCZOS_TAPS = 3
+# The kernel is a sinc times a sinc, which is far too slow to evaluate
+# at twenty-six million pixels thirty-six times over. It is a smooth
+# function of one variable, so it is tabulated once and read.
+#
+# The step count is not round by accident. The table must hold every
+# WHOLE-pixel distance exactly on an entry of its own, because at
+# whole distances the kernel is exactly one and exactly zero -- which
+# is what makes moving a frame by a whole number of pixels, or not
+# turning it at all, cost it nothing. Land those between two entries
+# and an identity move quietly softens the frame. So the table has
+# 2*taps*K + 1 entries, K per pixel.
+_LANCZOS_PER_PIXEL = 1365
+_LANCZOS_STEPS = 2 * LANCZOS_TAPS * _LANCZOS_PER_PIXEL + 1
+
+
+def _lanczos_table(taps: int = LANCZOS_TAPS,
+                   steps: int = _LANCZOS_STEPS) -> np.ndarray:
+    """The Lanczos kernel, sampled fine enough to read instead of solve."""
+    span = np.linspace(-taps, taps, steps, dtype=np.float64)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        weight = np.sinc(span) * np.sinc(span / taps)
+    weight[np.abs(span) >= taps] = 0.0
+    return weight.astype(np.float32)
+
+
+_LANCZOS = _lanczos_table()
+
+
+def _lanczos_at(distance: np.ndarray, taps: int = LANCZOS_TAPS,
+                table: np.ndarray | None = None) -> np.ndarray:
+    """The kernel's value at each distance, by table lookup."""
+    table = _LANCZOS if table is None else table
+    steps = table.shape[0]
+    where = (distance + taps) * ((steps - 1) / (2.0 * taps))
+    # Rounded, not truncated: truncation lands a whole-pixel distance
+    # one step short of the entry that holds its exact zero, and the
+    # identity stops being the identity.
+    return table[np.clip(np.rint(where), 0, steps - 1).astype(np.int32)]
+
+
+def _lanczos_line(length: int, offset: float,
+                  taps: int = LANCZOS_TAPS) -> tuple[np.ndarray, np.ndarray]:
+    """Where to read and how much, for one axis of a constant shift.
+
+    A shift that is the same everywhere is not resampling at all --
+    it is a convolution, and the same handful of weights serves every
+    pixel in the frame. Worth separating out, because most of these
+    stacks are a tripod's slow drift with no turn in them at all.
+    """
+    base = int(np.floor(offset))
+    taken = np.arange(base - taps + 1, base + taps + 1)
+    weights = _lanczos_at(np.asarray(offset - taken, np.float32), taps)
+    total = float(weights.sum())
+    if abs(total) > 1e-6:
+        weights = weights / total
+    return taken, weights.astype(np.float32)
+
+
+def _lanczos_shift(frame: np.ndarray, shift: tuple[float, float],
+                   taps: int = LANCZOS_TAPS) -> np.ndarray:
+    """A frame moved by a subpixel amount, separably and sharply."""
+    height, width = frame.shape[:2]
+    out = np.zeros(frame.shape, np.float32)
+    seen = np.zeros((height, width), np.float32)
+    taken_x, weight_x = _lanczos_line(width, -float(shift[0]), taps)
+    taken_y, weight_y = _lanczos_line(height, -float(shift[1]), taps)
+    # Along x first, into a strip that still has every row it started
+    # with, then along y. Two passes of six taps rather than one of
+    # thirty-six.
+    middle = np.zeros(frame.shape, np.float32)
+    covered = np.zeros((height, width), np.float32)
+    columns = np.arange(width)
+    for offset, weight in zip(taken_x, weight_x):
+        source = columns + offset
+        good = (source >= 0) & (source < width)
+        if not good.any():
+            continue
+        middle[:, good] += frame[:, source[good]] * weight
+        covered[:, good] += weight
+    rows = np.arange(height)
+    for offset, weight in zip(taken_y, weight_y):
+        source = rows + offset
+        good = (source >= 0) & (source < height)
+        if not good.any():
+            continue
+        out[good] += middle[source[good]] * weight
+        seen[good] += covered[source[good]] * weight
+    # Where the kernel hung off the edge it collected less than a
+    # whole pixel's worth, and the frame would darken at its rim.
+    # Anything not fully covered is outside, and outside is black --
+    # which is what the stack already knows how to ignore.
+    return np.where((seen > 0.999)[..., None], out, 0.0).astype(np.float32)
+
+
+def _lanczos_warp(frame: np.ndarray, degrees: float,
+                  shift: tuple[float, float],
+                  taps: int = LANCZOS_TAPS,
+                  band: int = 384) -> np.ndarray:
+    """A frame turned and moved, sampled by Lanczos at every pixel.
+
+    A turn sends every output pixel to its own fractional place, so
+    the weights differ pixel by pixel and the separable trick a plain
+    shift enjoys does not apply. Still separable WITHIN a pixel: the
+    weight on a source pixel is the x kernel times the y kernel, so
+    the six-by-six neighbourhood is a product of six numbers and six
+    numbers rather than thirty-six sinc evaluations.
+
+    Done a band of rows at a time, and both sets of weights worked out
+    once per band. The whole frame at once would want a gigabyte of
+    weights; a band wants a manageable slice of that, stays in cache,
+    and turned a fifty-five second pass into a far shorter one.
+    """
+    height, width = frame.shape[:2]
+    cx, cy = (width - 1) / 2.0, (height - 1) / 2.0
+    angle = np.radians(-degrees)
+    cos, sin = float(np.cos(angle)), float(np.sin(angle))
+    out = np.zeros(frame.shape, np.float32)
+    columns = np.arange(width, dtype=np.float32) - shift[0] - cx
+    reach = range(-taps + 1, taps + 1)
+    for top in range(0, height, band):
+        low = min(top + band, height)
+        rows = (np.arange(top, low, dtype=np.float32)
+                - shift[1] - cy)[:, None]
+        sx = cx + columns[None, :] * cos - rows * sin
+        sy = cy + columns[None, :] * sin + rows * cos
+        x0 = np.floor(sx).astype(np.int32)
+        y0 = np.floor(sy).astype(np.int32)
+        inside = ((x0 >= taps - 1) & (x0 < width - taps)
+                  & (y0 >= taps - 1) & (y0 < height - taps))
+        x0c = np.clip(x0, taps - 1, width - taps - 1)
+        y0c = np.clip(y0, taps - 1, height - taps - 1)
+        # Both kernels for this band, once.
+        weight_x = [_lanczos_at(sx - (x0c + step), taps) for step in reach]
+        weight_y = [_lanczos_at(sy - (y0c + step), taps) for step in reach]
+        piece = np.zeros((low - top, width, frame.shape[2]), np.float32)
+        total = np.zeros((low - top, width), np.float32)
+        for dy, wy in zip(reach, weight_y):
+            rows_at = y0c + dy
+            for dx, wx in zip(reach, weight_x):
+                weight = wx * wy
+                piece += frame[rows_at, x0c + dx] * weight[..., None]
+                total += weight
+        # The tabulated kernel does not sum to exactly one at an
+        # arbitrary offset, and an unnormalised resample brightens and
+        # darkens in a fine pattern across the frame -- which on a
+        # flat sky is the one place there is nothing to hide it behind.
+        piece /= np.maximum(total, 1e-6)[..., None]
+        out[top:low] = np.where(inside[..., None], piece, 0.0)
+    return out
+
+
 def _warped(frame: np.ndarray, degrees: float,
             shift: tuple[float, float]) -> np.ndarray:
     """The frame turned and moved, sampled between its own pixels.
@@ -478,6 +633,46 @@ def _best_placement(anchors: np.ndarray, moving: np.ndarray,
     return best
 
 
+def _frame_weights(frames: list[dict[str, Any]]) -> np.ndarray:
+    """What each frame is worth in an average: one over its variance.
+
+    The least-noise way to combine measurements of one quantity is to
+    weight each by one over its own variance -- so a frame twice as
+    grainy as its neighbour counts a quarter as much, not half, and
+    certainly not the same. The noise was measured while registering.
+
+    Guarded rather than trusted. A frame reporting no noise at all
+    would take the whole stack to itself, and one reporting absurdly
+    little is far more likely to be a measurement that went wrong
+    than a frame that is genuinely perfect, so no frame is allowed to
+    outweigh the median frame by more than four times. Frames that
+    said nothing about their noise all weigh the same, which is the
+    plain average this replaced.
+    """
+    told = [float(item.get("noise", 0.0) or 0.0) for item in frames]
+    usable = [level for level in told if level > 1e-9]
+    if len(usable) < len(told) or not usable:
+        return np.ones(len(told), np.float64)
+    middle = float(np.median(usable))
+    floor = middle / 2.0
+    weights = np.array([1.0 / max(level, floor) ** 2 for level in told],
+                       dtype=np.float64)
+    return weights / float(weights.max())
+
+
+def _frame_noise(grey: np.ndarray) -> float:
+    """How grainy one frame is, in the units the frame is stored in.
+
+    By the median of absolute deviations from a small blur, times the
+    constant that makes it a standard deviation -- so a field of stars
+    does not read as noise the way a plain deviation would.
+    """
+    from development_engine import _box_mean
+
+    plane = np.asarray(grey, np.float32)
+    return float(np.median(np.abs(plane - _box_mean(plane, 3)))) * 1.4826
+
+
 def register(photos: str, pattern: str = "*.RAF", only: str = "",
              focal_mm: float = 0.0, sensor_mm: float = DEFAULT_SENSOR_MM,
              demosaic: bool = True, handheld: bool = False,
@@ -506,7 +701,8 @@ def register(photos: str, pattern: str = "*.RAF", only: str = "",
     placed = [{"name": paths[0].name, "dx": 0.0, "dy": 0.0,
                "turn": 0.0, "agreed": int(len(anchors)),
                "stars": int(len(anchors)),
-               "sky": round(float(np.median(reference_grey)), 5)}]
+               "sky": round(float(np.median(reference_grey)), 5),
+               "noise": round(_frame_noise(reference_grey), 6)}]
     rate: tuple[float, float] | None = None
     for index, path in enumerate(paths[1:], start=1):
         _say(index * 45.0 / max(len(paths) - 1, 1),
@@ -570,6 +766,11 @@ def register(photos: str, pattern: str = "*.RAF", only: str = "",
             # and both are what cloud takes away and adds.
             "stars": int(len(moving)),
             "sky": round(sky, 5),
+            # And how grainy it was. A thin haze or a passing car's
+            # headlights raise a frame's noise without hiding its
+            # stars, and averaging such a frame in as an equal is
+            # letting the worst frame set the stack's floor.
+            "noise": round(_frame_noise(grey), 6),
         })
     return json.dumps({
         "format": FORMAT, "photos": str(photos), "pattern": pattern,
@@ -661,11 +862,16 @@ def superimpose(register_text: str, mode: str = "trails",
         if not aligned:
             return held
         shift, turn = shifts[index], turns[index]
-        whole = (abs(turn) < 1e-6
-                 and abs(shift[0] - round(shift[0])) < 1e-6
+        whole = (abs(shift[0] - round(shift[0])) < 1e-6
                  and abs(shift[1] - round(shift[1])) < 1e-6)
-        return (_shifted(held, shift) if whole
-                else _warped(held, turn, shift))
+        if abs(turn) < 1e-6:
+            # No turn: the same fractional step everywhere, which is a
+            # convolution and can be done separably. A whole-pixel one
+            # is not even that -- it is a move, and moving a frame
+            # should not cost it any sharpness at all.
+            return _shifted(held, shift) if whole \
+                else _lanczos_shift(held, shift)
+        return _lanczos_warp(held, turn, shift)
 
     total = len(paths)
     if mode == "drizzle":
@@ -697,33 +903,51 @@ def superimpose(register_text: str, mode: str = "trails",
         kept = total
     else:
         empty = 0.0
+        # Not every frame is worth the same. A thin haze, a warmer
+        # sensor or a longer exposure leaves one frame grainier than
+        # its neighbours, and averaging it in as an equal lets the
+        # worst frame set the floor for all of them. Weighting each by
+        # one over its own variance is the least-noise way to combine
+        # measurements of the same thing, and the noise was measured
+        # while registering, so it costs nothing to ask.
+        weights = _frame_weights(frames)
+        share = max(float(weights.sum()), 1e-9)
         stack = read(0).astype(np.float32)
-        summed = stack.astype(np.float64)
-        squared = summed ** 2
+        summed = stack.astype(np.float64) * weights[0]
+        # The plain sum and the plain sum of squares are kept as well,
+        # because the spread below is a question about how far the
+        # frames DISAGREE, and that is not a question about what any
+        # of them is worth.
+        plain_sum = stack.astype(np.float64)
+        squared = plain_sum ** 2
         for index in range(1, total):
             _say(45 + index * 25.0 / total,
                  f"gathered {index + 1} of {total}")
             held = read(index).astype(np.float64)
-            summed += held
+            summed += held * weights[index]
+            plain_sum += held
             squared += held ** 2
-        mean = summed / total
+        mean = summed / share
         kept = total
         if mode == "clipped" and total >= 3:
             # A second pass, now that the stack knows what it agrees
             # on: anything standing far outside it is left out.
-            spread = np.sqrt(np.maximum(squared / total - mean ** 2, 0.0))
+            spread = np.sqrt(np.maximum(
+                squared / total - (plain_sum / total) ** 2, 0.0))
             band = np.maximum(spread * float(sigma), 1e-4)
             kept_sum = np.zeros_like(mean)
+            kept_weight = np.zeros(mean.shape, np.float64)
             kept_count = np.zeros(mean.shape, np.float32)
             for index in range(total):
                 _say(70 + index * 25.0 / total,
                      f"weighed {index + 1} of {total}")
                 held = read(index).astype(np.float64)
                 near = np.abs(held - mean) <= band
-                kept_sum += np.where(near, held, 0.0)
+                kept_sum += np.where(near, held * weights[index], 0.0)
+                kept_weight += np.where(near, weights[index], 0.0)
                 kept_count += near
-            mean = np.where(kept_count > 0,
-                            kept_sum / np.maximum(kept_count, 1), mean)
+            mean = np.where(kept_weight > 1e-9,
+                            kept_sum / np.maximum(kept_weight, 1e-9), mean)
             kept = float(np.mean(kept_count))
         stack = mean.astype(np.float32)
     _say(96, "writing the stack")
