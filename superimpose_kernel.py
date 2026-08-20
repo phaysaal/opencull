@@ -986,12 +986,26 @@ def register(photos: str, pattern: str = "*.RAF", only: str = "",
             # told, and a wrong lens is a search that cannot reach the
             # answer. Widening costs one more vote and is the
             # difference between a stack and a smear.
+            #
+            # The DISTANCE is widened and the ANGLE is not, and the
+            # difference matters. A wrong focal length makes the disc
+            # the wrong size, so searching further is the right
+            # response. It does not make the sky turn faster: the
+            # sidereal rate is exact and the frames' own clocks say how
+            # much of it passed, so the only thing unknown about the
+            # turn is its direction, which is already in the list.
+            #
+            # This used to add twice the angle as well, on the same
+            # reasoning, and the reasoning was simply wrong. Measured
+            # on two of the user's frames 86 seconds apart: the first
+            # pass fell short of agreement, the fallback offered double
+            # the sidereal rate, and ten stars out of a hundred and
+            # forty carried it -- 0.7186 degrees where the sky can have
+            # turned at most 0.3593. At the corner that is forty-seven
+            # pixels of turn applied where twenty-three was the ceiling.
             wider = max(radius * 4.0, min(height, width) * 0.25)
-            spread = list(angles)
-            if abs(spun) >= 0.02:
-                spread += [-spun * 2, spun * 2]
             degrees, shift, agreed = _best_placement(
-                anchors, moving, spread, centre, wider, None)
+                anchors, moving, angles, centre, wider, None)
             radius = wider
         if agreed >= LEAST_AGREEING and gap and not handheld:
             rate = (shift[0] / gap, shift[1] / gap)
