@@ -65,6 +65,9 @@ BUILT_INS = (
      "Stack a handheld sky: a model recognises, the stars register."),
     ("clear_stack.kim",
      "Stack a sky, asking about the frames a threshold cannot call."),
+    ("night_show.kim",
+     "One click: night frames in, the finished starfield out, "
+     "verified at every step."),
 )
 
 _PARAM_RE = re.compile(

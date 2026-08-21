@@ -40,7 +40,7 @@ FORMAT = "opencull-development-adjustment-v1"
 SECTIONS = (
     ("Tone", ("tone.exposure", "tone.brightness", "tone.contrast",
               "tone.highlight", "tone.shadow", "tone.white", "tone.black",
-              "tone.stretch")),
+              "tone.preserve", "tone.stretch")),
     ("Levels", ("levels.black_input", "levels.white_input", "levels.midpoint")),
     ("Colour", ("color.temperature", "color.tint", "color.vibrance",
                 "color.chroma", "color.saturation")),
@@ -57,6 +57,7 @@ LABELS = {
     "tone.shadow": "Shadows",
     "tone.white": "Whites",
     "tone.black": "Blacks",
+    "tone.preserve": "Star colour kept",
     "tone.stretch": "Night stretch",
     "levels.black_input": "Black point",
     "levels.white_input": "White point",

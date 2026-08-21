@@ -1,0 +1,80 @@
+-- One click: a folder of night frames in, the finished picture out.
+--
+-- Everything in this program was learned on real skies, most of it
+-- the hard way. The frames are registered on their own stars, with
+-- the roll rescue for a tripod somebody touched; the clouded ones are
+-- set aside; the rest are stacked sigma-clipped in light, exposures
+-- normalised, so a six-second frame and a three-second frame are the
+-- same measurement before they meet.
+--
+-- Then the program refuses to continue unless the stack passes the
+-- photographer's own test, the one that caught what every metric
+-- missed: a star must appear ONCE. A frame that registered on a
+-- handful of coincidental stars fails the confidence gate before it
+-- can ghost the stack, and a stack whose stars come out more oval
+-- than a single frame's is not developed at all.
+--
+-- Only then is it developed, by measurement rather than taste: the
+-- night start read off this very stack's sky, the stretch lifting
+-- luminance alone so the stars keep their own colour, a breath of
+-- vibrance for the palest of them, and one gentle black level --
+-- last, once, early, because every ruined picture in a week of
+-- comparisons was ruined by a clip.
+--
+-- Deterministic end to end: no model is asked for anything.
+
+param photos: text = "."
+param pattern: text = "*.RAF"
+param focal_mm: num = 0
+param sensor_mm: num = 23.5
+param darks: text = ""
+param flats: text = ""
+param bias: text = ""
+param sigma: num = 2.5
+param colour: num = 100
+param glow_level: num = 18
+param scale: num = 2
+param pixfrac: num = 0.8
+param mode: text = "clipped"
+param output: text = ""
+param only: text = ""
+param demosaic: bool = true
+
+use python "night_show_kernel.py"
+
+-- Where every frame sits, by its own stars and the sky's own clock.
+placed := register(photos, pattern, only, focal_mm, sensor_mm, demosaic)
+
+-- The frames the sky ruined are set aside before they can vote.
+screened := screen_frames(placed)
+print(screen_note(screened))
+
+-- Every frame going in must have registered CONVINCINGLY. A stack is
+-- only as honest as its least honest frame, and a placement carried
+-- by a handful of coincidental stars is how a ghost begins.
+check frames_confident(screened)
+
+-- The frames laid on each other, in light, exposures normalised.
+stacked := superimpose(screened, mode, output, darks, sigma, flats, bias, scale, pixfrac)
+check stack_valid(stacked)
+print(stack_note(stacked))
+
+-- The photographer's test: photograph the same sky many times,
+-- superimpose, and a star must appear once. A stack whose stars come
+-- out longer than a single frame's did not line up, whatever its
+-- other numbers say, and it is not developed.
+check stack_true(stacked, pattern)
+
+-- Developed by measurement: the sky read off the stack itself, the
+-- stars keeping their own colour on the way up.
+shown := develop_show(stacked, pattern, colour, glow_level)
+print(show_note(shown))
+
+-- And the finished picture must keep its blacks and tell the truth:
+-- almost nothing clipped, and what it shows as stars verified against
+-- the stack it came from.
+where := show_home(shown)
+check shown_well(shown)
+act file.overwrite(where, shown)
+settle until check file_exists(where) within 5
+commit(shown)

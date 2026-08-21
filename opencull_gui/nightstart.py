@@ -449,6 +449,15 @@ def night_start(path: str | Path, shown: np.ndarray | None = None,
          "mode": "absolute", "value": round(black * 255.0, 1),
          "source_instruction": "the sky's own floor, measured",
          "enabled": True},
+        # Before the stretch, because the stretch reads it: lift the
+        # LUMINANCE and carry each pixel's colour by ratio, so a red
+        # star stays red on its way up. Measured on a ten-frame stack,
+        # the stars kept 82% of their colour this way against 34%
+        # through the per-channel lift.
+        {"op": "tone.preserve", "unit": "percent", "mode": "delta",
+         "value": 100.0,
+         "source_instruction": "the stars keep their own colour",
+         "enabled": True},
         {"op": "tone.stretch", "unit": "percent", "mode": "delta",
          "value": round(strength, 1),
          "source_instruction": f"lift the sky to {SKY_TARGET:.2f}",

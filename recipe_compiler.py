@@ -39,6 +39,7 @@ RANGES = {
     "finish.vignette": (-100.0, 100.0, "percent"),
     "finish.grain": (0.0, 100.0, "percent"),
     "tone.stretch": (0.0, 100.0, "percent"),
+    "tone.preserve": (0.0, 100.0, "percent"),
     "detail.night_clean": (0.0, 100.0, "percent"),
     "color.neutralize": (0.0, 100.0, "percent"),
     "detail.clean_colour": (0.0, 100.0, "percent"),

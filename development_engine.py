@@ -366,6 +366,10 @@ def _apply_global(rgb: np.ndarray, operations: list[dict[str, Any]],
     # it. Per chain, so a mask's own little chain never inherits
     # a shape the photographer did not put in it.
     star_shape: dict[str, Any] | None = None
+    # Published by tone.preserve, read by the stretch. Zero is the old
+    # behaviour; at one hundred the stretch lifts LUMINANCE alone and
+    # carries every pixel's colour by ratio.
+    keep_colour = 0.0
     operations = active(operations)
     total = len(operations)
     for done, item in enumerate(operations, start=1):
@@ -689,6 +693,16 @@ def _apply_global(rgb: np.ndarray, operations: list[dict[str, Any]],
                 _blur(chroma, DENOISE_RADIUS * detail_scale) - chroma) * weight
         elif op == "detail.clean_colour":
             result = _clean_colour(result, value, detail_scale, window)
+        elif op == "tone.preserve":
+            # Changes no pixel. It says how much of each pixel's own
+            # colour the stretch below must keep. The astronomer's
+            # stretch lifts every channel through the same curve, and
+            # a curve that compresses lifts a red star's strong
+            # channel MORE than its weak ones -- so every bright star
+            # slides toward white. Measured on a real ten-frame stack:
+            # the stars kept 34% of their colour through the
+            # per-channel stretch and 82% through the luminance one.
+            keep_colour = min(max(float(value or 0.0), 0.0), 100.0) / 100.0
         elif op == "tone.stretch":
             # The astronomer's stretch. A night frame's signal lives in
             # the bottom few percent of the range, and a curve or an
@@ -705,6 +719,19 @@ def _apply_global(rgb: np.ndarray, operations: list[dict[str, Any]],
                                 0.0, 1.0)
                 lifted = (np.arcsinh(factor * shown)
                           / float(np.arcsinh(factor)))
+                if keep_colour > 0.0:
+                    # The same curve, walked by the LUMINANCE, with
+                    # every channel scaled by the one ratio -- so a
+                    # star is lifted without being bleached. Blended
+                    # against the per-channel answer by the dial, the
+                    # way the tone curve's preserve already blends.
+                    luma = (shown * _LUMA).sum(axis=2)
+                    walked = (np.arcsinh(factor * luma)
+                              / float(np.arcsinh(factor)))
+                    ratio = walked / np.maximum(luma, 1e-5)
+                    held = np.clip(shown * ratio[..., None], 0.0, 1.0)
+                    lifted = (lifted * (1.0 - keep_colour)
+                              + held * keep_colour)
                 result = _decoded(np.clip(lifted, 0.0, 1.0))
         elif op == "detail.night_clean":
             result = _night_clean(result, value, detail_scale, window,
