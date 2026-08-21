@@ -22,6 +22,8 @@ RANGES = {
     "tone.contrast": (-100.0, 100.0, "percent"),
     "tone.brightness": (-100.0, 100.0, "percent"),
     "color.saturation": (-100.0, 100.0, "percent"),
+    "color.vibrance": (-100.0, 100.0, "percent"),
+    "color.chroma": (-100.0, 100.0, "percent"),
     "tone.highlight": (-100.0, 100.0, "percent"),
     "tone.shadow": (-100.0, 100.0, "percent"),
     "tone.white": (-100.0, 100.0, "percent"),
@@ -166,6 +168,7 @@ def _compile_step(
         "global_exposure": {
             "exposure": "tone.exposure", "contrast": "tone.contrast",
             "brightness": "tone.brightness", "saturation": "color.saturation",
+            "vibrance": "color.vibrance", "chroma": "color.chroma",
         },
         "hdr_levels_curves": {
             "highlights?": "tone.highlight", "shadows?": "tone.shadow",

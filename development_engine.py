@@ -593,6 +593,36 @@ def _apply_global(rgb: np.ndarray, operations: list[dict[str, Any]],
         elif op == "color.saturation":
             lum = (result * np.array([0.2126, 0.7152, 0.0722])).sum(axis=2, keepdims=True)
             result = lum + (result - lum) * (1.0 + value / 100.0)
+        elif op == "color.chroma":
+            # Colour scaled in LIGHT, where saturation scales it on the
+            # SCREEN. Saturation runs inside the display wrapper -- the
+            # brightness a person sees is held steady while the colour
+            # swings, which is what darktable's chroma dial does. This
+            # one does the same arithmetic to the light itself, and the
+            # difference is not academic: hold the light's luminance
+            # steady and a colour DEEPENS as it strengthens, the way a
+            # dye does when it is laid on thicker -- probed on one red
+            # pixel at +50, the screen kept 0.15 of green where this
+            # keeps none. Denser, not louder. Both dials are offered
+            # because neither behaviour can be reached from the other.
+            lum = (result * _LUMA).sum(axis=2, keepdims=True)
+            result = np.clip(
+                lum + (result - lum) * (1.0 + value / 100.0), 0.0, None)
+        elif op == "color.vibrance":
+            # Saturation for the pixels that have little of it. The
+            # push is weighted by the square of what a pixel lacks, so
+            # a pale star gains colour while one already vivid keeps
+            # what it has -- the square, not the plain lack, because
+            # linear weighting still moved the vivid pixels a third of
+            # the dial, which is saturation wearing a different name.
+            # On the encoded picture, brightness held, like saturation.
+            shown = np.clip(_encoded(np.clip(result, 0.0, None)), 0.0, 1.0)
+            lum = (shown * _LUMA).sum(axis=2, keepdims=True)
+            peak = shown.max(axis=2)
+            vivid = np.clip((peak - shown.min(axis=2))
+                            / np.maximum(peak, 1e-4), 0.0, 1.0)
+            gain = (1.0 + (value / 100.0) * (1.0 - vivid) ** 2)[..., None]
+            result = _decoded(np.clip(lum + (shown - lum) * gain, 0.0, 1.0))
         elif op == "color.temperature":
             # A delta warms or cools from where the frame is. An absolute
             # kelvin names the light itself, and is read against the D65

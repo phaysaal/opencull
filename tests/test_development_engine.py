@@ -1210,5 +1210,95 @@ class DevelopmentEngineTests(unittest.TestCase):
                          ["tone.exposure", "color.hsl_range"])
 
 
+class ColourDialTests(unittest.TestCase):
+    """Three colour dials, three behaviours -- or two are one dial."""
+
+    def coloured(self):
+        from development_engine import _decoded
+
+        shown = np.zeros((2, 2, 3), np.float32)
+        shown[..., :] = (0.45, 0.40, 0.42)      # pale, near grey
+        shown[0, 0] = (0.70, 0.20, 0.15)        # already vivid
+        return _decoded(shown), shown
+
+    def turned(self, name, value, linear):
+        from development_engine import _apply_global, _encoded
+
+        out = _apply_global(linear, [{
+            "op": name, "unit": "percent", "mode": "delta",
+            "value": value, "enabled": True}])
+        return np.clip(_encoded(np.clip(out, 0.0, None)), 0.0, 1.0)
+
+    @staticmethod
+    def sat_of(shown):
+        peak = shown.max(axis=2)
+        return (peak - shown.min(axis=2)) / np.maximum(peak, 1e-4)
+
+    def test_each_dial_at_zero_changes_nothing(self):
+        linear, shown = self.coloured()
+        for name in ("color.chroma", "color.vibrance"):
+            self.assertTrue(np.allclose(
+                self.turned(name, 0.0, linear), shown, atol=1e-4), name)
+
+    def test_vibrance_feeds_the_pale_and_spares_the_vivid(self):
+        linear, shown = self.coloured()
+        before = self.sat_of(shown)
+        after = self.sat_of(self.turned("color.vibrance", 60.0, linear))
+        pale_gain = after[1, 1] / before[1, 1]
+        vivid_gain = after[0, 0] / before[0, 0]
+        self.assertGreater(pale_gain, 1.3)
+        self.assertLess(vivid_gain, 1.06)
+
+    def test_vibrance_holds_the_brightness_a_person_sees(self):
+        from development_engine import _LUMA
+
+        linear, shown = self.coloured()
+        after = self.turned("color.vibrance", 60.0, linear)
+        drift = np.abs((after * _LUMA).sum(axis=2)
+                       - (shown * _LUMA).sum(axis=2))
+        self.assertLess(float(drift.max()), 5e-3)
+
+    def test_chroma_deepens_where_saturation_stays_bright(self):
+        """The reason both dials exist: neither reaches the other."""
+        from development_engine import _LUMA
+
+        linear, shown = self.coloured()
+        dense = self.turned("color.chroma", 50.0, linear)
+        loud = self.turned("color.saturation", 50.0, linear)
+        # Saturation holds the screen brightness of the vivid pixel;
+        # chroma lets it deepen as the colour strengthens.
+        was = float((shown[0, 0] * _LUMA).sum())
+        self.assertAlmostEqual(
+            float((loud[0, 0] * _LUMA).sum()), was, delta=5e-3)
+        self.assertLess(float((dense[0, 0] * _LUMA).sum()), was - 2e-2)
+        # And both genuinely strengthen the colour.
+        self.assertGreater(self.sat_of(dense)[0, 0],
+                           self.sat_of(shown)[0, 0])
+        self.assertGreater(self.sat_of(loud)[0, 0],
+                           self.sat_of(shown)[0, 0])
+
+    def test_all_three_are_controls_a_photographer_can_reach(self):
+        from opencull_gui import adjustments
+        from recipe_compiler import RANGES
+
+        for name in ("color.vibrance", "color.chroma", "color.saturation"):
+            self.assertIn(name, RANGES)
+            self.assertIn(name, adjustments.LABELS)
+        offered = [item["op"] for item in adjustments.full_surface(
+            {"operations": []})]
+        self.assertIn("color.vibrance", offered)
+        self.assertIn("color.chroma", offered)
+
+    def test_the_words_vibrance_and_chroma_compile(self):
+        from opencull_gui.adjustments import compile_words
+
+        heard, unheard = compile_words("vibrance +20, chroma -10")
+        names = {item["op"] for item in heard}
+        self.assertIn("color.vibrance", names)
+        self.assertIn("color.chroma", names)
+        self.assertEqual(unheard, [])
+
+
+
 if __name__ == "__main__":
     unittest.main()
