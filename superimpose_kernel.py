@@ -762,6 +762,7 @@ def _shifted(frame: np.ndarray, shift: tuple[float, float]) -> np.ndarray:
 # roundness gate. Measured on a coarse grid and interpolated, it can
 # be folded into the same single resample as the rigid move.
 FIELD_BAR = 0.6
+FIELD_CORNER = 1.0
 FIELD_DONE = 0.35
 FIELD_QUALITY = 8.0
 
@@ -796,11 +797,12 @@ def _measure_field(reference: np.ndarray, moving: np.ndarray
             return piece * han
         # A window that is partly outside the frame's coverage -- the
         # black border a shift or turn leaves -- correlates its own
-        # edge, not the sky.
+        # edge, not the sky. Blocked, not unsound: it says nothing
+        # about the frame, for or against.
         for grey in (moving, reference):
             piece = grey[cy - half:cy + half, cx - half:cx + half]
             if float(np.mean(piece <= 1e-4)) > 0.15:
-                return 0.0, 0.0, 0.0
+                return 0.0, 0.0, -1.0
         a, b = cut(moving), cut(reference)
         corr = np.fft.fftshift(np.fft.irfft2(
             np.fft.rfft2(a) * np.conj(np.fft.rfft2(b))))
@@ -823,9 +825,11 @@ def _measure_field(reference: np.ndarray, moving: np.ndarray
     downs = np.zeros((rows, cols))
     acrosses = np.zeros((rows, cols))
     sound = np.zeros((rows, cols), bool)
+    blocked = np.zeros((rows, cols), bool)
     for i, cy in enumerate(cys):
         for j, cx in enumerate(cxs):
             downs[i, j], acrosses[i, j], quality = offset_at(cy, cx)
+            blocked[i, j] = quality < 0.0
             sound[i, j] = (quality >= FIELD_QUALITY
                            and abs(downs[i, j]) <= half / 4
                            and abs(acrosses[i, j]) <= half / 4)
@@ -835,29 +839,46 @@ def _measure_field(reference: np.ndarray, moving: np.ndarray
     # its correlation peak looked. Fit, reject the defiant, refit; the
     # unsound cells then inherit the fit's own prediction, so nothing
     # a single window claimed can bend the whole frame.
-    # The verdict must rest on a MAJORITY of sound cells: with only a
-    # handful, an affine can pass straight through an outlier instead
-    # of exposing it, and a streak becomes a tilt for the whole frame.
-    if sound.sum() < max(3, (2 * sound.size + 2) // 3):
+    # The verdict must rest on a MAJORITY of the cells that could
+    # speak at all: a border window the coverage blocked is not a
+    # vote against the frame, it is an empty chair -- a turned frame
+    # blacks out its corners and still deserves its measurement. But
+    # the majority must be a real crowd: with only a handful of
+    # cells, an affine can pass straight through an outlier instead
+    # of exposing it, and a streak becomes a tilt for the frame.
+    measurable = int(sound.size - blocked.sum())
+    if sound.sum() < max(6, (2 * measurable + 2) // 3):
         return None
     # The trigger reads the raw sound cells alone -- a genuine bend
     # moves most of them; one polluted window moves one.
     typical = float(np.median(np.hypot(downs[sound], acrosses[sound])))
 
-    def affine_of(mask: np.ndarray) -> np.ndarray | None:
+    # The smoothness a bend is held to. A lens does not bend affinely
+    # -- pincushion pushes BOTH edges one way while the middle sits
+    # still, which is a quadratic shape -- so a grid dense enough to
+    # support six terms per axis is fitted quadratically, and only
+    # the sparse grids of small frames fall back to the affine.
+    normal_x = (np.asarray(cxs, np.float64) - width / 2.0) / width
+    normal_y = (np.asarray(cys, np.float64) - height / 2.0) / height
+
+    def terms_at(nx: np.ndarray, ny: np.ndarray) -> np.ndarray:
+        flat = [nx, ny, np.ones_like(nx)]
+        if rows * cols >= 20:
+            flat = [nx * nx, nx * ny, ny * ny] + flat
+        return np.stack(flat, -1)
+
+    def model_of(mask: np.ndarray) -> np.ndarray | None:
         picked = np.nonzero(mask)
         if len(picked[0]) < max(3, mask.size // 2):
             return None
-        ones = np.ones(len(picked[0]))
-        design = np.stack([cxs[picked[1]], cys[picked[0]], ones], 1)
+        design = terms_at(normal_x[picked[1]], normal_y[picked[0]])
         fit_a, *_ = np.linalg.lstsq(design, acrosses[mask], rcond=None)
         fit_d, *_ = np.linalg.lstsq(design, downs[mask], rcond=None)
         return np.stack([fit_a, fit_d])
 
-    grid_x = np.stack([np.broadcast_to(cxs, (rows, cols)),
-                       np.broadcast_to(cys[:, None], (rows, cols)),
-                       np.ones((rows, cols))], -1)
-    fit = affine_of(sound)
+    grid_x = terms_at(np.broadcast_to(normal_x, (rows, cols)),
+                      np.broadcast_to(normal_y[:, None], (rows, cols)))
+    fit = model_of(sound)
     if fit is None:
         return None
     told_across = grid_x @ fit[0]
@@ -865,7 +886,7 @@ def _measure_field(reference: np.ndarray, moving: np.ndarray
     defiant = (np.hypot(downs - told_down, acrosses - told_across)
                > 2.5) & sound
     if defiant.any():
-        fit = affine_of(sound & ~defiant)
+        fit = model_of(sound & ~defiant)
         if fit is None:
             return None
         told_across = grid_x @ fit[0]
@@ -874,8 +895,14 @@ def _measure_field(reference: np.ndarray, moving: np.ndarray
     downs = np.where(sound, downs, told_down)
     acrosses = np.where(sound, acrosses, told_across)
     worst = float(max(np.abs(downs).max(), np.abs(acrosses).max()))
+    # A knock's bend concentrates in the corners: its middle may sit
+    # still while the edges walk. The filled grid's farthest reach --
+    # affine-extrapolated where the corners were blocked -- is the
+    # honest size of that.
+    spread = float(np.hypot(downs, acrosses).max())
     return {"downs": downs, "acrosses": acrosses,
-            "cys": cys, "cxs": cxs, "worst": worst, "typical": typical}
+            "cys": cys, "cxs": cxs, "worst": worst,
+            "typical": typical, "spread": spread}
 
 
 def _field_rows(field: dict[str, Any], width: int, y0: int, y1: int
@@ -955,7 +982,8 @@ def _added_fields(first: dict[str, Any], second: dict[str, Any]
             "cys": first["cys"], "cxs": first["cxs"],
             "worst": float(max(np.abs(downs).max(),
                                np.abs(acrosses).max())),
-            "typical": float(np.median(np.hypot(downs, acrosses)))}
+            "typical": float(np.median(np.hypot(downs, acrosses))),
+            "spread": float(np.hypot(downs, acrosses).max())}
 
 
 def _best_placement(anchors: np.ndarray, moving: np.ndarray,
@@ -1508,12 +1536,14 @@ def superimpose(register_text: str, mode: str = "trails",
             _say(43.0, f"trued {index} of {total - 1}")
             placed = _grey(_shown(read(index).astype(np.float32)))
             found = _measure_field(anchor, placed)
-            if found is None or found["typical"] <= FIELD_BAR:
+            if found is None or (found["typical"] <= FIELD_BAR
+                                 and found["spread"] <= FIELD_CORNER):
                 continue
             fields[index] = found
             again = _measure_field(anchor, _grey(_shown(
                 read(index).astype(np.float32))))
-            if again is not None and again["typical"] > FIELD_DONE:
+            if again is not None and (again["typical"] > FIELD_DONE
+                                      or again["spread"] > FIELD_CORNER):
                 fields[index] = _added_fields(found, again)
             field_notes[str(frames[index]["name"])] = {
                 "before_px": round(found["worst"], 2),
