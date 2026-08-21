@@ -253,7 +253,7 @@ _DISPLAY_OPS = frozenset({
     "detail.clarity", "detail.structure", "detail.dehaze",
     "detail.sharpen_amount", "detail.denoise_luminance",
     "detail.denoise_color", "levels.white_input", "levels.black_input",
-    "levels.midpoint", "finish.vignette",
+    "levels.midpoint", "finish.vignette", "detail.velvet",
 })
 
 # Detail work, at the scale a bounded proof is drawn at. A develop
@@ -736,6 +736,40 @@ def _apply_global(rgb: np.ndarray, operations: list[dict[str, Any]],
         elif op == "detail.night_clean":
             result = _night_clean(result, value, detail_scale, window,
                                   star_shape)
+        elif op == "detail.velvet":
+            # The night-panel discovery: a sky can be dimmed UNDER its
+            # stars instead of cut from under them. Every pixel the
+            # matched filter vouches for as star keeps its light; the
+            # rest is multiplied toward black by the dial. A level of
+            # the same darkness deletes what it darkens; the velvet
+            # only lowers the lights, which is why the velvet renders
+            # measured more honest than any level of equal depth.
+            if value > 0.0:
+                lum = (np.clip(result, 0.0, 1.0)
+                       * _LUMA).sum(axis=2)
+                keeps = None
+                if star_shape is not None:
+                    edge_now = float(max(result.shape[:2]))
+                    if window:
+                        edge_now = max(
+                            result.shape[0]
+                            / max(float(window["h"]), 1e-6),
+                            result.shape[1]
+                            / max(float(window["w"]), 1e-6))
+                    keeps = _star_keeps(lum, star_shape, edge_now)
+                if keeps is None:
+                    # No measured shape: the weaker question -- does
+                    # this pixel stand clear of its own grain?
+                    background = _box_mean(lum, 18)
+                    over = lum - background
+                    grain = _box_mean(np.abs(over), 18) * 1.4826
+                    lift = np.clip(
+                        over / np.maximum(grain * 4.0, 1e-5), 0.0, 1.0)
+                    keeps = lift * lift * (3.0 - 2.0 * lift)
+                floor = 1.0 - min(value, 100.0) / 100.0
+                veil = (floor + (1.0 - floor)
+                        * np.clip(keeps, 0.0, 1.0)).astype(np.float32)
+                result = result * veil[..., None]
         elif op == "finish.grain":
             result = _film_grain(result, value, window)
         elif op == "levels.midpoint":

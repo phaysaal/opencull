@@ -34,6 +34,7 @@ param sigma: num = 2.5
 param colour: num = 100
 param glow_level: num = 18
 param flatten: num = 100
+param velvet: num = 0
 param scale: num = 2
 param pixfrac: num = 0.8
 param mode: text = "clipped"
@@ -68,7 +69,7 @@ check stack_true(stacked, pattern)
 
 -- Developed by measurement: the sky read off the stack itself, the
 -- stars keeping their own colour on the way up.
-shown := develop_show(stacked, screened, pattern, colour, glow_level, flatten)
+shown := develop_show(stacked, screened, pattern, colour, glow_level, flatten, velvet)
 print(show_note(shown))
 
 -- And the finished picture must keep its blacks and tell the truth:

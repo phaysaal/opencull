@@ -646,3 +646,48 @@ class StarletTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class VelvetTests(unittest.TestCase):
+    """The sky dimmed under the stars, deleting nothing."""
+
+    def test_the_sky_is_dimmed_and_the_stars_are_not(self):
+        held = night_frame(noise=0.008, stars=10, seed=7)
+        out = _apply_global(held, [{
+            "op": "detail.velvet", "unit": "percent",
+            "mode": "delta", "value": 60.0, "enabled": True}])
+        lum_in = _encoded(held).mean(axis=2)
+        lum_out = _encoded(out).mean(axis=2)
+        quiet = lum_in < np.percentile(lum_in, 60)
+        # The sky went down by about the dial...
+        self.assertLess(float(np.median(lum_out[quiet])),
+                        float(np.median(lum_in[quiet])) * 0.55)
+        # ...the brightest star barely noticed...
+        star = np.unravel_index(np.argmax(held[..., 1]),
+                                held[..., 1].shape)
+        self.assertGreater(float(out[star][1]),
+                           float(held[star][1]) * 0.9)
+        # ...and nothing that held light was cut to pure black.
+        self.assertEqual(int(np.sum((out <= 0) & (held > 0.001))), 0)
+
+    def test_zero_is_a_no_op(self):
+        held = night_frame(seed=8)
+        out = _apply_global(held, [{
+            "op": "detail.velvet", "unit": "percent",
+            "mode": "delta", "value": 0.0, "enabled": True}])
+        self.assertTrue(np.allclose(out, held))
+
+    def test_the_measured_shape_is_honoured_when_published(self):
+        held = night_frame(noise=0.006, stars=40, seed=9)
+        shape = nightstart.measure_psf(held)
+        if shape is None:
+            self.skipTest("no shape measurable on this synthetic")
+        out = _apply_global(held, [
+            {"op": "detail.star_shape", "unit": "shape",
+             "mode": "absolute", "value": shape, "enabled": True},
+            {"op": "detail.velvet", "unit": "percent",
+             "mode": "delta", "value": 60.0, "enabled": True}])
+        star = np.unravel_index(np.argmax(held[..., 1]),
+                                held[..., 1].shape)
+        self.assertGreater(float(out[star][1]),
+                           float(held[star][1]) * 0.9)

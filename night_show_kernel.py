@@ -222,7 +222,8 @@ def develop_show(stacked: str, placed: str = "",
                  pattern: str = "*.RAF",
                  colour: float = 100.0,
                  glow_level: float = 18.0,
-                 flatten: float = 100.0) -> str:
+                 flatten: float = 100.0,
+                 velvet: float = 0.0) -> str:
     """The stack developed the way the good one was, and measured.
 
     The recipe is not a taste, it is the one that won a week of
@@ -326,6 +327,22 @@ def develop_show(stacked: str, placed: str = "",
             "mode": "absolute", "value": round(finish, 1),
             "source_instruction": "the photographer's last tune",
             "enabled": True})
+    # The velvet, if asked for: the sky dimmed UNDER the stars the
+    # matched filter vouches for, after everything else -- darkness
+    # without deletion. Off by default; the dial is the choice.
+    soft = min(max(float(velvet or 0.0), 0.0), 100.0)
+    if soft > 0.0:
+        shape = next((dict(item) for item in operations
+                      if item.get("op") == "detail.star_shape"), None)
+        hush = ([shape] if shape else []) + [{
+            "op": "detail.velvet", "unit": "percent", "mode": "delta",
+            "value": round(soft, 1),
+            "source_instruction": "the sky dimmed under the stars",
+            "enabled": True}]
+        grown = np.clip(_encoded(np.clip(_apply_global(
+            _decoded(grown).astype(np.float32), hush), 0.0, None)),
+            0.0, 1.0)
+        operations.append(hush[-1])
     shown = grown
     home = Path(told["stack"]).parent
     picture = home / "show.jpg"
@@ -353,6 +370,7 @@ def develop_show(stacked: str, placed: str = "",
                                            0.0), 64.0)), 1),
         "level_used": round(float(level), 1),
         "finish_level": round(float(finish), 1),
+        "velvet": round(soft, 1),
         "frames_used": told.get("frames_used"),
         "operations": [item["op"] for item in operations],
         "sky": seen["sky"], "shape": seen["shape"],

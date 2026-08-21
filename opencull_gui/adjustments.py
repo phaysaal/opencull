@@ -45,7 +45,8 @@ SECTIONS = (
     ("Colour", ("color.temperature", "color.tint", "color.vibrance",
                 "color.chroma", "color.saturation")),
     ("Detail", ("detail.clarity", "detail.structure", "detail.dehaze",
-                "detail.clean_colour", "detail.night_clean")),
+                "detail.clean_colour", "detail.night_clean",
+                "detail.velvet")),
     ("Finish", ("finish.vignette", "finish.grain")),
 )
 
@@ -72,6 +73,7 @@ LABELS = {
     "detail.dehaze": "Dehaze",
     "detail.clean_colour": "Clean colour",
     "detail.night_clean": "Quiet the sky",
+    "detail.velvet": "Velvet sky",
     "finish.vignette": "Vignette",
     "finish.grain": "Grain",
 }
