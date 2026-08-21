@@ -105,10 +105,47 @@ def _frame(path: Path, demosaic: bool = True) -> np.ndarray:
             return pixels.astype(np.float32) / 65535.0
         except Exception:                    # noqa: BLE001 - fall to preview
             pass
+    if path.suffix.casefold() in {".tif", ".tiff"}:
+        held = _tiff_frame(path)
+        if held is not None:
+            return held
     from timelapse_kernel import _preview
 
     return np.asarray(_preview(path).convert("RGB"),
                       dtype=np.float32) / 255.0
+
+
+def _tiff_frame(path: Path) -> np.ndarray | None:
+    """A TIFF read at the depth it was written, or None to fall back.
+
+    Developing every frame first and stacking afterwards is an ordinary
+    way to work, and what a developer writes is a TIFF of sixteen bits
+    or of floats. Read through the imaging library those arrive as
+    eight bits a channel -- and a float one does not open at all -- so
+    a stack built that way has thrown most of what stacking is for
+    away before it begins.
+    """
+    try:
+        import tifffile
+    except ImportError:
+        return None
+    try:
+        held = np.asarray(tifffile.imread(path))
+    except Exception:                    # noqa: BLE001 - PIL may still cope
+        return None
+    if held.ndim == 2:
+        held = np.stack([held] * 3, axis=2)
+    if held.ndim != 3 or held.shape[2] < 3:
+        return None
+    held = held[..., :3]
+    if np.issubdtype(held.dtype, np.integer):
+        # Whole numbers are a fraction of what the type can hold.
+        ceiling = float(np.iinfo(held.dtype).max)
+        return (held.astype(np.float32) / ceiling).astype(np.float32)
+    # Floats are already that fraction, and a developer is entitled to
+    # let a highlight sit above one. Clipping is the stack's business,
+    # not the reader's.
+    return held.astype(np.float32)
 
 
 def _grey(rgb: np.ndarray) -> np.ndarray:
@@ -1007,6 +1044,39 @@ def register(photos: str, pattern: str = "*.RAF", only: str = "",
             degrees, shift, agreed = _best_placement(
                 anchors, moving, angles, centre, wider, None)
             radius = wider
+        # A tripod is only as steady as the last hand that touched it.
+        # The angles above are the SKY'S -- a fraction of a degree,
+        # read off the clock -- and if somebody nudged the head
+        # between frames the true roll is nowhere in that list, so the
+        # vote falls back on whatever coincidence scores highest.
+        # Measured on a real pair whose tripod had rolled a degree:
+        # the coincidence won with eleven stars of a hundred and
+        # forty, was accepted, and put a second faint copy of every
+        # star in the stack. Eleven of a hundred and forty is not a
+        # registration; it is the loudest accident in the room.
+        #
+        # So when agreement is that poor, the pair geometry is asked
+        # directly: star pairs of equal length in both frames imply
+        # the roll whatever its size, exactly as the handheld path
+        # trusts. The rescue must beat the coincidence soundly to be
+        # believed, because on a frame that genuinely has few stars a
+        # weak honest answer must not be replaced by a confident
+        # wrong one.
+        few = max(2 * LEAST_AGREEING,
+                  int(0.15 * min(len(anchors), len(moving))))
+        if agreed < few and not handheld:
+            rolled, _pairs = vote_rotation(
+                anchors, moving, most=60, bin_degrees=0.2)
+            worth = [angle for angle in
+                     (rolled, rolled - 180.0, -rolled, 180.0 - rolled)
+                     if abs(angle) <= 20.0
+                     and all(abs(angle - been) > 0.05 for been in angles)]
+            if worth:
+                r_deg, r_shift, r_agreed = _best_placement(
+                    anchors, moving, worth, centre,
+                    max(radius, min(height, width) * 0.25), None)
+                if r_agreed >= max(2 * agreed, 2 * LEAST_AGREEING):
+                    degrees, shift, agreed = r_deg, r_shift, r_agreed
         if agreed >= LEAST_AGREEING and gap and not handheld:
             rate = (shift[0] / gap, shift[1] / gap)
         placed.append({
@@ -1016,6 +1086,10 @@ def register(photos: str, pattern: str = "*.RAF", only: str = "",
             "turn": round(float(degrees), 4),
             "agreed": int(agreed),
             "bound_px": round(float(radius), 1),
+            # A turn far beyond what the clock allows is a roll of the
+            # CAMERA, not of the sky, and worth saying out loud.
+            "rolled": bool(gap is not None and abs(float(degrees))
+                           > abs(sky_rotation(gap)) + 0.1),
             # What the sky was like while this frame was open: how many
             # stars stood clear of it, and how bright it was. Both come
             # free -- the pass that registers has already read them --
@@ -1298,7 +1372,7 @@ def superimpose(register_text: str, mode: str = "trails",
     # always was, and only the arithmetic above changed.
     shown = _shown(stack)
     tiff = home / f"{mode}.tiff"
-    _write_tiff(tiff, shown)
+    _write_tiff(tiff, shown, deep=bool(paths) and _stored_float(paths[0]))
     proof = home / f"{mode}.jpg"
     Image.fromarray((shown * 255.0 + 0.5).astype(np.uint8), "RGB").save(
         proof, quality=95)
@@ -1321,9 +1395,35 @@ def superimpose(register_text: str, mode: str = "trails",
     }, indent=2)
 
 
-def _write_tiff(path: Path, shown: np.ndarray) -> None:
+def _stored_float(path: Path) -> bool:
+    """Whether this frame arrived as floats rather than whole numbers."""
+    if path.suffix.casefold() not in {".tif", ".tiff"}:
+        return False
+    try:
+        import tifffile
+
+        with tifffile.TiffFile(path) as opened:
+            return bool(np.issubdtype(opened.pages[0].dtype, np.floating))
+    except Exception:                    # noqa: BLE001 - then it is not
+        return False
+
+
+def _write_tiff(path: Path, shown: np.ndarray, deep: bool = False) -> None:
+    """The stack, written at the depth its frames were given in.
+
+    Sixteen bits is the right answer for a stack of raw frames: the
+    camera never had more than fourteen and the file is meant to be
+    opened by anything. But a stack assembled from floats is a
+    different object. Somebody who developed every frame first and
+    exported floats did that on purpose, and handing back whole
+    numbers throws away precision they went out of their way to keep
+    -- and precision is exactly what a stack was made to buy.
+    """
     import tifffile
 
+    if deep:
+        tifffile.imwrite(path, np.asarray(shown, np.float32))
+        return
     tifffile.imwrite(path, (shown * 65535.0 + 0.5).astype(np.uint16))
 
 

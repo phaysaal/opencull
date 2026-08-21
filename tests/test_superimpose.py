@@ -1303,5 +1303,74 @@ class LightScaleTests(unittest.TestCase):
 
 
 
+class RollRescueTests(unittest.TestCase):
+    """A tripod is only as steady as the last hand that touched it."""
+
+    def knocked_night(self, folder: Path, rolls, shifts) -> None:
+        """A stamped tripod sequence whose head gets nudged mid-way."""
+        rng = np.random.default_rng(5)
+        xs = rng.uniform(40, WIDTH - 40, 80)
+        ys = rng.uniform(40, HEIGHT - 40, 80)
+        brightness = rng.uniform(0.35, 0.95, 80)
+        grid_y, grid_x = np.mgrid[0:HEIGHT, 0:WIDTH]
+        for index, (roll, (dx, dy)) in enumerate(zip(rolls, shifts)):
+            px, py = spun(xs, ys, roll, WIDTH / 2, HEIGHT / 2)
+            field = np.zeros((HEIGHT, WIDTH), np.float32) + 0.04
+            for x, y, bright in zip(px + dx, py + dy, brightness):
+                if 0 <= x < WIDTH and 0 <= y < HEIGHT:
+                    field += bright * np.exp(
+                        -(((grid_x - x) ** 2 + (grid_y - y) ** 2)
+                          / (2 * 1.6 ** 2)))
+            field = np.clip(field + np.random.default_rng(
+                900 + index).normal(0, 0.04, (HEIGHT, WIDTH)), 0, 1)
+            image = Image.fromarray(
+                (np.stack([field] * 3, -1) * 255 + 0.5).astype(np.uint8))
+            exif = Image.Exif()
+            exif[36867] = f"2026:08:18 22:10:{3 * index:02d}"
+            exif[306] = exif[36867]
+            image.save(folder / f"K{index:03d}.jpg", quality=98, exif=exif)
+
+    def test_a_knocked_tripod_is_caught_by_the_pair_geometry(self):
+        """The sky's own angles cannot see a one-degree roll."""
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve()
+            # Three steady frames, then the head is nudged. Four
+            # degrees here plays the part a single degree plays on a
+            # real frame: this canvas is sixteen times smaller, so the
+            # same corner displacement needs the larger angle.
+            self.knocked_night(
+                root,
+                rolls=[0.0, 0.0, 0.0, 4.0, 4.0],
+                shifts=[(0, 0), (1, 0), (2, 0), (14, -9), (15, -9)])
+            told = json.loads(sk.register(
+                folder, "*.jpg", demosaic=False, focal_mm=24.0))
+        frames = {item["name"]: item for item in told["frames"]}
+        for name in ("K003.jpg", "K004.jpg"):
+            item = frames[name]
+            # The roll is found, not a coincidence: the turn is the
+            # planted one and the agreement is a real registration's.
+            self.assertAlmostEqual(abs(item["turn"]), 4.0, delta=0.4)
+            self.assertGreaterEqual(item["agreed"], 40)
+            self.assertTrue(item.get("rolled"))
+        # And the steady frames were left exactly alone.
+        for name in ("K001.jpg", "K002.jpg"):
+            self.assertLess(abs(frames[name]["turn"]), 0.1)
+            self.assertFalse(frames[name].get("rolled"))
+
+    def test_a_frame_with_honestly_few_stars_is_not_overruled(self):
+        """A weak honest answer must not become a confident wrong one."""
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve()
+            night(root, [(0.0, 0.0), (4.0, 2.0)])
+            told = json.loads(sk.register(
+                folder, "*.jpg", demosaic=False, focal_mm=24.0))
+        item = told["frames"][1]
+        # A clean pair registers plainly; the rescue must not have
+        # invented a roll for it.
+        self.assertLess(abs(item["turn"]), 0.1)
+        self.assertGreaterEqual(item["agreed"], sk.LEAST_AGREEING)
+
+
+
 if __name__ == "__main__":
     unittest.main()

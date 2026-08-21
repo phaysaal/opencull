@@ -186,12 +186,48 @@ def camera_model(path: Path) -> str | None:
 
 
 @lru_cache(maxsize=8192)
+def _tiff_capture_time(path: Path) -> float | None:
+    """The moment of exposure recorded in a TIFF's own tags.
+
+    A developer's export keeps the camera's timestamp but writes a
+    file the imaging library will not always open -- a float TIFF, in
+    particular, it refuses outright. The tags are still there and are
+    still the truth about when the shutter opened, which is what a
+    sequence of night frames is registered by.
+    """
+    if path.suffix.casefold() not in {".tif", ".tiff"}:
+        return None
+    try:
+        import tifffile
+    except ImportError:
+        return None
+    try:
+        with tifffile.TiffFile(path) as opened:
+            tags = {tag.name: tag.value for tag in opened.pages[0].tags}
+    except Exception:                                # noqa: BLE001 - unreadable
+        return None
+    inner = tags.get("ExifTag")
+    values = []
+    if isinstance(inner, dict):
+        values.append(inner.get("DateTimeOriginal"))
+    # The top-level DateTime is when the file was WRITTEN, which for an
+    # export is today rather than the night in question. It is last.
+    values.append(tags.get("DateTime"))
+    for value in values:
+        stamp = _stamp(value) if value else None
+        if stamp is not None:
+            return stamp
+    return None
+
+
 def _capture_time(path: str, _stat: tuple[int, int]) -> float | None:
     try:
         with Image.open(path) as image:
             found = _from_exif(image.getexif())
     except Exception:                                # noqa: BLE001 - not an image
         found = None
+    if found is None:
+        found = _tiff_capture_time(Path(path))
     return found if found is not None else _embedded_capture_time(Path(path))
 
 
