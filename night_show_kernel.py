@@ -250,6 +250,7 @@ def develop_show(stacked: str, placed: str = "",
     if not frames:
         return json.dumps({"error": "no frames to read the camera from"})
     keep = min(max(float(colour or 0.0), 0.0), 100.0)
+    _sky._say(97, "measuring the night start")
     measured = night_start(frames[0], shown=stack,
                            frames=int(told.get("frames_used", 1)))
     # How much of the sky's own large-scale light to take out. At a
@@ -285,6 +286,7 @@ def develop_show(stacked: str, placed: str = "",
     # lower than the middle ever suggests, and a level tuned on one
     # album quietly beheads the next. Asked eighteen, one real album
     # needed eleven; the cap found that out so nobody had to.
+    _sky._say(98, "developing the show")
     grown = np.clip(_encoded(np.clip(_apply_global(
         _decoded(stack).astype(np.float32), operations), 0.0, None)),
         0.0, 1.0)
@@ -356,6 +358,7 @@ def develop_show(stacked: str, placed: str = "",
     # person will open -- read back from disk, its eight bits and its
     # compression included -- because a report about a finer picture
     # than the one being handed over is a report about nothing.
+    _sky._say(99, "measuring the delivered file")
     delivered = np.asarray(Image.open(picture).convert("RGB"),
                            np.float32) / 255.0
     seen = assess(delivered, name=picture.name)

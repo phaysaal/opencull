@@ -1533,7 +1533,8 @@ def superimpose(register_text: str, mode: str = "trails",
     if aligned and mode in ("average", "clipped") and total >= 2:
         anchor = _grey(_shown(read(0).astype(np.float32)))
         for index in range(1, total):
-            _say(43.0, f"trued {index} of {total - 1}")
+            _say(45 + (index - 1) * 17.0 / max(total - 1, 1),
+                 f"truing {index} of {total - 1}")
             placed = _grey(_shown(read(index).astype(np.float32)))
             found = _measure_field(anchor, placed)
             if found is None or (found["typical"] <= FIELD_BAR
@@ -1595,7 +1596,7 @@ def superimpose(register_text: str, mode: str = "trails",
         plain_sum = stack.astype(np.float64)
         squared = plain_sum ** 2
         for index in range(1, total):
-            _say(45 + index * 25.0 / total,
+            _say(62 + index * 18.0 / total,
                  f"gathered {index + 1} of {total}")
             held = read(index).astype(np.float64)
             summed += held * weights[index]
@@ -1613,7 +1614,7 @@ def superimpose(register_text: str, mode: str = "trails",
             kept_weight = np.zeros(mean.shape, np.float64)
             kept_count = np.zeros(mean.shape, np.float32)
             for index in range(total):
-                _say(70 + index * 25.0 / total,
+                _say(80 + index * 15.0 / total,
                      f"weighed {index + 1} of {total}")
                 held = read(index).astype(np.float64)
                 near = np.abs(held - mean) <= band
