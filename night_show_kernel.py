@@ -28,8 +28,12 @@ import superimpose_kernel as _sky
 from superimpose_kernel import LEAST_AGREEING, _frame, frames_of
 
 # The photographer's finishing black level, in this engine's units.
-# Calibrated on the hand-finished pass that won the panels blind.
-FINISH_LEVEL = 4.5
+# Calibrated on the hand-finished passes that won the panels blind:
+# their first touch measured 4.5 of this op, their second 3.7 more --
+# together the depth of the consensus champion. The champion's faint
+# warm cast is deliberately NOT copied; neutrality was the one thing
+# every judge scored in its favour.
+FINISH_LEVEL = 8.2
 
 
 # The compiler reads what a kernel DEFINES, not what it imports, so
