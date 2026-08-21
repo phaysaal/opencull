@@ -67,7 +67,7 @@ check stack_true(stacked, pattern)
 
 -- Developed by measurement: the sky read off the stack itself, the
 -- stars keeping their own colour on the way up.
-shown := develop_show(stacked, pattern, colour, glow_level)
+shown := develop_show(stacked, screened, pattern, colour, glow_level)
 print(show_note(shown))
 
 -- And the finished picture must keep its blacks and tell the truth:

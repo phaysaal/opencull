@@ -115,6 +115,37 @@ class StackTruthTests(unittest.TestCase):
         self.assertFalse(nk.stack_true(json.dumps({"error": "nothing"})))
 
 
+class CoverageTests(unittest.TestCase):
+    """The band only some frames cover is cropped, not shown."""
+
+    def placed(self, *frames):
+        return json.dumps({"frames": [
+            {"name": "ref", "dx": 0.0, "dy": 0.0, "agreed": 140},
+            *frames]})
+
+    def test_shifts_set_the_inset(self):
+        told = self.placed({"name": "a", "dx": -7.8, "dy": 2.0,
+                            "agreed": 120})
+        self.assertGreaterEqual(nk.coverage_inset(told), 8)
+        self.assertLess(nk.coverage_inset(told), 20)
+
+    def test_a_roll_widens_it(self):
+        # A one-degree roll carries the far edge sideways by around
+        # seventy pixels; the wedge it leaves must be inside the crop.
+        told = self.placed({"name": "a", "dx": -40.0, "dy": 4.0,
+                            "turn": 1.0, "agreed": 52})
+        self.assertGreater(nk.coverage_inset(told), 90)
+
+    def test_nothing_to_crop_for_a_steady_tripod(self):
+        told = self.placed({"name": "a", "dx": -1.2, "dy": 0.1,
+                            "agreed": 130})
+        self.assertLessEqual(nk.coverage_inset(told), 6)
+
+    def test_garbage_asks_for_no_crop(self):
+        self.assertEqual(nk.coverage_inset(""), 0)
+        self.assertEqual(nk.coverage_inset("{}"), 0)
+
+
 class ProgramTests(unittest.TestCase):
     def test_the_program_is_a_built_in(self):
         from opencull_gui.programs import BUILT_INS

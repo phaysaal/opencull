@@ -177,7 +177,40 @@ def stack_true(stacked: str, pattern: str = "*.RAF") -> bool:
     return True
 
 
-def develop_show(stacked: str, pattern: str = "*.RAF",
+def coverage_inset(register_text: str) -> int:
+    """How far in from the edge every frame is actually present.
+
+    A shifted frame leaves a margin of the reference it never covered,
+    and a rolled one leaves wedges; inside that band the stack is
+    thinner than it claims, and the boundary shows as a faint step a
+    viewer can find even when a detector does not -- one did. Cropping
+    to the ground every frame stands on removes the band entirely.
+    """
+    try:
+        told = json.loads(register_text)
+    except (TypeError, ValueError):
+        return 0
+    frames = [item for item in told.get("frames", [])
+              if item.get("keep", True)]
+    if not frames:
+        return 0
+    reach = 0.0
+    for item in frames:
+        shift = max(abs(float(item.get("dx", 0.0))),
+                    abs(float(item.get("dy", 0.0))))
+        wedge = 0.0
+        turn = abs(float(item.get("turn", 0.0)))
+        if turn > 1e-6:
+            # A turn about the middle carries the far edge sideways by
+            # the half-diagonal times the angle; that is the widest
+            # sliver it can leave uncovered.
+            wedge = math.sin(math.radians(turn)) * 4000.0
+        reach = max(reach, shift + wedge)
+    return int(math.ceil(reach)) + 4
+
+
+def develop_show(stacked: str, placed: str = "",
+                 pattern: str = "*.RAF",
                  colour: float = 100.0,
                  glow_level: float = 18.0) -> str:
     """The stack developed the way the good one was, and measured.
@@ -199,6 +232,9 @@ def develop_show(stacked: str, pattern: str = "*.RAF",
     if told.get("error"):
         return json.dumps({"error": told["error"]})
     stack = _stack_pixels(told)
+    inset = coverage_inset(placed)
+    if inset and inset * 4 < min(stack.shape[:2]):
+        stack = stack[inset:-inset, inset:-inset]
     frames = frames_of(told.get("photos", "."), pattern)
     if not frames:
         return json.dumps({"error": "no frames to read the camera from"})
@@ -246,6 +282,7 @@ def develop_show(stacked: str, pattern: str = "*.RAF",
         "format": "darkimiya-night-show-v1",
         "picture": str(picture), "deep": str(deep),
         "stack": told["stack"],
+        "cropped_border_px": int(inset),
         "frames_used": told.get("frames_used"),
         "operations": [item["op"] for item in operations],
         "sky": seen["sky"], "shape": seen["shape"],
