@@ -252,16 +252,34 @@ def develop_show(stacked: str, placed: str = "",
             "value": round(15.0 * keep / 100.0, 1),
             "source_instruction": "a breath for the palest stars",
             "enabled": True})
-    level = min(max(float(glow_level or 0.0), 0.0), 64.0)
+    # The level is asked for, then CAPPED by the picture itself:
+    # clips last, once, early. However dark a look is wanted, the cut
+    # may reach no deeper than the darkest percent of the developed
+    # sky -- on an album with strong vignetting the corners arrive
+    # lower than the middle ever suggests, and a level tuned on one
+    # album quietly beheads the next. Asked eighteen, one real album
+    # needed eleven; the cap found that out so nobody had to.
+    grown = np.clip(_encoded(np.clip(_apply_global(
+        _decoded(stack).astype(np.float32), operations), 0.0, None)),
+        0.0, 1.0)
+    asked = min(max(float(glow_level or 0.0), 0.0), 64.0)
+    lum = (grown * np.array([0.2126, 0.7152, 0.0722],
+                            np.float32)).sum(axis=2)
+    allowed = float(np.percentile(lum, 1.0)) * 255.0 * 0.95
+    level = min(asked, max(allowed, 0.0))
     if level > 0.0:
+        grown = np.clip(_encoded(np.clip(_apply_global(
+            _decoded(grown).astype(np.float32), [{
+                "op": "levels.black_input", "unit": "level-8bit",
+                "mode": "absolute", "value": round(level, 1),
+                "enabled": True}]), 0.0, None)), 0.0, 1.0)
         operations.append({
             "op": "levels.black_input", "unit": "level-8bit",
             "mode": "absolute", "value": round(level, 1),
-            "source_instruction": "one gentle level, last",
+            "source_instruction": "one gentle level, last, capped by "
+                                  "the sky's own darkest percent",
             "enabled": True})
-    shown = np.clip(_encoded(np.clip(_apply_global(
-        _decoded(stack).astype(np.float32), operations), 0.0, None)),
-        0.0, 1.0)
+    shown = grown
     home = Path(told["stack"]).parent
     picture = home / "show.jpg"
     deep = home / "show.tiff"
@@ -283,6 +301,9 @@ def develop_show(stacked: str, placed: str = "",
         "picture": str(picture), "deep": str(deep),
         "stack": told["stack"],
         "cropped_border_px": int(inset),
+        "level_asked": round(float(min(max(float(glow_level or 0.0),
+                                           0.0), 64.0)), 1),
+        "level_used": round(float(level), 1),
         "frames_used": told.get("frames_used"),
         "operations": [item["op"] for item in operations],
         "sky": seen["sky"], "shape": seen["shape"],

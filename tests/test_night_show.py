@@ -146,6 +146,39 @@ class CoverageTests(unittest.TestCase):
         self.assertEqual(nk.coverage_inset("{}"), 0)
 
 
+class LevelCapTests(unittest.TestCase):
+    """However dark a look is wanted, the cut stops above the sky."""
+
+    def test_the_level_is_capped_by_the_darkest_percent(self):
+        import tifffile
+
+        from opencull_gui.starfield import _luma
+
+        rng = np.random.default_rng(9)
+        # a sky whose corners arrive much lower than its middle
+        field = np.full((300, 400, 3), 0.06, np.float32)
+        yy, xx = np.mgrid[0:300, 0:400]
+        edge = np.hypot((yy - 150) / 150.0, (xx - 200) / 200.0)
+        field *= (1.0 - 0.55 * np.clip(edge - 0.4, 0, 1))[..., None]
+        field += rng.normal(0, 0.004, field.shape).astype(np.float32)
+        field = np.clip(field, 0, 1)
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve()
+            tifffile.imwrite(root / "stack.tiff",
+                             (field * 65535).astype(np.uint16))
+            from PIL import Image
+
+            Image.fromarray((field * 255).astype(np.uint8)).save(
+                root / "frame.png")
+            told = json.dumps({"stack": str(root / "stack.tiff"),
+                               "photos": str(root), "frames_used": 5})
+            shown = nk.develop_show(told, "", "*.png", 100.0, 40.0)
+        report_ = json.loads(shown)
+        self.assertLess(report_["level_used"], report_["level_asked"])
+        self.assertLessEqual(
+            report_["range"]["black_clipped_percent"], 2.0)
+
+
 class ProgramTests(unittest.TestCase):
     def test_the_program_is_a_built_in(self):
         from opencull_gui.programs import BUILT_INS
