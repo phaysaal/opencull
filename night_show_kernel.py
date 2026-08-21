@@ -212,7 +212,8 @@ def coverage_inset(register_text: str) -> int:
 def develop_show(stacked: str, placed: str = "",
                  pattern: str = "*.RAF",
                  colour: float = 100.0,
-                 glow_level: float = 18.0) -> str:
+                 glow_level: float = 18.0,
+                 flatten: float = 100.0) -> str:
     """The stack developed the way the good one was, and measured.
 
     The recipe is not a taste, it is the one that won a week of
@@ -241,8 +242,23 @@ def develop_show(stacked: str, placed: str = "",
     keep = min(max(float(colour or 0.0), 0.0), 100.0)
     measured = night_start(frames[0], shown=stack,
                            frames=int(told.get("frames_used", 1)))
+    # How much of the sky's own large-scale light to take out. At a
+    # hundred the background is flattened as the night start measured
+    # it; at zero the sky keeps its weather -- the glow and the band a
+    # real night actually had, which one album's viewers mistook for
+    # the Milky Way and liked better than the flat version. The fit
+    # cannot tell a slope from a galaxy, so the choice belongs to a
+    # dial, not to the arithmetic.
+    even = min(max(float(flatten if flatten is not None else 100.0),
+                   0.0), 100.0)
     operations = []
     for item in measured["operations"]:
+        if item.get("op") == "color.background":
+            if even <= 0.0:
+                continue
+            value = dict(item.get("value") or {})
+            value["strength"] = round(even, 1)
+            item = dict(item, value=value)
         if item.get("op") == "tone.preserve":
             item = dict(item, value=keep)
         operations.append(item)
@@ -301,6 +317,7 @@ def develop_show(stacked: str, placed: str = "",
         "picture": str(picture), "deep": str(deep),
         "stack": told["stack"],
         "cropped_border_px": int(inset),
+        "flatten": round(even, 1),
         "level_asked": round(float(min(max(float(glow_level or 0.0),
                                            0.0), 64.0)), 1),
         "level_used": round(float(level), 1),

@@ -152,7 +152,6 @@ class LevelCapTests(unittest.TestCase):
     def test_the_level_is_capped_by_the_darkest_percent(self):
         import tifffile
 
-        from opencull_gui.starfield import _luma
 
         rng = np.random.default_rng(9)
         # a sky whose corners arrive much lower than its middle
@@ -177,6 +176,53 @@ class LevelCapTests(unittest.TestCase):
         self.assertLess(report_["level_used"], report_["level_asked"])
         self.assertLessEqual(
             report_["range"]["black_clipped_percent"], 2.0)
+
+
+class FlattenDialTests(unittest.TestCase):
+    """The sky's weather is a choice, not an inevitability."""
+
+    def sloped_stack(self, root: Path) -> str:
+        import tifffile
+        from PIL import Image
+
+        rng = np.random.default_rng(11)
+        field = np.full((300, 400, 3), 0.05, np.float32)
+        # a strong slope, so the night start reaches for the flatten
+        field *= np.linspace(0.55, 1.45, 400)[None, :, None]
+        field += rng.normal(0, 0.003, field.shape).astype(np.float32)
+        field = np.clip(field, 0, 1)
+        tifffile.imwrite(root / "stack.tiff",
+                         (field * 65535).astype(np.uint16))
+        Image.fromarray((field * 255).astype(np.uint8)).save(
+            root / "frame.png")
+        return json.dumps({"stack": str(root / "stack.tiff"),
+                           "photos": str(root), "frames_used": 5})
+
+    def test_zero_keeps_the_weather_and_a_hundred_takes_it(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve()
+            told = self.sloped_stack(root)
+            flat = json.loads(nk.develop_show(
+                told, "", "*.png", 100.0, 10.0, 100.0))
+            weather = json.loads(nk.develop_show(
+                told, "", "*.png", 100.0, 10.0, 0.0))
+        self.assertIn("color.background", flat["operations"])
+        self.assertNotIn("color.background", weather["operations"])
+        self.assertEqual(flat["flatten"], 100.0)
+        self.assertEqual(weather["flatten"], 0.0)
+        # And the dial did what it says: the flattened sky is more
+        # even than the one that kept its slope.
+        self.assertLess(flat["sky"]["unevenness"],
+                        weather["sky"]["unevenness"] * 0.7)
+
+    def test_halfway_is_written_into_the_operation(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve()
+            told = self.sloped_stack(root)
+            half = json.loads(nk.develop_show(
+                told, "", "*.png", 100.0, 10.0, 50.0))
+        self.assertEqual(half["flatten"], 50.0)
+        self.assertIn("color.background", half["operations"])
 
 
 class ProgramTests(unittest.TestCase):
