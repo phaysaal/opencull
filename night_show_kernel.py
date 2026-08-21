@@ -9,8 +9,9 @@ superimpose, and a star must appear ONCE.
 
 Only after the stack proves itself is it developed: the measured night
 start, the stretch lifting luminance alone so the stars keep their own
-colour, a breath of vibrance for the palest of them, and one gentle
-black level, last, once, early.
+colour, a breath of vibrance for the palest of them, one gentle
+black level capped by the sky itself, and the photographer's last
+tune: two more black input, after everything.
 
 Deterministic end to end: no model is asked for anything.
 """
@@ -25,6 +26,10 @@ import numpy as np
 
 import superimpose_kernel as _sky
 from superimpose_kernel import LEAST_AGREEING, _frame, frames_of
+
+# The photographer's finishing black level, in this engine's units.
+# Calibrated on the hand-finished pass that won the panels blind.
+FINISH_LEVEL = 4.5
 
 
 # The compiler reads what a kernel DEFINES, not what it imports, so
@@ -265,7 +270,7 @@ def develop_show(stacked: str, placed: str = "",
     if keep > 0.0:
         operations.append({
             "op": "color.vibrance", "unit": "percent", "mode": "delta",
-            "value": round(15.0 * keep / 100.0, 1),
+            "value": round(22.0 * keep / 100.0, 1),
             "source_instruction": "a breath for the palest stars",
             "enabled": True})
     # The level is asked for, then CAPPED by the picture itself:
@@ -282,7 +287,9 @@ def develop_show(stacked: str, placed: str = "",
     lum = (grown * np.array([0.2126, 0.7152, 0.0722],
                             np.float32)).sum(axis=2)
     allowed = float(np.percentile(lum, 1.0)) * 255.0 * 0.95
-    level = min(asked, max(allowed, 0.0))
+    # The cap governs the TOTAL cut -- the asked level and the
+    # finishing touch below share it, the touch served first.
+    level = min(asked, max(allowed - FINISH_LEVEL, 0.0))
     if level > 0.0:
         grown = np.clip(_encoded(np.clip(_apply_global(
             _decoded(grown).astype(np.float32), [{
@@ -294,6 +301,26 @@ def develop_show(stacked: str, placed: str = "",
             "mode": "absolute", "value": round(level, 1),
             "source_instruction": "one gentle level, last, capped by "
                                   "the sky's own darkest percent",
+            "enabled": True})
+    # The photographer's last tune, learned from the blind panels: a
+    # final touch of black input, applied after everything else. Small
+    # enough to deepen the sky without beheading it; it is what
+    # separated the winning hand-finished pass from the recipe alone.
+    # Their editor called it "+2.0"; measured against the very file
+    # that hand produced, it is 4.5 of THIS op -- level tools do not
+    # agree on what a step of black means, so the picture arbitrates.
+    # On a sky too dark to afford it, the touch shrinks with the cap.
+    finish = min(FINISH_LEVEL, max(allowed - level, 0.0))
+    if finish > 0.0:
+        grown = np.clip(_encoded(np.clip(_apply_global(
+            _decoded(grown).astype(np.float32), [{
+                "op": "levels.black_input", "unit": "level-8bit",
+                "mode": "absolute", "value": round(finish, 1),
+                "enabled": True}]), 0.0, None)), 0.0, 1.0)
+        operations.append({
+            "op": "levels.black_input", "unit": "level-8bit",
+            "mode": "absolute", "value": round(finish, 1),
+            "source_instruction": "the photographer's last tune",
             "enabled": True})
     shown = grown
     home = Path(told["stack"]).parent
@@ -321,6 +348,7 @@ def develop_show(stacked: str, placed: str = "",
         "level_asked": round(float(min(max(float(glow_level or 0.0),
                                            0.0), 64.0)), 1),
         "level_used": round(float(level), 1),
+        "finish_level": round(float(finish), 1),
         "frames_used": told.get("frames_used"),
         "operations": [item["op"] for item in operations],
         "sky": seen["sky"], "shape": seen["shape"],

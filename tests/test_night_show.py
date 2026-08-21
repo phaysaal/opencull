@@ -176,6 +176,11 @@ class LevelCapTests(unittest.TestCase):
         self.assertLess(report_["level_used"], report_["level_asked"])
         self.assertLessEqual(
             report_["range"]["black_clipped_percent"], 2.0)
+        # The photographer's finishing touch shares the same cap: it
+        # never exceeds its calibrated size, and the total cut still
+        # leaves the darkest percent of the sky standing.
+        self.assertGreaterEqual(report_["finish_level"], 0.0)
+        self.assertLessEqual(report_["finish_level"], nk.FINISH_LEVEL)
 
 
 class FlattenDialTests(unittest.TestCase):
