@@ -1374,3 +1374,109 @@ class RollRescueTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FieldCorrectionTests(unittest.TestCase):
+    """A knocked tripod bends the sky; the grid unbends it."""
+
+    BEND_X = 7.0    # px of zoom-like bend across the width
+    BEND_Y = 5.0    # and down the height
+
+    def bent_night(self, folder: Path):
+        """Two frames of one sky: the second seen through a bend."""
+        rng = np.random.default_rng(11)
+        xs = rng.uniform(25, WIDTH - 25, 90)
+        ys = rng.uniform(25, HEIGHT - 25, 90)
+        brightness = rng.uniform(0.4, 0.95, 90)
+        grid_y, grid_x = np.mgrid[0:HEIGHT, 0:WIDTH]
+        for index in range(2):
+            if index == 0:
+                px, py = xs, ys
+            else:
+                px = xs + self.BEND_X * (xs / WIDTH - 0.5)
+                py = ys + self.BEND_Y * (ys / HEIGHT - 0.5)
+            field = np.zeros((HEIGHT, WIDTH), np.float32) + 0.04
+            for x, y, bright in zip(px, py, brightness):
+                field += bright * np.exp(
+                    -(((grid_x - x) ** 2 + (grid_y - y) ** 2)
+                      / (2 * 1.6 ** 2)))
+            field = np.clip(field + np.random.default_rng(
+                800 + index).normal(0, 0.02, (HEIGHT, WIDTH)), 0, 1)
+            Image.fromarray(
+                (np.stack([field] * 3, -1) * 255 + 0.5).astype(np.uint8)
+            ).save(folder / f"B{index:03d}.jpg", quality=98)
+        return xs, ys, brightness
+
+    def at_rest(self, root: Path) -> str:
+        """A register text that found no rigid move -- there is none."""
+        return json.dumps({
+            "format": sk.FORMAT, "photos": str(root),
+            "pattern": "*.jpg", "demosaic": False,
+            "frames": [
+                {"name": "B000.jpg", "dx": 0.0, "dy": 0.0, "turn": 0.0,
+                 "keep": True, "agreed": 30},
+                {"name": "B001.jpg", "dx": 0.0, "dy": 0.0, "turn": 0.0,
+                 "keep": True, "agreed": 30}]})
+
+    def greys(self, root: Path):
+        def one(name):
+            return np.asarray(
+                Image.open(root / name).convert("L"), np.float32) / 255.0
+        return one("B000.jpg"), one("B001.jpg")
+
+    def test_the_grid_sees_the_bend(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve()
+            self.bent_night(root)
+            anchor, bent = self.greys(root)
+        found = sk._measure_field(anchor, bent)
+        self.assertIsNotNone(found)
+        self.assertGreater(found["worst"], sk.FIELD_BAR)
+        # At the leftmost grid column the planted bend is known.
+        cx = float(found["cxs"][0])
+        planted = self.BEND_X * (cx / WIDTH - 0.5)
+        measured = float(np.median(found["acrosses"][:, 0]))
+        self.assertLess(abs(measured - planted), 0.6)
+
+    def test_the_warp_takes_the_bend_back_out(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve()
+            self.bent_night(root)
+            anchor, bent = self.greys(root)
+        found = sk._measure_field(anchor, bent)
+        trued = sk._field_warp(bent[..., None].repeat(3, axis=2),
+                               0.0, (0.0, 0.0), found)[..., 0]
+        left = sk._measure_field(anchor, trued)
+        self.assertIsNotNone(left)
+        self.assertLess(left["worst"], 0.5)
+
+    def test_the_stack_keeps_single_stars(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve()
+            xs, ys, brightness = self.bent_night(root)
+            told = json.loads(sk.superimpose(
+                self.at_rest(root), "average", output=str(root / "out")))
+            self.assertIsNotNone(told["field_corrected"])
+            self.assertGreater(
+                told["field_corrected"]["B001.jpg"]["before_px"],
+                sk.FIELD_BAR)
+            proof = np.asarray(
+                Image.open(told["proof"]).convert("L"), np.float32) / 255.0
+            single = np.asarray(
+                Image.open(root / "B000.jpg").convert("L"),
+                np.float32) / 255.0
+
+        def peak_near(held, x, y):
+            r, c = int(round(y)), int(round(x))
+            return float(held[r - 1:r + 2, c - 1:c + 2].max())
+
+        # Where the bend moved a star by more than two pixels, an
+        # uncorrected average would leave two dim copies. Corrected,
+        # the stacked star stands nearly as tall as in one frame.
+        strong = [(x, y) for x, y, b in zip(xs, ys, brightness)
+                  if abs(self.BEND_X * (x / WIDTH - 0.5)) > 2.2
+                  and b > 0.6 and 8 < x < WIDTH - 8 and 8 < y < HEIGHT - 8]
+        self.assertGreater(len(strong), 4)
+        ratios = [peak_near(proof, x, y) / peak_near(single, x, y)
+                  for x, y in strong]
+        self.assertGreater(float(np.median(ratios)), 0.8)

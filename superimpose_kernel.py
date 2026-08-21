@@ -755,6 +755,209 @@ def _shifted(frame: np.ndarray, shift: tuple[float, float]) -> np.ndarray:
     return out
 
 
+# A tripod knocked mid-burst does not move the sky rigidly: the lens
+# bends each pointing differently, and after the best shift and turn
+# a residual FIELD of small displacements remains, growing toward the
+# corners. Left alone it doubles the corner stars and fails the
+# roundness gate. Measured on a coarse grid and interpolated, it can
+# be folded into the same single resample as the rigid move.
+FIELD_BAR = 0.6
+FIELD_DONE = 0.35
+FIELD_QUALITY = 8.0
+
+
+def _measure_field(reference: np.ndarray, moving: np.ndarray
+                   ) -> dict[str, Any] | None:
+    """The residual displacement grid between two aligned greys.
+
+    Windowed phase correlation at each grid cell, refined to a
+    fraction of a pixel by a quadratic fit around the peak. A cell
+    whose correlation peak barely rises above its own floor -- cloud,
+    vignette-black corner -- inherits the median of its sound
+    neighbours rather than voting nonsense. If most cells are unsound
+    the whole measurement declines to exist.
+    """
+    height, width = reference.shape[:2]
+    win = 512 if min(height, width) >= 2048 else max(
+        64, 1 << int(np.log2(max(min(height, width) // 4, 64))))
+    half = win // 2
+    if height < 3 * half or width < 3 * half:
+        return None
+    rows = 5 if height >= 2048 else 3
+    cols = 7 if width >= 2048 else 3
+    cys = np.linspace(half + 8, height - half - 8, rows).astype(int)
+    cxs = np.linspace(half + 8, width - half - 8, cols).astype(int)
+    han = np.hanning(win)[:, None] * np.hanning(win)[None, :]
+
+    def offset_at(cy: int, cx: int) -> tuple[float, float, float]:
+        def cut(grey: np.ndarray) -> np.ndarray:
+            piece = grey[cy - half:cy + half, cx - half:cx + half].copy()
+            piece -= np.median(piece)
+            return piece * han
+        # A window that is partly outside the frame's coverage -- the
+        # black border a shift or turn leaves -- correlates its own
+        # edge, not the sky.
+        for grey in (moving, reference):
+            piece = grey[cy - half:cy + half, cx - half:cx + half]
+            if float(np.mean(piece <= 1e-4)) > 0.15:
+                return 0.0, 0.0, 0.0
+        a, b = cut(moving), cut(reference)
+        corr = np.fft.fftshift(np.fft.irfft2(
+            np.fft.rfft2(a) * np.conj(np.fft.rfft2(b))))
+        peak = np.unravel_index(np.argmax(corr), corr.shape)
+        quality = float(corr[peak] / (np.abs(corr).mean() + 1e-12))
+
+        def refine(low: float, mid: float, high: float) -> float:
+            den = low - 2.0 * mid + high
+            return 0.0 if den == 0 else 0.5 * (low - high) / den
+
+        py, px = peak
+        if not (0 < py < win - 1 and 0 < px < win - 1):
+            return 0.0, 0.0, 0.0
+        down = py - half + refine(corr[py - 1, px], corr[py, px],
+                                  corr[py + 1, px])
+        across = px - half + refine(corr[py, px - 1], corr[py, px],
+                                    corr[py, px + 1])
+        return down, across, quality
+
+    downs = np.zeros((rows, cols))
+    acrosses = np.zeros((rows, cols))
+    sound = np.zeros((rows, cols), bool)
+    for i, cy in enumerate(cys):
+        for j, cx in enumerate(cxs):
+            downs[i, j], acrosses[i, j], quality = offset_at(cy, cx)
+            sound[i, j] = (quality >= FIELD_QUALITY
+                           and abs(downs[i, j]) <= half / 4
+                           and abs(acrosses[i, j]) <= half / 4)
+    # A real bend is SMOOTH: at grid scale it is close to an affine
+    # field, and a cell that defies the affine everyone else agrees on
+    # -- a satellite streak, a cloud edge -- is a lie, however sharp
+    # its correlation peak looked. Fit, reject the defiant, refit; the
+    # unsound cells then inherit the fit's own prediction, so nothing
+    # a single window claimed can bend the whole frame.
+    # The verdict must rest on a MAJORITY of sound cells: with only a
+    # handful, an affine can pass straight through an outlier instead
+    # of exposing it, and a streak becomes a tilt for the whole frame.
+    if sound.sum() < max(3, (2 * sound.size + 2) // 3):
+        return None
+    # The trigger reads the raw sound cells alone -- a genuine bend
+    # moves most of them; one polluted window moves one.
+    typical = float(np.median(np.hypot(downs[sound], acrosses[sound])))
+
+    def affine_of(mask: np.ndarray) -> np.ndarray | None:
+        picked = np.nonzero(mask)
+        if len(picked[0]) < max(3, mask.size // 2):
+            return None
+        ones = np.ones(len(picked[0]))
+        design = np.stack([cxs[picked[1]], cys[picked[0]], ones], 1)
+        fit_a, *_ = np.linalg.lstsq(design, acrosses[mask], rcond=None)
+        fit_d, *_ = np.linalg.lstsq(design, downs[mask], rcond=None)
+        return np.stack([fit_a, fit_d])
+
+    grid_x = np.stack([np.broadcast_to(cxs, (rows, cols)),
+                       np.broadcast_to(cys[:, None], (rows, cols)),
+                       np.ones((rows, cols))], -1)
+    fit = affine_of(sound)
+    if fit is None:
+        return None
+    told_across = grid_x @ fit[0]
+    told_down = grid_x @ fit[1]
+    defiant = (np.hypot(downs - told_down, acrosses - told_across)
+               > 2.5) & sound
+    if defiant.any():
+        fit = affine_of(sound & ~defiant)
+        if fit is None:
+            return None
+        told_across = grid_x @ fit[0]
+        told_down = grid_x @ fit[1]
+        sound &= ~defiant
+    downs = np.where(sound, downs, told_down)
+    acrosses = np.where(sound, acrosses, told_across)
+    worst = float(max(np.abs(downs).max(), np.abs(acrosses).max()))
+    return {"downs": downs, "acrosses": acrosses,
+            "cys": cys, "cxs": cxs, "worst": worst, "typical": typical}
+
+
+def _field_rows(field: dict[str, Any], width: int, y0: int, y1: int
+                ) -> tuple[np.ndarray, np.ndarray]:
+    """The field, bilinearly interpolated over rows y0..y1."""
+    cys, cxs = field["cys"], field["cxs"]
+    xs = np.arange(width, dtype=np.float32)
+    down_rows = np.stack([np.interp(xs, cxs, field["downs"][i])
+                          for i in range(len(cys))])
+    across_rows = np.stack([np.interp(xs, cxs, field["acrosses"][i])
+                            for i in range(len(cys))])
+    ys = np.arange(y0, y1, dtype=np.float32)
+    seg = np.clip(np.searchsorted(cys, ys) - 1, 0, len(cys) - 2)
+    t = np.clip((ys - cys[seg]) / np.maximum(
+        cys[seg + 1] - cys[seg], 1), 0.0, 1.0)[:, None]
+    return ((1 - t) * down_rows[seg] + t * down_rows[seg + 1],
+            (1 - t) * across_rows[seg] + t * across_rows[seg + 1])
+
+
+def _field_warp(frame: np.ndarray, degrees: float,
+                shift: tuple[float, float], field: dict[str, Any],
+                taps: int = LANCZOS_TAPS,
+                band: int = 384) -> np.ndarray:
+    """The rigid move and the residual field in ONE resample.
+
+    The field says where each output pixel's true counterpart sits
+    relative to its rigidly-placed one; sampling the composition
+    directly costs the frame a single Lanczos pass, where correcting
+    an already-warped frame would soften it twice.
+    """
+    height, width = frame.shape[:2]
+    cx, cy = (width - 1) / 2.0, (height - 1) / 2.0
+    angle = np.radians(-degrees)
+    cos, sin = float(np.cos(angle)), float(np.sin(angle))
+    out = np.zeros(frame.shape, np.float32)
+    xs = np.arange(width, dtype=np.float32)
+    reach = range(-taps + 1, taps + 1)
+    for top in range(0, height, band):
+        low = min(top + band, height)
+        field_down, field_across = _field_rows(field, width, top, low)
+        columns = (xs[None, :] + field_across) - shift[0] - cx
+        rows = (np.arange(top, low, dtype=np.float32)[:, None]
+                + field_down) - shift[1] - cy
+        sx = cx + columns * cos - rows * sin
+        sy = cy + columns * sin + rows * cos
+        x0 = np.floor(sx).astype(np.int32)
+        y0 = np.floor(sy).astype(np.int32)
+        inside = ((x0 >= taps - 1) & (x0 < width - taps)
+                  & (y0 >= taps - 1) & (y0 < height - taps))
+        x0c = np.clip(x0, taps - 1, width - taps - 1)
+        y0c = np.clip(y0, taps - 1, height - taps - 1)
+        weight_x = [_lanczos_at(sx - (x0c + step), taps)
+                    for step in reach]
+        weight_y = [_lanczos_at(sy - (y0c + step), taps)
+                    for step in reach]
+        piece = np.zeros((low - top, width, frame.shape[2]), np.float32)
+        total = np.zeros((low - top, width), np.float32)
+        for dy, wy in zip(reach, weight_y):
+            rows_at = y0c + dy
+            for dx, wx in zip(reach, weight_x):
+                weight = wx * wy
+                piece += frame[rows_at, x0c + dx] * weight[..., None]
+                total += weight
+        floor, ceiling = _corner_bounds(frame, y0c, x0c)
+        piece /= np.maximum(total, 1e-6)[..., None]
+        piece = np.clip(piece, floor, ceiling)
+        out[top:low] = np.where(inside[..., None], piece, 0.0)
+    return out
+
+
+def _added_fields(first: dict[str, Any], second: dict[str, Any]
+                  ) -> dict[str, Any]:
+    """Two rounds of the same grid, folded into one field."""
+    downs = first["downs"] + second["downs"]
+    acrosses = first["acrosses"] + second["acrosses"]
+    return {"downs": downs, "acrosses": acrosses,
+            "cys": first["cys"], "cxs": first["cxs"],
+            "worst": float(max(np.abs(downs).max(),
+                               np.abs(acrosses).max())),
+            "typical": float(np.median(np.hypot(downs, acrosses)))}
+
+
 def _best_placement(anchors: np.ndarray, moving: np.ndarray,
                     angles: list[float], centre: tuple[float, float],
                     radius: float, guess: tuple[float, float] | None
@@ -1252,6 +1455,7 @@ def superimpose(register_text: str, mode: str = "trails",
               if aligned else (0.0, 0.0) for item in frames]
     turns = [float(item.get("turn", 0.0)) if aligned else 0.0
              for item in frames]
+    fields: list[dict[str, Any] | None] = [None] * len(paths)
 
     def calibrated(index: int) -> np.ndarray:
         held = _linear(_frame(paths[index], demosaic))
@@ -1275,6 +1479,10 @@ def superimpose(register_text: str, mode: str = "trails",
         if not aligned:
             return held
         shift, turn = shifts[index], turns[index]
+        if fields[index] is not None:
+            # The knocked-tripod case: rigid move and residual field
+            # composed into one resample.
+            return _field_warp(held, turn, shift, fields[index])
         whole = (abs(shift[0] - round(shift[0])) < 1e-6
                  and abs(shift[1] - round(shift[1])) < 1e-6)
         if abs(turn) < 1e-6:
@@ -1287,6 +1495,29 @@ def superimpose(register_text: str, mode: str = "trails",
         return _lanczos_warp(held, turn, shift)
 
     total = len(paths)
+    # After the best rigid placement, each frame is asked whether a
+    # residual displacement field remains -- the signature of a knock
+    # or a lens bending two pointings differently. Only a field the
+    # grid can actually see (worst cell beyond FIELD_BAR) is folded
+    # back into the frame's single resample; a well-behaved tripod
+    # costs nothing extra.
+    field_notes: dict[str, Any] = {}
+    if aligned and mode in ("average", "clipped") and total >= 2:
+        anchor = _grey(_shown(read(0).astype(np.float32)))
+        for index in range(1, total):
+            _say(43.0, f"trued {index} of {total - 1}")
+            placed = _grey(_shown(read(index).astype(np.float32)))
+            found = _measure_field(anchor, placed)
+            if found is None or found["typical"] <= FIELD_BAR:
+                continue
+            fields[index] = found
+            again = _measure_field(anchor, _grey(_shown(
+                read(index).astype(np.float32))))
+            if again is not None and again["typical"] > FIELD_DONE:
+                fields[index] = _added_fields(found, again)
+            field_notes[str(frames[index]["name"])] = {
+                "before_px": round(found["worst"], 2),
+                "after_px": round(again["worst"], 2) if again else None}
     if mode == "drizzle":
         scale = float(min(max(scale, 1.0), 4.0))
         pixfrac = float(min(max(pixfrac, 0.05), 1.0))
@@ -1391,6 +1622,7 @@ def superimpose(register_text: str, mode: str = "trails",
         "dark_subtracted": dark is not None,
         "flat_divided": flat is not None,
         "bias_subtracted": zero is not None,
+        "field_corrected": field_notes or None,
         "stack": str(tiff), "proof": str(proof),
     }, indent=2)
 
