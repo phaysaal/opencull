@@ -238,3 +238,40 @@ class RecipeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FilmSpiritTests(unittest.TestCase):
+    """The spirit collection: known characters, honest names."""
+
+    NAMES = ("Vivid Slide", "Gentle Slide", "Muted Chrome",
+             "Negative Portrait", "Crisp Negative",
+             "Nostalgic Negative", "Cinema Flat", "Silver Film")
+
+    def test_every_spirit_ships_compiled_and_labelled(self):
+        made = {item["name"]: item for item in presets.built_in()}
+        for name in self.NAMES:
+            self.assertIn(name, made)
+            look = made[name]
+            # Every one says plainly what it is: an approximation in
+            # the spirit of a named simulation, not the thing itself.
+            self.assertIn("spirit of Fujifilm", look["intent"])
+            self.assertIn("approximation", look["intent"])
+            self.assertTrue(look["operations"])
+            for op in look["operations"]:
+                self.assertTrue(op.get("op"))
+
+    def test_the_spirits_move_in_their_simulations_direction(self):
+        made = {item["name"]: item for item in presets.built_in()}
+
+        def value(name: str, op: str) -> float:
+            return next(
+                (float(item["value"])
+                 for item in made[name]["operations"]
+                 if item["op"] == op), 0.0)
+
+        # The slide saturates, the cinema stock desaturates, the
+        # negative relaxes its contrast, the silver drops its colour.
+        self.assertGreater(value("Vivid Slide", "color.saturation"), 20)
+        self.assertLess(value("Cinema Flat", "color.saturation"), -15)
+        self.assertLess(value("Negative Portrait", "tone.contrast"), 0)
+        self.assertEqual(value("Silver Film", "color.saturation"), -100)

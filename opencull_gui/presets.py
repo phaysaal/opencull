@@ -355,6 +355,120 @@ BUILT_IN: tuple[dict[str, Any], ...] = (
             "hdr_levels_curves": ["Shadows +8", "Highlights -5"],
         },
     },
+    # --- the film-spirit collection --------------------------------------
+    # The character of every Fujifilm simulation is public knowledge --
+    # a whole community publishes recipes chasing them -- and only the
+    # camera's exact math is not. These are honest approximations of
+    # that character under names of their own, so a frame shot in
+    # Standard can be re-rendered in the SPIRIT of another simulation
+    # after the fact. The camera's true transform is still one "Learn a
+    # look" away, and a learned preset should replace its spirit-twin.
+    {
+        "slug": "vivid-slide",
+        "name": "Vivid Slide",
+        "intent": "In the spirit of Fujifilm's Velvia: the saturated "
+                  "slide film, deep blacks and colours at full voice. An "
+                  "approximation of its widely known character; Learn a "
+                  "look fits your camera's own.",
+        "instructions": {
+            "global_exposure": ["Saturation +28", "Contrast +14"],
+            "hdr_levels_curves": ["Blacks -6", "Whites +3"],
+            "color_editor": ["Blue saturation +8", "Green saturation +6"],
+            "detail_and_noise": ["Clarity +4"],
+        },
+    },
+    {
+        "slug": "gentle-slide",
+        "name": "Gentle Slide",
+        "intent": "In the spirit of Fujifilm's Astia: the soft slide "
+                  "film, colour present but courteous, made for skin. An "
+                  "approximation of its widely known character.",
+        "instructions": {
+            "global_exposure": ["Saturation +6", "Contrast -6"],
+            "hdr_levels_curves": ["Highlights -6", "Shadows +4"],
+            "color_editor": ["Red saturation -4", "Blue saturation +6"],
+        },
+    },
+    {
+        "slug": "muted-chrome",
+        "name": "Muted Chrome",
+        "intent": "In the spirit of Fujifilm's Classic Chrome: the "
+                  "documentary look, colour held back, shadows firm, "
+                  "blues brought down to earth. An approximation of its "
+                  "widely known character.",
+        "instructions": {
+            "global_exposure": ["Saturation -18", "Contrast +8"],
+            "hdr_levels_curves": ["Shadows -8", "Highlights -4"],
+            "white_balance_and_color": ["Temperature +150 kelvin"],
+            "color_editor": ["Blue saturation -14", "Blue lightness -8"],
+        },
+    },
+    {
+        "slug": "negative-portrait",
+        "name": "Negative Portrait",
+        "intent": "In the spirit of Fujifilm's PRO Neg. Std: the studio "
+                  "negative, low contrast and colour that defers to skin. "
+                  "An approximation of its widely known character.",
+        "instructions": {
+            "global_exposure": ["Saturation -8", "Contrast -10"],
+            "hdr_levels_curves": ["Highlights -8", "Shadows +6"],
+            "color_editor": ["Orange saturation -4"],
+            "detail_and_noise": ["Clarity -4"],
+        },
+    },
+    {
+        "slug": "crisp-negative",
+        "name": "Crisp Negative",
+        "intent": "In the spirit of Fujifilm's PRO Neg. Hi: the location "
+                  "negative, the same restraint with its back straighter. "
+                  "An approximation of its widely known character.",
+        "instructions": {
+            "global_exposure": ["Saturation -6", "Contrast +6"],
+            "hdr_levels_curves": ["Blacks -5"],
+            "detail_and_noise": ["Clarity +5"],
+        },
+    },
+    {
+        "slug": "nostalgic-negative",
+        "name": "Nostalgic Negative",
+        "intent": "In the spirit of Fujifilm's Classic Neg: the corner-"
+                  "shop colour negative, muted but opinionated, greens "
+                  "leaning cyan and a warmth over everything. An "
+                  "approximation of its widely known character.",
+        "instructions": {
+            "global_exposure": ["Saturation -12", "Contrast +10"],
+            "hdr_levels_curves": ["Shadows -10"],
+            "white_balance_and_color": ["Temperature +200 kelvin",
+                                        "Tint +3"],
+            "color_editor": ["Green hue -12", "Cyan saturation +6"],
+        },
+    },
+    {
+        "slug": "cinema-flat",
+        "name": "Cinema Flat",
+        "intent": "In the spirit of Fujifilm's Eterna: the motion-"
+                  "picture stock, contrast and colour both spoken "
+                  "quietly, made to be graded or left moody. An "
+                  "approximation of its widely known character.",
+        "instructions": {
+            "global_exposure": ["Saturation -22", "Contrast -18"],
+            "hdr_levels_curves": ["Highlights -10", "Shadows +10"],
+            "detail_and_noise": ["Clarity -6"],
+        },
+    },
+    {
+        "slug": "silver-film",
+        "name": "Silver Film",
+        "intent": "In the spirit of Fujifilm's ACROS: the fine-grain "
+                  "silver monochrome, rich blacks and a long tonal "
+                  "spine. An approximation of its widely known "
+                  "character, without the grain.",
+        "instructions": {
+            "global_exposure": ["Saturation -100", "Contrast +12"],
+            "hdr_levels_curves": ["Blacks -4"],
+            "detail_and_noise": ["Clarity +8", "Structure +8"],
+        },
+    },
 )
 
 
