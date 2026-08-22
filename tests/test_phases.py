@@ -243,3 +243,11 @@ class DebriefTests(unittest.TestCase):
             marked=1,
             manifest=manifest(edit_directions=1, renders=1, exports=1))
         self.assertEqual(state(plan, phases.DEBRIEF), "ready")
+
+
+class HandCulledFineTuningTests(unittest.TestCase):
+    """A hand-culled folder gets its dials without an assessment."""
+
+    def test_fine_tuning_is_ready_without_directions(self):
+        plan = phases.plan(project(), manifest=manifest())
+        self.assertEqual(state(plan, phases.FINE_TUNING), "ready")

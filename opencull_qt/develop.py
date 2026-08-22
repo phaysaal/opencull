@@ -1827,6 +1827,14 @@ class DevelopPage(QWidget):
             "the report beside them ends with the ffmpeg line that makes "
             "the video.")
 
+    def showEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        super().showEvent(event)
+        # Treatments generated while another page was on show -- an AI
+        # editing run finishing, a recipe imported -- must be here the
+        # moment this page is looked at again, not after a restart.
+        if self.current:
+            self._fill_treatments()
+
     def show_recipe_path(self) -> Path | None:
         """Where the last Superimpose run left its measured recipe."""
         photos = str(self.workspace.project.get("source_folder") or "")
@@ -2378,11 +2386,16 @@ def shortlist_path_for(report, layout: dict) -> Path:
 
 def directions_for(report, photos_root: Path, layout: dict,
                    project_path: Path):
-    """The edit directions for this folder, if it has been through assessment.
+    """The edit directions for this folder, resolved when asked.
 
     A folder that has only been culled has no shortlist, so it has no
-    directions and no treatments beyond the baseline. That is the truth
-    rather than an error, so this answers None and the workspace carries on.
+    directions and no treatments beyond the baseline -- but that is the
+    truth OF A MOMENT, not of the folder. Resolved once at construction,
+    a workspace opened before the assessment answered "no directions"
+    for ever, and treatments generated minutes later only appeared
+    after a restart. So the shortlist is looked for on every asking,
+    and the parsed index is kept only as long as the file on disk is
+    the one it was parsed from.
     """
     from opencull_gui.directions import DirectionsIndex
     from opencull_gui.project import load_project
@@ -2392,23 +2405,38 @@ def directions_for(report, photos_root: Path, layout: dict,
         default_shortlist_review_path,
     )
 
-    path = shortlist_path_for(report, layout)
-    if not path.is_file():
-        return None
-    try:
-        shortlist = load_shortlist(path, report, photos_root)
-        reviews = ShortlistReviewStore(
-            default_shortlist_review_path(path), shortlist)
-    except Exception:
-        # A shortlist belonging to a different cull is not this folder's
-        # assessment. Treating it as absent is right; refusing to open the
-        # develop page over it is not.
-        return None
-    index = DirectionsIndex(
-        shortlist, reviews, layout["Recipes"],
-        style_profile=lambda: str(
-            load_project(project_path).get("active_style_profile") or ""))
-    return index.payload
+    held: dict = {}
+
+    def resolve() -> dict:
+        path = shortlist_path_for(report, layout)
+        if not path.is_file():
+            held.clear()
+            return {"available": False}
+        try:
+            stamp = (str(path), path.stat().st_mtime_ns)
+        except OSError:
+            held.clear()
+            return {"available": False}
+        if held.get("stamp") != stamp:
+            try:
+                shortlist = load_shortlist(path, report, photos_root)
+                reviews = ShortlistReviewStore(
+                    default_shortlist_review_path(path), shortlist)
+            except Exception:
+                # A shortlist belonging to a different cull is not this
+                # folder's assessment. Treating it as absent is right;
+                # refusing to open the develop page over it is not.
+                held.clear()
+                return {"available": False}
+            held["stamp"] = stamp
+            held["index"] = DirectionsIndex(
+                shortlist, reviews, layout["Recipes"],
+                style_profile=lambda: str(
+                    load_project(project_path).get(
+                        "active_style_profile") or ""))
+        return held["index"].payload()
+
+    return resolve
 
 
 def workspace_for(report, photos_root: Path,

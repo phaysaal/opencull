@@ -249,10 +249,16 @@ def plan(
             FINE_TUNING, "ready",
             detail="Every control keeps the sentence that produced it."))
     else:
+        # Not a locked door. The camera's own rendering and every preset
+        # answer to the controls with or without an assessment -- a
+        # hand-culled folder deserves its dials. AI editing ADDS
+        # treatments written for each frame; it is not the price of
+        # admission.
         phases.append(entry(
-            FINE_TUNING, "blocked",
-            "Fine tuning moves the numbers a treatment compiled into, so "
-            "there has to be a treatment. Ask for AI editing first."))
+            FINE_TUNING, "ready",
+            detail="No written treatments yet: the camera's rendering "
+                   "and the presets answer to the controls. AI editing "
+                   "adds treatments written for each frame."))
 
     if exports:
         phases.append(entry(

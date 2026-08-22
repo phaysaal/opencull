@@ -556,6 +556,34 @@ class FinetuneDoorTests(unittest.TestCase):
         self.assertEqual(len(asked), 1)
 
 
+class LateDirectionsTests(unittest.TestCase):
+    """Treatments generated after the project opened arrive unbidden."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.application = QApplication.instance() or QApplication([])
+
+    def test_treatments_arrive_without_a_restart(self):
+        from opencull_qt.develop import workspace_for
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve()
+            report_path, photos = build_shoot(root)
+            report = load_report(report_path)
+            # The project opens BEFORE any assessment exists...
+            workspace = workspace_for(report, photos)
+            before = {item["id"]
+                      for item in workspace.treatments(NAMES[0])}
+            self.assertNotIn("standard", before)
+            self.assertIn("calibrated", before)
+            # ...the AI editing lands while the app is running...
+            assess_and_suggest(root, report_path, photos)
+            # ...and the same workspace serves it, no restart asked.
+            after = {item["id"]
+                     for item in workspace.treatments(NAMES[0])}
+            self.assertIn("standard", after)
+
+
 class TuneShowDoorTests(FinetuneDoorTests):
     """The finished starfield opens in Fine Tune with its own recipe."""
 

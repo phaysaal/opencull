@@ -1528,12 +1528,16 @@ class FineTunePage(QWidget):
             finally:
                 self._suspend_profile = False
         else:
-            self._clear()
-            self.keep_button.setEnabled(False)
-            self.reset_button.setEnabled(False)
-            self.frame.set_message(
-                f"{photo} has no treatment with executable operations, so "
-                "there is nothing here to move.")
+            # No written treatment is not a locked door: the camera's
+            # own rendering opens with every control at rest, and
+            # touching one asks it into the recipe -- exactly how the
+            # As-shot preset always worked. A hand-culled folder gets
+            # its dials without paying for an assessment first.
+            self._suspend_profile = True
+            try:
+                self.show_treatment("as-shot")
+            finally:
+                self._suspend_profile = False
 
     def _chose_treatment(self, row: int) -> None:
         if 0 <= row < len(self.treatments):
