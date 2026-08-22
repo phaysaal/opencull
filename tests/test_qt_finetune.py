@@ -2205,3 +2205,39 @@ class AdjustedRenderTests(FineTunePageTests):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PastedRecipeFidelityTests(FineTunePageTests):
+    """What was pasted is what renders when the frame is chosen."""
+
+    def test_the_pasted_settings_reach_the_preview(self):
+        from opencull_gui import adjustments
+
+        page = self.page(marked=(NAMES[0], NAMES[1]))
+        page.show_photo(NAMES[0])
+        page.show_treatment("standard")
+        page.changes = {"+insert": [{"op": "detail.dehaze",
+                                     "value": 12.0}]}
+        copied = page._settings_of(NAMES[0])
+        self.assertIsNotNone(copied)
+        self.assertTrue(page._paste_onto(NAMES[1], copied))
+        # The ledger holds the transplant...
+        held = page._ledger.get(NAMES[1])
+        self.assertEqual(held["treatment"], "standard")
+        self.assertTrue(held["changes"])
+        # ...and choosing the frame renders exactly those changes.
+        asked: list[dict] = []
+        page.renderer.render = (
+            lambda *args, **kwargs: asked.append(kwargs))
+        page.show_photo(NAMES[1])
+        self.assertTrue(asked)
+        final = asked[-1]
+        self.assertEqual(page.treatment, "standard")
+        self.assertTrue(page.changes)
+        self.assertEqual(final.get("adjustments"), page.changes)
+        # The pasted move survives, re-addressed to B's own recipe.
+        applied = adjustments.apply(page._pristine, page.changes)
+        self.assertTrue(any(
+            item.get("op") == "detail.dehaze"
+            and float(item.get("value") or 0) == 12.0
+            for item in applied["operations"]))
