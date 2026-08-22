@@ -136,6 +136,27 @@ class JobError(ValueError):
     """A requested queue transition or path is invalid."""
 
 
+def _photo_inside(source: Path, photo: str) -> str:
+    """The photograph's path within its folder, subfolders honoured.
+
+    A photograph may live below the folder's root -- the Superimpose
+    stack does, under .darkimiya -- so a relative path is kept whole
+    rather than cut to its last name, and only escaping the folder is
+    refused.
+    """
+    asked = str(photo).strip()
+    name = asked if "/" in asked or "\\" in asked else Path(asked).name
+    inside = source / name
+    try:
+        inside.resolve().relative_to(source)
+    except ValueError:
+        raise JobError(
+            f"photograph escapes the folder: {photo!r}") from None
+    if not name or not inside.is_file():
+        raise JobError(f"no such photograph in {source}: {name or photo!r}")
+    return name
+
+
 def _now() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -992,9 +1013,7 @@ class JobManager:
         source = Path(photos).expanduser().resolve()
         if not source.is_dir():
             raise JobError(f"photo folder is not a directory: {source}")
-        name = Path(str(photo).strip()).name
-        if not name or not (source / name).is_file():
-            raise JobError(f"no such photograph in {source}: {name or photo!r}")
+        name = _photo_inside(source, photo)
         try:
             budget = int(rounds)
         except (TypeError, ValueError):
@@ -1187,9 +1206,7 @@ class JobManager:
         source = Path(photos).expanduser().resolve()
         if not source.is_dir():
             raise JobError(f"photo folder is not a directory: {source}")
-        name = Path(str(photo).strip()).name
-        if not name or not (source / name).is_file():
-            raise JobError(f"no such photograph in {source}: {name or photo!r}")
+        name = _photo_inside(source, photo)
         try:
             project_path, project = load_or_create_folder_project(
                 source, source.name)

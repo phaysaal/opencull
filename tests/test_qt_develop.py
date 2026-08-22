@@ -634,6 +634,14 @@ class TuneShowDoorTests(FinetuneDoorTests):
         # The door listed the stack among the photographs.
         self.assertIn(photo, page.photo_names)
 
+    def test_the_stack_survives_a_restart(self):
+        # The first page's door imported the recipe; a FRESH page --
+        # the app reopened -- lists the stack without any door click.
+        self.show_recipe(self.photos_path)
+        page = self.page()
+        self.assertIn(".darkimiya/Superimpose/clipped.tiff",
+                      page.photo_names)
+
     def test_without_a_show_the_door_says_so(self):
         page = self.page()
         seen: list[tuple[str, str]] = []

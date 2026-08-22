@@ -17,7 +17,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import zones_kernel  # noqa: E402
-from opencull_gui.jobs import kimiya_arguments  # noqa: E402
+from opencull_gui.jobs import (  # noqa: E402
+    JobError,
+    _photo_inside,
+    kimiya_arguments,
+)
 from opencull_gui.zones import FORMAT  # noqa: E402
 from recipe_compiler import RANGES  # noqa: E402
 
@@ -141,3 +145,38 @@ class ZonesJobTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PhotoInsideTests(unittest.TestCase):
+    """A photograph below the folder's root is still the folder's."""
+
+    def test_a_subfolder_photograph_is_honoured(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder).resolve()
+            deep = source / ".darkimiya" / "Superimpose"
+            deep.mkdir(parents=True)
+            (deep / "clipped.tiff").write_bytes(b"x")
+            self.assertEqual(
+                _photo_inside(source,
+                              ".darkimiya/Superimpose/clipped.tiff"),
+                ".darkimiya/Superimpose/clipped.tiff")
+
+    def test_a_plain_name_still_works(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder).resolve()
+            (source / "A.RAF").write_bytes(b"x")
+            self.assertEqual(_photo_inside(source, "A.RAF"), "A.RAF")
+
+    def test_escaping_the_folder_is_refused(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder).resolve() / "inner"
+            source.mkdir()
+            (source.parent / "secret.tiff").write_bytes(b"x")
+            with self.assertRaises(JobError):
+                _photo_inside(source, "../secret.tiff")

@@ -995,6 +995,12 @@ class DevelopPage(QWidget):
         self.workspace = workspace
         self.loader = loader
         self.photo_names = list(report.photo_names)
+        # A Superimpose result that carries its measured recipe is a
+        # member of the project, not a hidden file: it joins the list
+        # on every opening, restart or not.
+        for stack in self._show_stacks():
+            if stack not in self.photo_names:
+                self.photo_names.append(stack)
         # The list holds the frames there is something to decide about
         # until asked to hold them all.
         self.scope = "treated"
@@ -1834,6 +1840,22 @@ class DevelopPage(QWidget):
         # moment this page is looked at again, not after a restart.
         if self.current:
             self._fill_treatments()
+
+    def _show_stacks(self) -> list[str]:
+        """The stacks the Superimpose runs left, bound by their recipes."""
+        photos = str(self.workspace.project.get("source_folder") or "")
+        if not photos:
+            return []
+        recipe_file = (Path(photos) / ".darkimiya" / "Superimpose"
+                       / "show-recipe.json")
+        try:
+            bound = str(json.loads(
+                recipe_file.read_text(encoding="utf-8")).get("photo") or "")
+        except (OSError, ValueError):
+            return []
+        if bound and (Path(photos) / bound).is_file():
+            return [bound]
+        return []
 
     def show_recipe_path(self) -> Path | None:
         """Where the last Superimpose run left its measured recipe."""
