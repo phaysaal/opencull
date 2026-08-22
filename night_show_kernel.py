@@ -218,6 +218,77 @@ def coverage_inset(register_text: str) -> int:
     return int(math.ceil(reach)) + 4
 
 
+def coverage_insets(register_text: str, height: int, width: int,
+                    slack: float = 0.0) -> tuple[int, int, int, int]:
+    """How far in from EACH edge every frame is actually present.
+
+    The uniform inset takes the worst displacement any frame ever had
+    and charges it to all four sides -- but a knock pushes frames ONE
+    way, and the wedge a roll leaves sits in particular corners. Here
+    every frame's footprint is laid into the reference geometry the
+    same way the resampler lays the frame itself, the footprints are
+    intersected, and each side gives up only what the intersection
+    actually demands. On the album that asked for this, the uniform
+    formula took 127 px all round; two of those sides owed almost
+    nothing -- and a star the photographer cared about lived there.
+
+    slack widens the safety margin, for frames whose field correction
+    reached beyond their rigid footprint.
+    """
+    top, bottom, left, right = (4, 4, 4, 4)
+    try:
+        told = json.loads(register_text)
+    except (TypeError, ValueError):
+        return (0, 0, 0, 0)
+    frames = [item for item in told.get("frames", [])
+              if item.get("keep", True)]
+    if not frames:
+        return (0, 0, 0, 0)
+    step = 8
+    ys = np.arange(0, height, step, dtype=np.float64) + 0.5
+    xs = np.arange(0, width, step, dtype=np.float64) + 0.5
+    grid_x, grid_y = np.meshgrid(xs, ys)
+    cx, cy = (width - 1) / 2.0, (height - 1) / 2.0
+    margin = 3.0 + max(float(slack), 0.0)
+    covered = np.ones(grid_x.shape, bool)
+    for item in frames:
+        dx = float(item.get("dx", 0.0))
+        dy = float(item.get("dy", 0.0))
+        angle = np.radians(-float(item.get("turn", 0.0)))
+        cos, sin = float(np.cos(angle)), float(np.sin(angle))
+        px = grid_x - dx - cx
+        py = grid_y - dy - cy
+        sx = cx + px * cos - py * sin
+        sy = cy + px * sin + py * cos
+        covered &= ((sx >= margin) & (sx <= width - 1 - margin)
+                    & (sy >= margin) & (sy <= height - 1 - margin))
+    rows, cols = covered.shape
+    t = b = left_ = r = 0
+    while True:
+        sub = covered[t:rows - b, left_:cols - r]
+        if sub.size == 0 or bool(sub.all()):
+            break
+        bad = {"t": int((~sub[0]).sum()), "b": int((~sub[-1]).sum()),
+               "l": int((~sub[:, 0]).sum()), "r": int((~sub[:, -1]).sum())}
+        worst = max(bad, key=lambda side: bad[side])
+        if bad[worst] == 0:
+            t += 1
+            b += 1
+            left_ += 1
+            r += 1
+            continue
+        if worst == "t":
+            t += 1
+        elif worst == "b":
+            b += 1
+        elif worst == "l":
+            left_ += 1
+        else:
+            r += 1
+    return (top + t * step, bottom + b * step,
+            left + left_ * step, right + r * step)
+
+
 def develop_show(stacked: str, placed: str = "",
                  pattern: str = "*.RAF",
                  colour: float = 100.0,
@@ -243,9 +314,18 @@ def develop_show(stacked: str, placed: str = "",
     if told.get("error"):
         return json.dumps({"error": told["error"]})
     stack = _stack_pixels(told)
-    inset = coverage_inset(placed)
-    if inset and inset * 4 < min(stack.shape[:2]):
-        stack = stack[inset:-inset, inset:-inset]
+    # Frames whose field correction reached beyond their rigid
+    # footprint widen the safety margin by exactly that reach.
+    trued = told.get("field_corrected") or {}
+    slack = max((float(note.get("before_px", 0.0) or 0.0)
+                 for note in trued.values()), default=0.0)
+    top, bottom, left, right = coverage_insets(
+        placed, stack.shape[0], stack.shape[1], slack)
+    if (top + bottom) * 2 < stack.shape[0] \
+            and (left + right) * 2 < stack.shape[1]:
+        stack = stack[top:stack.shape[0] - bottom,
+                      left:stack.shape[1] - right]
+    inset = max(top, bottom, left, right)
     frames = frames_of(told.get("photos", "."), pattern)
     if not frames:
         return json.dumps({"error": "no frames to read the camera from"})
@@ -368,6 +448,8 @@ def develop_show(stacked: str, placed: str = "",
         "picture": str(picture), "deep": str(deep),
         "stack": told["stack"],
         "cropped_border_px": int(inset),
+        "cropped_insets": {"top": int(top), "bottom": int(bottom),
+                           "left": int(left), "right": int(right)},
         "flatten": round(even, 1),
         "level_asked": round(float(min(max(float(glow_level or 0.0),
                                            0.0), 64.0)), 1),

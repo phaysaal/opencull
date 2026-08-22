@@ -146,6 +146,42 @@ class CoverageTests(unittest.TestCase):
         self.assertEqual(nk.coverage_inset("{}"), 0)
 
 
+class PerSideInsetTests(unittest.TestCase):
+    """Each edge gives up only what the coverage actually demands."""
+
+    def test_a_one_way_shift_costs_one_side(self):
+        told = json.dumps({"frames": [
+            {"name": "a", "dx": 0.0, "dy": 0.0, "turn": 0.0},
+            {"name": "b", "dx": 50.0, "dy": 0.0, "turn": 0.0}]})
+        top, bottom, left, right = nk.coverage_insets(told, 800, 1200)
+        # The frame moved right, so only the LEFT edge lost coverage.
+        self.assertGreater(left, 45)
+        self.assertLessEqual(right, 16)
+        self.assertLessEqual(top, 16)
+        self.assertLessEqual(bottom, 16)
+
+    def test_a_roll_costs_the_corners_not_a_uniform_band(self):
+        told = json.dumps({"frames": [
+            {"name": "a", "dx": 0.0, "dy": 0.0, "turn": 0.0},
+            {"name": "b", "dx": 0.0, "dy": 0.0, "turn": 1.0}]})
+        insets = nk.coverage_insets(told, 3000, 4500)
+        uniform = nk.coverage_inset(told)
+        # Every measured side is cheaper than the worst-case formula.
+        for side in insets:
+            self.assertLess(side, uniform)
+
+    def test_slack_widens_every_side(self):
+        told = json.dumps({"frames": [
+            {"name": "a", "dx": 0.0, "dy": 0.0, "turn": 0.0},
+            {"name": "b", "dx": 12.0, "dy": 0.0, "turn": 0.0}]})
+        plain = nk.coverage_insets(told, 800, 1200)
+        wide = nk.coverage_insets(told, 800, 1200, slack=20.0)
+        self.assertGreater(sum(wide), sum(plain))
+
+    def test_nothing_registered_costs_nothing(self):
+        self.assertEqual(nk.coverage_insets("", 500, 500), (0, 0, 0, 0))
+
+
 class LevelCapTests(unittest.TestCase):
     """However dark a look is wanted, the cut stops above the sky."""
 
