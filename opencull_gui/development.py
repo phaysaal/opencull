@@ -695,7 +695,15 @@ class DevelopmentWorkspace:
                 if candidate.is_file():
                     source = candidate
                     break
-        source_kind = "raw" if source.suffix.casefold() not in {".jpg", ".jpeg"} else "jpeg"
+        # A camera raw is what LibRaw can identify; everything else --
+        # JPEG, PNG, and the 16-bit TIFF a Superimpose stack arrives
+        # as -- is an already-rendered image and must never be sent to
+        # a raw decoder. The old rule ("not a JPEG means raw") did
+        # exactly that to the first stack anyone tried to tune.
+        rendered = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp",
+                    ".avif", ".heic", ".heif"}
+        source_kind = ("raw" if source.suffix.casefold() not in rendered
+                       else "jpeg")
         recipe_value = entry.get(f"{style}_recipe")
         portable = None
         if style not in builtin_styles and preset is None and treatment is None:
@@ -969,7 +977,14 @@ class DevelopmentWorkspace:
             small_reference = work / "reference.jpg"
             small.save(small_reference, "JPEG", quality=94,
                        icc_profile=srgb_profile())
-            if prepared["base"] == "camera":
+            if source.suffix.casefold() in {".tif", ".tiff"} \
+                    and prepared["base"] != "camera":
+                # A 16-bit stack carries latitude an 8-bit thumbnail
+                # would throw away before the first dial moved, so it
+                # becomes the baseline directly, at its own depth.
+                baseline = self._tiff_baseline(source, maximum, work)
+                calibration_reference = None
+            elif prepared["base"] == "camera":
                 # The camera's own rendering, corrected rather than
                 # replaced: its highlight rolloff is steeper than any
                 # decode here produces, and on an infrared frame that is
@@ -1021,6 +1036,41 @@ class DevelopmentWorkspace:
             shutil.copy2(Path(result["output"]["path"]), temporary_output)
             os.replace(temporary_output, destination)
         return destination
+
+    @staticmethod
+    def _tiff_baseline(source: Path, maximum: int, work: Path) -> Path:
+        """A 16-bit TIFF as the baseline, its full depth kept.
+
+        The Superimpose stack is display-referred and sixteen bits
+        deep -- exactly the latitude a night sky needs under a level
+        or a stretch. Resized channel by channel in float, then lifted
+        to the scene-linear baseline the renderer is written against.
+        """
+        held = np.asarray(tifffile.imread(source))
+        if held.ndim == 2:
+            held = np.stack([held] * 3, axis=-1)
+        held = held[..., :3]
+        if held.dtype == np.uint16:
+            rgb = held.astype(np.float32) / 65535.0
+        elif held.dtype == np.uint8:
+            rgb = held.astype(np.float32) / 255.0
+        else:
+            rgb = np.clip(held.astype(np.float32), 0.0, 1.0)
+        height, width = rgb.shape[:2]
+        edge = max(height, width)
+        if edge > maximum:
+            scale = maximum / edge
+            size = (max(int(round(width * scale)), 1),
+                    max(int(round(height * scale)), 1))
+            rgb = np.stack([np.asarray(
+                Image.fromarray(rgb[..., channel], mode="F").resize(
+                    size, Image.Resampling.LANCZOS), dtype=np.float32)
+                for channel in range(3)], axis=-1)
+        linear = np.clip(_srgb_to_linear_rec2020(
+            np.clip(rgb, 0.0, 1.0)), 0.0, 1.0)
+        baseline = work / "baseline.tiff"
+        tifffile.imwrite(baseline, np.uint16(linear * 65535.0 + 0.5))
+        return baseline
 
     @staticmethod
     def _from_display(image: Path, work: Path) -> Path:

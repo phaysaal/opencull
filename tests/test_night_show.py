@@ -146,6 +146,60 @@ class CoverageTests(unittest.TestCase):
         self.assertEqual(nk.coverage_inset("{}"), 0)
 
 
+class RecipeParityTests(unittest.TestCase):
+    """The app's renderer reproduces what the kernel rendered."""
+
+    def test_the_show_recipe_renders_the_same_picture(self):
+        import tifffile
+        from PIL import Image
+
+        from opencull_gui.development import (
+            DevelopmentWorkspace,
+            render_recipe,
+        )
+
+        rng = np.random.default_rng(31)
+        field = np.full((300, 400, 3), 0.05, np.float32)
+        grid_y, grid_x = np.mgrid[0:300, 0:400]
+        for _ in range(40):
+            x = rng.uniform(15, 385); y = rng.uniform(15, 285)
+            field += (rng.uniform(0.1, 0.5) * np.exp(
+                -(((grid_x - x) ** 2 + (grid_y - y) ** 2)
+                  / 5.0)))[..., None]
+        field = np.clip(field + rng.normal(0, 0.004, field.shape), 0, 1)
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve()
+            tifffile.imwrite(root / "stack.tiff",
+                             (field * 65535).astype(np.uint16))
+            Image.fromarray((field * 255).astype(np.uint8)).save(
+                root / "frame.png")
+            told = json.dumps({"stack": str(root / "stack.tiff"),
+                               "photos": str(root), "frames_used": 5})
+            report_ = json.loads(nk.develop_show(told, "", "*.png"))
+            kernel_made = np.asarray(Image.open(
+                report_["picture"]).convert("RGB"), np.float32) / 255.0
+            recipe = json.loads(
+                Path(report_["recipe"]).read_text())["recipe"]
+            recipe = dict(recipe)
+            recipe.update({"format": "opencull-development-recipe-v1",
+                           "photo": "stack.tiff", "style": "parity",
+                           "source_kind": "jpeg"})
+            work = root / "work"; work.mkdir()
+            baseline = DevelopmentWorkspace._tiff_baseline(
+                root / "stack.tiff", 4000, work)
+            made = render_recipe(baseline, recipe, work / "render",
+                                 allow_incomplete=True)
+            app_made = np.asarray(Image.open(
+                made["output"]["path"]).convert("RGB"),
+                np.float32) / 255.0
+        self.assertEqual(app_made.shape, kernel_made.shape)
+        sky_kernel = float(np.median(kernel_made))
+        sky_app = float(np.median(app_made))
+        self.assertLess(abs(sky_app - sky_kernel), 0.015)
+        self.assertLess(float(np.abs(app_made - kernel_made).mean()),
+                        0.02)
+
+
 class PerSideInsetTests(unittest.TestCase):
     """Each edge gives up only what the coverage actually demands."""
 
@@ -241,6 +295,7 @@ class ShowRecipeTests(unittest.TestCase):
             report_ = json.loads(nk.develop_show(told, "", "*.png"))
             written = json.loads(Path(report_["recipe"]).read_text())
         self.assertEqual(written["photo"], "stack.tiff")
+        self.assertEqual(written["recipe"]["space"], "display")
         operations = written["recipe"]["operations"]
         self.assertTrue(operations)
         self.assertTrue(all(isinstance(item, dict) and item.get("op")

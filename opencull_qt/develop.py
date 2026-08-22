@@ -1864,6 +1864,12 @@ class DevelopPage(QWidget):
             self._report("The show's recipe names no stack to open.",
                          "alarm")
             return
+        # The stack joins the development list like any photograph, so
+        # it can be come back to, compared, and exported from here --
+        # not only reached through this button.
+        if photo not in self.photo_names:
+            self.photo_names.append(photo)
+            self._fill_photos()
         self.finetune_wanted.emit(photo, str(artifact["id"]))
 
     def superimpose_current(self) -> None:

@@ -1966,10 +1966,22 @@ def render_recipe(
         # wears exactly the colour the full render will, and every op
         # below reads coordinates through the window.
         rgb, window = _window_crop(rgb, window)
+    # A recipe declares the working space its values were measured in.
+    # The night show's operations were measured against the stack's own
+    # display encoding in the engine's gamma working space; run in the
+    # renderer's Rec2020-linear convention the same numbers land a sky
+    # five times too bright. So a "display" recipe has the original
+    # display values recovered around the operations, and the render
+    # reproduces what the measuring kernel rendered, exactly.
+    display_space = str(recipe.get("space") or "") == "display"
+    if display_space:
+        rgb = _decoded(_linear_rec2020_to_srgb(np.clip(rgb, 0, 1)))
     rgb = _apply_global(
         rgb, operations,
         progress=lambda done, _total, what: stage(done + 2, steps, what),
         window=window)
+    if display_space:
+        rgb = _srgb_to_linear_rec2020(np.clip(_encoded(rgb), 0.0, 1.0))
     stage(len(wanted) + 2, steps, "writing the photograph")
     display = _linear_rec2020_to_srgb(np.clip(rgb, 0, 1))
     image = Image.fromarray(np.uint8(np.clip(display * 255 + 0.5, 0, 255)), "RGB")

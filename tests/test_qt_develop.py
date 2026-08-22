@@ -626,6 +626,13 @@ class TuneShowDoorTests(FinetuneDoorTests):
             photo, treatment, "default")
         names = [item.get("op") for item in recipe["operations"]]
         self.assertIn("color.vibrance", names)
+        # And the stack RENDERS: a 16-bit TIFF is an image, not a
+        # camera raw, and must never be handed to LibRaw.
+        proof = page.workspace.recipe_preview(
+            photo, treatment, "default", "markesteijn-1-pass", 64)
+        self.assertTrue(Path(proof).is_file())
+        # The door listed the stack among the photographs.
+        self.assertIn(photo, page.photo_names)
 
     def test_without_a_show_the_door_says_so(self):
         page = self.page()

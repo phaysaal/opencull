@@ -449,6 +449,7 @@ def develop_show(stacked: str, placed: str = "",
         "name": "The show, as measured",
         "photo": bound,
         "recipe": {"title": "The show, as measured",
+                   "space": "display",
                    "operations": operations}}, indent=2))
     # Measured as DELIVERED: the report describes the very file a
     # person will open -- read back from disk, its eight bits and its
