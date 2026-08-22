@@ -609,6 +609,26 @@ class FineTunePageTests(unittest.TestCase):
         self.assertTrue(page.keep_button.isEnabled())
         self.assertIn("Exported", page.status.text())
 
+    def test_a_chosen_look_exports_untouched(self):
+        # Pick a look, move nothing, export: the whole point of a
+        # preset like Negative Portrait on a frame shot in Standard.
+        # The old guard refused this as "nothing has been moved".
+        page = self.page()
+        page.show_photo(NAMES[0])
+        page.show_treatment("standard")
+        page.changes = {}
+        asked: list[dict] = []
+        page.exporter.export = (
+            lambda *args, **kwargs: asked.append(
+                {"args": args, "kwargs": kwargs}))
+        outbox = self.root / "outbox"
+        outbox.mkdir(exist_ok=True)
+        page._ask_destination = lambda suggested: str(outbox / suggested)
+        page.keep()
+        self.assertEqual(len(asked), 1)
+        self.assertIsNone(asked[0]["kwargs"].get("adjustments"))
+        self.assertIn("exactly as chosen", page.status.text())
+
     def test_an_adjusted_as_shot_export_is_its_own_variant(self):
 
 
@@ -1245,12 +1265,17 @@ class FineTunePageTests(unittest.TestCase):
         self.assertEqual(
             rendered.call_args.kwargs["adjustments"], page.changes)
 
-    def test_keeping_an_unmoved_treatment_says_where_to_do_that(self):
+    def test_keeping_an_unmoved_treatment_exports_it_as_chosen(self):
+        # The refusal this test once pinned read as a failure to the
+        # photographer it met: choosing a look and exporting it
+        # untouched is the whole point of a preset. Cancelling the
+        # save dialog still exports nothing.
         page = self.page()
+        page._ask_destination = lambda suggested: ""
         with mock.patch.object(page.workspace, "render_full") as rendered:
             page.keep()
         rendered.assert_not_called()
-        self.assertIn("development page", page.status.text())
+        self.assertNotIn("development page", page.status.text())
 
     def test_a_kept_version_is_named_as_its_own(self):
         page = self.page()

@@ -3241,25 +3241,30 @@ class FineTunePage(QWidget):
         """
         if not self.current or not self.treatment:
             return
-        if not self.changes:
-            self._report(
-                "Nothing has been moved, so this is the treatment as "
-                "suggested. Develop it from the development page.", "alarm")
-            return
+        # Nothing moved is not nothing chosen: a photographer who picks
+        # a look -- Negative Portrait on a frame shot in Standard --
+        # and exports it untouched means exactly that. The old refusal
+        # here read as a failure to everyone it ever met.
+        moved = bool(self.changes)
         from opencull_gui.development import suggested_filename
         chosen = self._ask_destination(suggested_filename(
-            self.current, f"{self.treatment}-adjusted"))
+            self.current,
+            f"{self.treatment}-adjusted" if moved else self.treatment))
         if not chosen:
             return
         self.keep_button.setEnabled(False)
         self.keep_button.setText("Exporting…")
         self._report(
-            f"Exporting {self.current} at full size with your "
-            "adjustments. The page stays usable; the export announces "
-            "itself when the file is written.")
+            f"Exporting {self.current} at full size with "
+            + ("your adjustments." if moved
+               else "the look exactly as chosen.")
+            + " The page stays usable; the export announces itself "
+            "when the file is written.")
         self.exporter.export(
             self.current, self.treatment, self.engine(), self._demosaic(),
-            chosen, adjustments=json.loads(json.dumps(self.changes)))
+            chosen,
+            adjustments=(json.loads(json.dumps(self.changes))
+                         if moved else None))
 
     def _ask_destination(self, suggested: str) -> str:
         """Where the export should land; empty means the ask was closed."""
