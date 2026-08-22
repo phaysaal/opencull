@@ -189,13 +189,25 @@ def _compile_step(
         # ones, and the numbers are percentages of full scale. Read
         # naively, that sentence set the input white point to level 99 of
         # 255 -- an eight-fold multiply that blew a frame to white.
+        # "White 0 to +5, Black -5 to -12" is not a pair of Levels
+        # points: it is Capture One's HDR quartet -- Highlight, Shadow,
+        # White, Black -- and its numbers are signed slider RANGES. A
+        # levels point is one unsigned level; a range ending in a
+        # signed number is a slider move, and reading its first bound
+        # as an absolute white input once set the point to zero and
+        # blew a night sky to a sheet of white.
+        def _slider_range(item: re.Match[str]) -> bool:
+            tail = text[item.end():]
+            return re.match(r"\s*(?:to|–|—|-)\s*[+-]?\d", tail) is not None
+
         level_matches = [
             item for item in re.finditer(
                 r"(?i)\b(?:(output|input)\s+)?(white|black)"
                 r"(?:\s+(input|output|point))?"
                 r"[\s:]*(?:around|near|about|approximately|~|at)?[\s:]*"
                 r"(\d+(?:\.\d+)?)\s*(%)?", text)
-            if _levels_scope(text, item) != "output"]
+            if _levels_scope(text, item) != "output"
+            and not _slider_range(item)]
         midpoint = re.search(
             r"(?i)\bmidpoint\s*:?\s*(\d+(?:\.\d+)?)", text)
         if level_matches or midpoint:
@@ -435,7 +447,12 @@ def _levels_value(number: str, percent: str | None, point: str) -> float:
     """
     value = _number(number)
     if value is None:
-        return 0.0
+        # An unparseable point must read as the move that changes the
+        # photograph LEAST -- and for a white point that is 255, not 0.
+        # Zero was the most destructive possible answer: a white input
+        # of nothing divides the frame by nothing, and a night sky
+        # came back as a sheet of white called Quiet Cyan Atmosphere.
+        return 255.0 if point == "white" else 0.0
     if percent or (point == "white" and value <= 100.0):
         return round(min(value, 100.0) * 2.55, 2)
     return value

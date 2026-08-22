@@ -251,3 +251,46 @@ class GreyMixGrammarTests(unittest.TestCase):
         self.assertNotEqual(
             [item["op"] for item in recipe["operations"]],
             ["color.channel_mixer"])
+
+
+class UnparseablePointTests(LevelsScaleTests):
+    """A point the prose never numbered must change nothing."""
+
+    def test_a_numberless_white_point_reads_as_neutral(self):
+        # The live sentence from the Quiet Cyan Atmosphere suggestion:
+        # "Levels" named, no number anywhere. Compiled as white input 0
+        # it divided a night sky by nothing and previewed as a sheet
+        # of white. The reading that changes the photograph least is
+        # 255 -- exactly no change at all.
+        values = self.compile(
+            "Set exposure, HDR, Levels, and the contrast-restoring "
+            "Luma curve; keep the white and black relationship gentle.")
+        self.assertGreaterEqual(values.get("white_input", 255.0), 254.0)
+
+    def test_the_hdr_quartet_is_sliders_not_levels_points(self):
+        # The exact sentence behind Quiet Cyan Atmosphere: Capture
+        # One's HDR quartet with signed ranges. "White 0 to +5" is a
+        # slider nudge, and read as an absolute white input of zero it
+        # divided a night sky by nothing.
+        values = self.compile(
+            "HDR Highlight -10 to -20, Shadow +8 to +16, "
+            "White 0 to +5, Black -5 to -12.")
+        self.assertNotIn("white_input", values)
+        self.assertIn("white", values)      # tone.white, a delta
+        self.assertIn("highlight", values)
+        self.assertAlmostEqual(values["white"], 2.5, places=1)
+
+
+class DegenerateWhiteInputTests(unittest.TestCase):
+    """The engine refuses to divide a frame by nothing."""
+
+    def test_a_zero_white_input_is_neutral_not_ruin(self):
+        import numpy as np
+
+        from development_engine import _apply_global
+
+        held = np.full((24, 24, 3), 0.2, np.float32)
+        out = _apply_global(held, [{
+            "op": "levels.white_input", "unit": "level-8bit",
+            "mode": "absolute", "value": 0.0, "enabled": True}])
+        self.assertTrue(np.allclose(out, held, atol=1e-4))

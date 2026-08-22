@@ -591,7 +591,11 @@ def _apply_global(rgb: np.ndarray, operations: list[dict[str, Any]],
             elif floor < 0:
                 result = -floor + result * (1.0 + floor)
         elif op == "levels.white_input":
-            result /= max(value / 255.0, 1e-4)
+            # A white input at or near zero is never a photograph's
+            # instruction, always a parse gone wrong -- executing it
+            # divides the frame by nothing. Treated as neutral.
+            if value > 1.0:
+                result /= max(value / 255.0, 1e-4)
         elif op == "levels.black_input":
             result = (result - value / 255.0) / max(1 - value / 255.0, 1e-4)
         elif op == "color.saturation":
