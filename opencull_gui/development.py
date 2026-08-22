@@ -900,7 +900,7 @@ class DevelopmentWorkspace:
         self, photo: str, style: str, engine: str, demosaic: str,
         maximum: int, adjustments: dict | None = None,
         progress: Any = None, recipe: dict | None = None,
-        window: dict | None = None,
+        window: dict | None = None, tiff_sidecar: bool = False,
     ) -> Path:
         """Render one bounded local proof without registering an export artifact.
 
@@ -957,7 +957,9 @@ class DevelopmentWorkspace:
         }, sort_keys=True).encode()).hexdigest()[:24]
         destination = self.project_layout["Previews"] / "DevelopRecipes" / (
             f"{Path(photo).stem}.{style}.{engine}.{identity}.jpg")
-        if destination.is_file():
+        if destination.is_file() and (
+                not tiff_sidecar
+                or destination.with_suffix(".tiff").is_file()):
             return destination
         if progress is not None:
             # The demosaic is minutes on a raw and says nothing while it
@@ -1030,11 +1032,18 @@ class DevelopmentWorkspace:
             result = render_recipe(
                 baseline, recipe, work / "render", allow_incomplete=True,
                 reference_jpeg=calibration_reference, progress=progress,
-                window=window)
+                window=window, tiff_output=tiff_sidecar)
             temporary_output = destination.with_name(
                 f".{destination.name}.{secrets.token_hex(4)}.tmp")
             shutil.copy2(Path(result["output"]["path"]), temporary_output)
             os.replace(temporary_output, destination)
+            if tiff_sidecar and result.get("output_tiff"):
+                deep = destination.with_suffix(".tiff")
+                staged = deep.with_name(
+                    f".{deep.name}.{secrets.token_hex(4)}.tmp")
+                shutil.copy2(
+                    Path(result["output_tiff"]["path"]), staged)
+                os.replace(staged, deep)
         return destination
 
     @staticmethod

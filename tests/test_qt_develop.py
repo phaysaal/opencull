@@ -642,6 +642,24 @@ class TuneShowDoorTests(FinetuneDoorTests):
         self.assertIn(".darkimiya/Superimpose/clipped.tiff",
                       page.photo_names)
 
+    def test_the_other_road_compiles_a_plan_per_frame(self):
+        page = self.page()
+        seen: list[dict] = []
+        page.developed_stack_wanted.connect(seen.append)
+        out = self.photos_path / "out"
+        page._queue_developed_stack({
+            "frames": [NAMES[0], NAMES[1]],
+            "parameters": {"photos": str(self.photos_path),
+                           "output": str(out), "mode": "clipped",
+                           "focal_mm": 0.0, "sensor_mm": 23.5}})
+        self.assertEqual(len(seen), 1)
+        told = seen[0]
+        plan = json.loads(Path(told["plan"]).read_text())
+        self.assertEqual(sorted(plan["frames"]), [NAMES[0], NAMES[1]])
+        for recipe in plan["frames"].values():
+            self.assertEqual(recipe["format"],
+                             "opencull-development-recipe-v1")
+
     def test_without_a_show_the_door_says_so(self):
         page = self.page()
         seen: list[tuple[str, str]] = []

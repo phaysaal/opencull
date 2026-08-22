@@ -1791,6 +1791,7 @@ class Launcher(QMainWindow):
                 bench.workspace, photo, rounds))
         page.finetune_wanted.connect(self.open_finetune)
         page.program_wanted.connect(self.run_named_program)
+        page.developed_stack_wanted.connect(self.queue_developed_stack)
         return page
 
     def _finetune_page(self, bench: Bench):
@@ -2261,6 +2262,13 @@ class Launcher(QMainWindow):
             lambda name, parameters: self.run_program(
                 store, name, parameters))
         dialog.exec()
+
+    def queue_developed_stack(self, payload: dict) -> None:
+        """The develop-then-stack road, queued like every other job."""
+        try:
+            self.services.jobs.add_developed_stack(**payload)
+        except Exception as exc:
+            self._say(str(exc), "alarm")
 
     def run_named_program(self, name: str, parameters: dict) -> None:
         """A built-in program queued from a page, store built here."""

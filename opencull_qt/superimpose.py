@@ -253,6 +253,20 @@ class SuperimposeDialog(QDialog):
         count_row.addWidget(take_none)
         column.addLayout(count_row)
 
+        self.develop_first = QCheckBox(
+            "Develop each frame first — its kept look applied, stacked "
+            "from 16-bit TIFFs")
+        self.develop_first.setFont(theme.body(9))
+        self.develop_first.setToolTip(tooltip(
+            "The other road, taste before physics: every ticked frame "
+            "is rendered with its kept Fine Tune look -- the recipe "
+            "you copied to the scene -- to a 16-bit TIFF, and those "
+            "are stacked. The trade is real: what the look discarded, "
+            "a crushed black, a clipped star, is discarded in every "
+            "frame and no stack gives it back. The result is the "
+            "stack itself, not the verified show."))
+        column.addWidget(self.develop_first)
+
         self.demosaic = QCheckBox(
             "Demosaic every frame — slower, and the only honest way to "
             "stack a raw")
@@ -372,6 +386,20 @@ class SuperimposeDialog(QDialog):
                     f"The selection could not be written: {exc}")
                 return None
             parameters["only"] = str(chosen)
+        if self.develop_first.isChecked():
+            # The other road runs its own pipeline: the caller builds
+            # the per-frame recipe plan (it holds the workspace and
+            # the ledger; this dialog holds neither) and queues it.
+            return {"kind": "developed_stack",
+                    "frames": going,
+                    "parameters": {
+                        "photos": self.photos,
+                        "output": str(home),
+                        "mode": ("trails" if self.trails.isChecked()
+                                 else "clipped"),
+                        "focal_mm": self.focal.value(),
+                        "sensor_mm": self.sensor.value(),
+                    }}
         program = ("night_trails.kim" if self.trails.isChecked()
                    else "night_show.kim")
         return {"program": program, "parameters": parameters}

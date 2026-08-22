@@ -987,6 +987,7 @@ class DevelopPage(QWidget):
     treatment_wanted = Signal(str, int)   # photo, rounds of budget
     finetune_wanted = Signal(str, str)    # photo, treatment to open on
     program_wanted = Signal(str, dict)    # program name, parameters
+    developed_stack_wanted = Signal(dict)  # the other road, planned
 
     def __init__(self, report, workspace: DevelopmentWorkspace,
                  loader: PreviewLoader, parent: QWidget | None = None):
@@ -1914,11 +1915,69 @@ class DevelopPage(QWidget):
         request = dialog.run_request()
         if request is None:
             return
+        if request.get("kind") == "developed_stack":
+            self._queue_developed_stack(request)
+            return
         self.program_wanted.emit(request["program"], request["parameters"])
         self._report(
             "Queued. The finished picture lands beside its 16-bit "
             "stack, with the certificate in the run's log; if a gate "
             "refuses, the log says which one and why.")
+
+    def _queue_developed_stack(self, request: dict) -> None:
+        """The other road: each frame's kept look compiled into a plan.
+
+        A frame that was fine-tuned uses its own kept profile; one that
+        was not borrows the treatment currently chosen on this page;
+        with neither, the camera-matched baseline. The plan carries the
+        full compiled recipes, so the pipeline needs no ledger and no
+        page -- only the frames and what to do to each.
+        """
+        from opencull_gui import adjustments
+        from opencull_gui.tuning import TuningLedger
+
+        told = dict(request["parameters"])
+        frames = list(request.get("frames") or [])
+        ledger = TuningLedger(
+            self.workspace.project_layout["Recipes"]
+            / "finetune-state.json")
+        engine = self.engine_for(frames[0]) if frames else "default"
+        plan: dict[str, dict] = {}
+        for name in frames:
+            profile = ledger.get(name) or {}
+            treatment = (str(profile.get("treatment") or "")
+                         or self.treatment or "calibrated")
+            try:
+                recipe = self.workspace.compiled_recipe(
+                    name, treatment, engine)
+            except (OSError, ValueError) as exc:
+                self._report(
+                    f"{name} has no usable look ({exc}); it would go "
+                    "in undeveloped, so nothing was queued.", "alarm")
+                return
+            if profile.get("changes"):
+                recipe = adjustments.apply(recipe, profile["changes"])
+            recipe = dict(recipe)
+            recipe["style"] = f"stacksrc-{treatment}"
+            plan[name] = recipe
+        home = Path(str(told["output"])).expanduser()
+        try:
+            home.mkdir(parents=True, exist_ok=True)
+            plan_path = home / "developed-plan.json"
+            plan_path.write_text(
+                json.dumps({"frames": plan}), encoding="utf-8")
+        except OSError as exc:
+            self._report(f"The plan could not be written: {exc}", "alarm")
+            return
+        self.developed_stack_wanted.emit({
+            "photos": told["photos"], "plan": str(plan_path),
+            "output": str(home), "mode": told["mode"],
+            "focal_mm": told["focal_mm"], "sensor_mm": told["sensor_mm"],
+            "engine": engine, "demosaic": self._demosaic()})
+        self._report(
+            f"Queued: {len(plan)} frames developed with their kept "
+            "looks, then stacked. The stack and its proof land in "
+            f"{home.name}, the receipt beside them.")
 
     def treat_current(self) -> None:
         """Ask for a Kimiya Treatment of this frame, budget stated first."""

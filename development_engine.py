@@ -1926,6 +1926,7 @@ def render_recipe(
     baseline_tiff: Path, recipe: dict[str, Any], output_dir: Path,
     allow_incomplete: bool = False, reference_jpeg: Path | None = None,
     progress: Any = None, window: dict[str, float] | None = None,
+    tiff_output: bool = False,
 ) -> dict[str, Any]:
     source = baseline_tiff.expanduser().resolve()
     if not source.is_file():
@@ -1994,6 +1995,16 @@ def render_recipe(
     stem = Path(str(recipe.get("source_photo", source.stem))).stem
     style = str(recipe.get("style", "render"))
     output = destination / f"{stem}.{style}.jpg"
+    output_tiff = None
+    if tiff_output:
+        # The same picture at sixteen bits, for arithmetic rather than
+        # eyes: a stack averaging these must not inherit an 8-bit
+        # staircase in its shadows. Written before the geometry, which
+        # frames a photograph and would misalign a stack.
+        output_tiff = destination / f"{stem}.{style}.tiff"
+        tifffile.imwrite(
+            output_tiff,
+            np.uint16(np.clip(display * 65535.0 + 0.5, 0, 65535)))
     provenance = destination / f"{stem}.{style}.render.json"
     fd, temporary = tempfile.mkstemp(prefix=f".{output.name}.", suffix=".tmp", dir=destination)
     os.close(fd)
@@ -2012,6 +2023,9 @@ def render_recipe(
         "recipe": recipe,
         "output": {"path": str(output), "sha256": _sha256(output),
                    "width": image.width, "height": image.height},
+        "output_tiff": (
+            {"path": str(output_tiff), "sha256": _sha256(output_tiff)}
+            if output_tiff is not None else None),
         "complete": not bool(diagnostics),
         "notice": (
             "Deterministic preview; unsupported diagnostics remain unexecuted."

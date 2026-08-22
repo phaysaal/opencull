@@ -841,6 +841,24 @@ class DialogTests(unittest.TestCase):
                 self.assertEqual(told["focal_mm"], "16.0")
                 self.assertEqual(told["sensor_mm"], "23.5")
 
+    def test_the_other_road_is_a_job_not_a_program(self):
+        with tempfile.TemporaryDirectory() as folder:
+            night(Path(folder).resolve(), [(0.0, 0.0), (4.0, 1.0)])
+            dialog = self.dialog(folder)
+            dialog.where.setText(str(Path(folder).resolve() / "out"))
+            dialog.develop_first.setChecked(True)
+            dialog.focal.setValue(24.0)
+            request = dialog.run_request()
+            self.assertEqual(request["kind"], "developed_stack")
+            self.assertEqual(request["frames"],
+                             ["N000.jpg", "N001.jpg"])
+            told = request["parameters"]
+            self.assertEqual(told["mode"], "clipped")
+            self.assertEqual(told["focal_mm"], 24.0)
+            dialog.trails.setChecked(True)
+            self.assertEqual(
+                dialog.run_request()["parameters"]["mode"], "trails")
+
     def test_the_frames_are_the_dialog_own_choice(self):
         from PySide6.QtCore import Qt
 

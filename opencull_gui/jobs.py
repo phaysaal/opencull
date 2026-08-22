@@ -538,6 +538,16 @@ class JobManager:
                 "--style", job["style"], "--output-dir", job["output_dir"],
                 "--project", job["project"],
             ]
+        if job.get("kind") == "developed_stack":
+            return [
+                self.python,
+                str(self.project_root / "developed_stack_pipeline.py"),
+                "--photos", job["photos"], "--plan", job["plan"],
+                "--output", job["stack_home"], "--mode", job["mode"],
+                "--focal-mm", str(job["focal_mm"]),
+                "--sensor-mm", str(job["sensor_mm"]),
+                "--engine", job["engine"], "--demosaic", job["demosaic"],
+            ]
         if job.get("kind") == "development_render":
             command = [self.python, str(self.project_root / "development_engine.py"),
                        job["baseline"], job["recipe"], "--output-dir", job["output_dir"],
@@ -1193,6 +1203,54 @@ class JobManager:
             self._save()
         self._wake.set()
         return self.public()
+
+    def add_developed_stack(
+        self,
+        photos: str,
+        plan: str,
+        output: str,
+        mode: str = "clipped",
+        focal_mm: float = 0.0,
+        sensor_mm: float = 23.5,
+        engine: str = "default",
+        demosaic: str = "markesteijn-1-pass",
+    ) -> dict[str, Any]:
+        """Queue the develop-then-stack road: each frame rendered with
+        its kept look to a 16-bit TIFF, and those stacked. Deterministic
+        end to end; no provider is asked for anything."""
+        source = Path(photos).expanduser().resolve()
+        if not source.is_dir():
+            raise JobError(f"photo folder is not a directory: {source}")
+        plan_path = Path(plan).expanduser().resolve()
+        if not plan_path.is_file():
+            raise JobError(f"the frame plan is missing: {plan_path}")
+        home = self._validate_output(Path(output))
+        receipt = home / "developed-stack.json"
+        with self._lock:
+            job_id = uuid.uuid4().hex[:12]
+            job = {
+                "id": job_id,
+                "kind": "developed_stack",
+                "photos": str(source),
+                "plan": str(plan_path),
+                "mode": str(mode),
+                "focal_mm": float(focal_mm),
+                "sensor_mm": float(sensor_mm),
+                "engine": str(engine),
+                "demosaic": str(demosaic),
+                "stack_home": str(home),
+                "output": str(receipt),
+                "checkpoint": f"{receipt}.checkpoint.json",
+                "log": f"{receipt}.log",
+                "status": "queued",
+                "message": "Waiting to develop and stack.",
+                "pid": None, "created_at": _now(), "started_at": None,
+                "finished_at": None, "exit_code": None,
+            }
+            self._state["jobs"].append(job)
+            self._save()
+        self._wake()
+        return dict(job)
 
     def add_control_zones(
         self,

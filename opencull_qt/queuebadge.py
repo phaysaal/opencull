@@ -48,6 +48,7 @@ KIND_LABEL = {
     "renderer_comparison": "Renderer check",
     "renderer_export": "Render export",
     "delivery_export": "Export",
+    "developed_stack": "Developed stack",
 }
 _TIMELAPSE = {
     "eclipse_timelapse.kim", "subject_timelapse.kim",
