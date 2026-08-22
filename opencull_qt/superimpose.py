@@ -65,6 +65,20 @@ class SuperimposeDialog(QDialog):
         title.setFont(theme.display(8))
         column.addWidget(title)
 
+        self.finished = QRadioButton(
+            "The finished starfield — stacked, verified at every step, "
+            "developed. One click")
+        self.finished.setFont(theme.body(10))
+        self.finished.setToolTip(tooltip(
+            "The whole night pipeline with nobody watching it: "
+            "registered with the roll rescue and the field truing, "
+            "clouded frames set aside, stacked sigma-clipped in light "
+            "-- and REFUSED unless every star appears once. Only then "
+            "is it developed, by measurement, with the recipe that won "
+            "the blind panels. If any gate fails it abstains and says "
+            "why, rather than hand over a ruined picture. No model is "
+            "asked for anything."))
+        column.addWidget(self.finished)
         self.trails = QRadioButton(
             "Star trails — brightest wins, frames left where they were")
         self.trails.setChecked(True)
@@ -110,8 +124,8 @@ class SuperimposeDialog(QDialog):
         # "handheld" silently un-chose "clipped" -- two answers fighting
         # over one slot.
         self._picture = QButtonGroup(self)
-        for choice in (self.trails, self.clipped, self.drizzle,
-                       self.average):
+        for choice in (self.finished, self.trails, self.clipped,
+                       self.drizzle, self.average):
             self._picture.addButton(choice)
 
         held_title = QLabel("HOW IT WAS HELD")
@@ -316,8 +330,8 @@ class SuperimposeDialog(QDialog):
         buttons.addWidget(self.go)
         column.addLayout(buttons)
 
-        for choice in (self.trails, self.clipped, self.average,
-                       self.tripod, self.handheld):
+        for choice in (self.finished, self.trails, self.clipped,
+                       self.average, self.tripod, self.handheld):
             choice.toggled.connect(self._retell)
         self._retell()
 
@@ -325,18 +339,26 @@ class SuperimposeDialog(QDialog):
 
     def _retell(self) -> None:
         """Trails register nothing, so how it was held cannot matter."""
+        finished = self.finished.isChecked()
+        if finished and not self.tripod.isChecked():
+            # The verified pipeline is the deterministic one; a
+            # handheld sky goes through its own program instead.
+            self.tripod.setChecked(True)
         registering = not self.trails.isChecked()
-        self.tripod.setEnabled(registering)
-        self.handheld.setEnabled(registering)
+        self.tripod.setEnabled(registering and not finished)
+        self.handheld.setEnabled(registering and not finished)
         held = registering and self.tripod.isChecked()
         self.focal.setEnabled(held)
         self.sensor.setEnabled(held)
         # Trails average nothing, so a clouded frame cannot poison
-        # them; handheld already spends its calls on recognition.
-        self.judge.setEnabled(held)
+        # them; handheld already spends its calls on recognition; the
+        # finished pipeline screens its own frames, deterministically.
+        self.judge.setEnabled(held and not finished)
         drizzling = self.drizzle.isChecked()
         self.scale.setEnabled(drizzling)
         self.pixfrac.setEnabled(drizzling)
+        self.go.setText("Make the picture" if finished
+                        else "Superimpose")
 
     def _choose_darks(self) -> None:
         self._choose_into(self.darks, "The dark frames")
@@ -354,6 +376,8 @@ class SuperimposeDialog(QDialog):
             self.where.setText(chosen)
 
     def mode(self) -> str:
+        if self.finished.isChecked():
+            return "clipped"
         for choice, name in ((self.trails, "trails"),
                              (self.clipped, "clipped"),
                              (self.drizzle, "drizzle")):
@@ -405,7 +429,11 @@ class SuperimposeDialog(QDialog):
                     f"The selection could not be written: {exc}")
                 return None
             parameters["only"] = str(chosen)
-        if self.handheld.isChecked():
+        if self.finished.isChecked():
+            # The one-click: the same stack, then the gates and the
+            # develop. The queue and the progress bar are the same.
+            program = "night_show.kim"
+        elif self.handheld.isChecked():
             program = "handheld_stack.kim"
         elif self.judge.isEnabled() and self.judge.isChecked():
             program = "clear_stack.kim"

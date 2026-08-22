@@ -936,6 +936,55 @@ class DialogTests(unittest.TestCase):
             self.assertEqual(told["pixfrac"], "0.8")
 
 
+class FinishedPictureDoorTests(unittest.TestCase):
+    """The one-click lives behind the same Superimpose button."""
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            from PySide6.QtWidgets import QApplication
+        except ImportError:                          # pragma: no cover
+            raise unittest.SkipTest("PySide6 is not installed") from None
+        cls.application = QApplication.instance() or QApplication([])
+
+    def test_the_finished_choice_runs_the_verified_program(self):
+        from opencull_qt.superimpose import SuperimposeDialog
+
+        with tempfile.TemporaryDirectory() as folder:
+            night(Path(folder).resolve(), [(0.0, 0.0), (4.0, 1.0)])
+            dialog = SuperimposeDialog(folder)
+            self.addCleanup(dialog.deleteLater)
+            dialog.finished.setChecked(True)
+            dialog.focal.setValue(16.0)
+            dialog.where.setText(str(Path(folder).resolve() / "out"))
+            request = dialog.run_request()
+            self.assertEqual(request["program"], "night_show.kim")
+            told = request["parameters"]
+            self.assertEqual(told["mode"], "clipped")
+            self.assertEqual(told["focal_mm"], "16.0")
+            self.assertNotIn("every", told)
+            self.assertNotIn("proofs_dir", told)
+
+    def test_the_finished_choice_stays_deterministic(self):
+        from opencull_qt.superimpose import SuperimposeDialog
+
+        with tempfile.TemporaryDirectory() as folder:
+            night(Path(folder).resolve(), [(0.0, 0.0), (4.0, 1.0)])
+            dialog = SuperimposeDialog(folder)
+            self.addCleanup(dialog.deleteLater)
+            dialog.handheld.setChecked(True)
+            dialog.finished.setChecked(True)
+            # Choosing the verified picture walks the holding back to
+            # the tripod: the gated pipeline has no model to lean on.
+            self.assertTrue(dialog.tripod.isChecked())
+            self.assertFalse(dialog.handheld.isEnabled())
+            self.assertFalse(dialog.judge.isEnabled())
+            self.assertEqual(dialog.go.text(), "Make the picture")
+            dialog.trails.setChecked(True)
+            self.assertTrue(dialog.handheld.isEnabled() is False)
+            self.assertEqual(dialog.go.text(), "Superimpose")
+
+
 class ResamplingTests(unittest.TestCase):
     """A frame moved between its pixels should not lose its stars."""
 
