@@ -105,6 +105,22 @@ def look_note(told: Any) -> str:
             "preset strip of every photograph.")
 
 
+def receipt_home(told: str, output: str = "") -> str:
+    """Where the run's receipt lands: the asked-for place, or the store.
+
+    The queue wants to say where a result landed; the look itself
+    always lands in the preset store. Given an output, the same JSON is
+    written there too, a receipt the queue badge can reveal. Given
+    none, the receipt IS the store file, written once.
+    """
+    asked = str(output or "").strip()
+    if asked:
+        home = Path(asked)
+        home.parent.mkdir(parents=True, exist_ok=True)
+        return str(home)
+    return look_home(told)
+
+
 def look_home(told: str) -> str:
     """Where this look lives in the preset store, ready to be written."""
     from opencull_gui.presets import presets_dir

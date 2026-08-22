@@ -1269,6 +1269,21 @@ class DevelopPage(QWidget):
         self.tune_show_button.clicked.connect(self.tune_show_current)
         layout.addWidget(self.tune_show_button)
 
+        self.learn_look_button = QPushButton("Learn a look…")
+        self.learn_look_button.setObjectName("ghost")
+        self.learn_look_button.setFont(theme.body(10))
+        self.learn_look_button.setCursor(
+            Qt.CursorShape.PointingHandCursor)
+        self.learn_look_button.setToolTip(tooltip(
+            "A film simulation, learned from the camera's own hand: "
+            "point it at a folder of RAW+JPEG pairs shot in one "
+            "simulation, and the fit becomes a preset -- Velvia, "
+            "Classic Chrome, whichever the camera was wearing -- that "
+            "lays that rendering on any raw. Deterministic; no model "
+            "is asked for anything."))
+        self.learn_look_button.clicked.connect(self.learn_look_current)
+        layout.addWidget(self.learn_look_button)
+
         # What a treatment run for this frame is doing right now: a busy
         # bar because the work is real, and words because a bar that
         # cannot say "round 2 of 3" is just a light left on.
@@ -1894,6 +1909,27 @@ class DevelopPage(QWidget):
             self.photo_names.append(photo)
             self._fill_photos()
         self.finetune_wanted.emit(photo, str(artifact["id"]))
+
+    def learn_look_current(self) -> None:
+        """The film-simulation teacher, pointed at this folder."""
+        from .learnlook import LearnLookDialog
+
+        photos = str(self.workspace.project.get("source_folder") or "")
+        if not photos:
+            return
+        dialog = LearnLookDialog(photos)
+        dialog.adjustSize()
+        host = self.window().frameGeometry()
+        dialog.move(host.center() - dialog.rect().center())
+        if dialog.exec() != dialog.DialogCode.Accepted:
+            return
+        request = dialog.run_request()
+        if request is None:
+            return
+        self.program_wanted.emit(request["program"], request["parameters"])
+        self._report(
+            "Queued. When the fit lands, the look joins the presets "
+            "and every photograph's strip offers it under More styles.")
 
     def superimpose_current(self) -> None:
         """The night-sky combiner, obvious parameters pre-filled."""

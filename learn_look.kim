@@ -16,6 +16,7 @@ param photos: text = "."
 param pattern: text = "*.RAF"
 param name: text = "Learned look"
 param most_frames: num = 12
+param output: text = ""
 
 use python "look_kernel.py"
 
@@ -30,4 +31,11 @@ where := look_home(found)
 check look_valid(found)
 act file.overwrite(where, found)
 settle until check file_exists(where) within 5
+
+-- The queue asks where a result landed; the receipt answers, whether
+-- it is a copy beside the run or the store file itself.
+receipt := receipt_home(found, output)
+check look_valid(found)
+act file.overwrite(receipt, found)
+settle until check file_exists(receipt) within 5
 commit(found)
