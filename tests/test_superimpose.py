@@ -794,6 +794,8 @@ class ProgramTests(unittest.TestCase):
 
 
 class DialogTests(unittest.TestCase):
+    """Two pictures, both finished; the dialog asks only what is ours."""
+
     @classmethod
     def setUpClass(cls):
         try:
@@ -802,101 +804,54 @@ class DialogTests(unittest.TestCase):
             raise unittest.SkipTest("PySide6 is not installed") from None
         cls.application = QApplication.instance() or QApplication([])
 
-    def test_the_dialog_asks_the_program_for_what_was_chosen(self):
+    def dialog(self, folder, selection=None):
         from opencull_qt.superimpose import SuperimposeDialog
 
+        made = SuperimposeDialog(folder, selection=selection)
+        self.addCleanup(made.deleteLater)
+        return made
+
+    def test_the_default_is_the_verified_starfield(self):
+        with tempfile.TemporaryDirectory() as folder:
+            dialog = self.dialog(folder)
+            self.assertTrue(dialog.finished.isChecked())
+            self.assertEqual(dialog.go.text(), "Make the picture")
+            request = dialog.run_request()
+            self.assertEqual(request["program"], "night_show.kim")
+            self.assertNotIn("mode", request["parameters"])
+
+    def test_trails_are_their_own_finished_program(self):
+        with tempfile.TemporaryDirectory() as folder:
+            dialog = self.dialog(folder)
+            dialog.trails.setChecked(True)
+            self.assertEqual(dialog.go.text(), "Draw the trails")
+            request = dialog.run_request()
+            self.assertEqual(request["program"], "night_trails.kim")
+
+    def test_the_lens_reaches_both_programs(self):
+        with tempfile.TemporaryDirectory() as folder:
+            dialog = self.dialog(folder)
+            dialog.focal.setValue(16.0)
+            for choice in (dialog.finished, dialog.trails):
+                choice.setChecked(True)
+                told = dialog.run_request()["parameters"]
+                self.assertEqual(told["focal_mm"], "16.0")
+                self.assertEqual(told["sensor_mm"], "23.5")
+
+    def test_the_marked_frames_ride_in_a_file(self):
         with tempfile.TemporaryDirectory() as folder:
             night(Path(folder).resolve(), [(0.0, 0.0), (4.0, 1.0)])
-            dialog = SuperimposeDialog(folder, selection=["N000.jpg"])
-            self.addCleanup(dialog.deleteLater)
-            dialog.clipped.setChecked(True)
-            dialog.focal.setValue(24.0)
+            dialog = self.dialog(folder, selection=["N000.jpg"])
             dialog.where.setText(str(Path(folder).resolve() / "out"))
-            request = dialog.run_request()
-            self.assertEqual(request["program"], "superimpose.kim")
-            told = request["parameters"]
-            self.assertEqual(told["mode"], "clipped")
-            self.assertEqual(told["focal_mm"], "24.0")
-            # The marked frames ride in a file, not in a parameter.
+            told = dialog.run_request()["parameters"]
             self.assertTrue(told["only"].endswith("selection.json"))
             self.assertEqual(
                 json.loads(Path(told["only"]).read_text())["names"],
                 ["N000.jpg"])
 
-    def test_the_two_questions_do_not_fight_over_one_slot(self):
-        from opencull_qt.superimpose import SuperimposeDialog
-
-        with tempfile.TemporaryDirectory() as folder:
-            dialog = SuperimposeDialog(folder)
-            self.addCleanup(dialog.deleteLater)
-            dialog.clipped.setChecked(True)
-            dialog.handheld.setChecked(True)
-            # Choosing how it was held must not un-choose the picture.
-            self.assertEqual(dialog.mode(), "clipped")
-            self.assertEqual(dialog.run_request()["program"],
-                             "handheld_stack.kim")
-            dialog.tripod.setChecked(True)
-            self.assertEqual(dialog.mode(), "clipped")
-            self.assertEqual(dialog.run_request()["program"],
-                             "superimpose.kim")
-
-    def test_trails_need_no_holding_and_say_so(self):
-        from opencull_qt.superimpose import SuperimposeDialog
-
-        with tempfile.TemporaryDirectory() as folder:
-            dialog = SuperimposeDialog(folder)
-            self.addCleanup(dialog.deleteLater)
-            dialog.trails.setChecked(True)
-            self.assertFalse(dialog.tripod.isEnabled())
-            self.assertFalse(dialog.handheld.isEnabled())
-            dialog.clipped.setChecked(True)
-            self.assertTrue(dialog.tripod.isEnabled())
-
-    def test_a_handheld_run_carries_keyframes_not_a_focal_length(self):
-        from opencull_qt.superimpose import SuperimposeDialog
-
-        with tempfile.TemporaryDirectory() as folder:
-            dialog = SuperimposeDialog(folder)
-            self.addCleanup(dialog.deleteLater)
-            dialog.clipped.setChecked(True)
-            dialog.handheld.setChecked(True)
-            told = dialog.run_request()["parameters"]
-            self.assertIn("every", told)
-            self.assertIn("proofs_dir", told)
-            self.assertNotIn("focal_mm", told)
-
-    def test_asking_about_doubtful_frames_picks_its_own_program(self):
-        from opencull_qt.superimpose import SuperimposeDialog
-
-        with tempfile.TemporaryDirectory() as folder:
-            dialog = SuperimposeDialog(folder)
-            self.addCleanup(dialog.deleteLater)
-            dialog.clipped.setChecked(True)
-            dialog.tripod.setChecked(True)
-            dialog.judge.setChecked(True)
-            self.assertEqual(dialog.run_request()["program"],
-                             "clear_stack.kim")
-            dialog.judge.setChecked(False)
-            self.assertEqual(dialog.run_request()["program"],
-                             "superimpose.kim")
-
-    def test_trails_cannot_be_poisoned_so_are_not_offered_the_ask(self):
-        from opencull_qt.superimpose import SuperimposeDialog
-
-        with tempfile.TemporaryDirectory() as folder:
-            dialog = SuperimposeDialog(folder)
-            self.addCleanup(dialog.deleteLater)
-            dialog.trails.setChecked(True)
-            self.assertFalse(dialog.judge.isEnabled())
-            dialog.clipped.setChecked(True)
-            self.assertTrue(dialog.judge.isEnabled())
-
     def test_the_calibration_folders_reach_the_program(self):
-        from opencull_qt.superimpose import SuperimposeDialog
-
         with tempfile.TemporaryDirectory() as folder:
-            dialog = SuperimposeDialog(folder)
-            self.addCleanup(dialog.deleteLater)
+            dialog = self.dialog(folder)
             dialog.darks.setText("/darks")
             dialog.flats.setText("/flats")
             dialog.bias.setText("/bias")
@@ -905,84 +860,17 @@ class DialogTests(unittest.TestCase):
             self.assertEqual(told["flats"], "/flats")
             self.assertEqual(told["bias"], "/bias")
 
-    def test_every_picture_offered_is_a_mode_the_kernel_has(self):
-        from opencull_qt.superimpose import SuperimposeDialog
+    def test_the_specialist_modes_still_exist_where_hands_reach(self):
+        # The dialog no longer offers the bare stack, the average or
+        # the drizzle -- but the kernel keeps every mode, and the
+        # Studio's program list keeps the doors to them.
+        from opencull_gui.programs import BUILT_INS
 
-        with tempfile.TemporaryDirectory() as folder:
-            dialog = SuperimposeDialog(folder)
-            self.addCleanup(dialog.deleteLater)
-            self.assertEqual(dialog.mode(), "trails")
-            for choice, name in ((dialog.clipped, "clipped"),
-                                 (dialog.drizzle, "drizzle"),
-                                 (dialog.average, "average")):
-                choice.setChecked(True)
-                self.assertEqual(dialog.mode(), name)
-                self.assertIn(name, sk.MODES)
-            self.assertEqual(len(sk.MODES), 4)
-
-    def test_the_drizzle_numbers_are_idle_until_drizzling(self):
-        from opencull_qt.superimpose import SuperimposeDialog
-
-        with tempfile.TemporaryDirectory() as folder:
-            dialog = SuperimposeDialog(folder)
-            self.addCleanup(dialog.deleteLater)
-            dialog.clipped.setChecked(True)
-            self.assertFalse(dialog.scale.isEnabled())
-            dialog.drizzle.setChecked(True)
-            self.assertTrue(dialog.scale.isEnabled())
-            self.assertTrue(dialog.pixfrac.isEnabled())
-            told = dialog.run_request()["parameters"]
-            self.assertEqual(told["scale"], "2.0")
-            self.assertEqual(told["pixfrac"], "0.8")
-
-
-class FinishedPictureDoorTests(unittest.TestCase):
-    """The one-click lives behind the same Superimpose button."""
-
-    @classmethod
-    def setUpClass(cls):
-        try:
-            from PySide6.QtWidgets import QApplication
-        except ImportError:                          # pragma: no cover
-            raise unittest.SkipTest("PySide6 is not installed") from None
-        cls.application = QApplication.instance() or QApplication([])
-
-    def test_the_finished_choice_runs_the_verified_program(self):
-        from opencull_qt.superimpose import SuperimposeDialog
-
-        with tempfile.TemporaryDirectory() as folder:
-            night(Path(folder).resolve(), [(0.0, 0.0), (4.0, 1.0)])
-            dialog = SuperimposeDialog(folder)
-            self.addCleanup(dialog.deleteLater)
-            dialog.finished.setChecked(True)
-            dialog.focal.setValue(16.0)
-            dialog.where.setText(str(Path(folder).resolve() / "out"))
-            request = dialog.run_request()
-            self.assertEqual(request["program"], "night_show.kim")
-            told = request["parameters"]
-            self.assertEqual(told["mode"], "clipped")
-            self.assertEqual(told["focal_mm"], "16.0")
-            self.assertNotIn("every", told)
-            self.assertNotIn("proofs_dir", told)
-
-    def test_the_finished_choice_stays_deterministic(self):
-        from opencull_qt.superimpose import SuperimposeDialog
-
-        with tempfile.TemporaryDirectory() as folder:
-            night(Path(folder).resolve(), [(0.0, 0.0), (4.0, 1.0)])
-            dialog = SuperimposeDialog(folder)
-            self.addCleanup(dialog.deleteLater)
-            dialog.handheld.setChecked(True)
-            dialog.finished.setChecked(True)
-            # Choosing the verified picture walks the holding back to
-            # the tripod: the gated pipeline has no model to lean on.
-            self.assertTrue(dialog.tripod.isChecked())
-            self.assertFalse(dialog.handheld.isEnabled())
-            self.assertFalse(dialog.judge.isEnabled())
-            self.assertEqual(dialog.go.text(), "Make the picture")
-            dialog.trails.setChecked(True)
-            self.assertTrue(dialog.handheld.isEnabled() is False)
-            self.assertEqual(dialog.go.text(), "Superimpose")
+        names = {name for name, _blurb in BUILT_INS}
+        self.assertEqual(len(sk.MODES), 4)
+        self.assertIn("superimpose.kim", names)
+        self.assertIn("night_show.kim", names)
+        self.assertIn("night_trails.kim", names)
 
 
 class ResamplingTests(unittest.TestCase):

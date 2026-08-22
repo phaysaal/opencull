@@ -1836,8 +1836,9 @@ class DevelopPage(QWidget):
             return
         self.program_wanted.emit(request["program"], request["parameters"])
         self._report(
-            "Queued. The stack lands as a 16-bit TIFF with a proof "
-            "beside it; open the TIFF to develop what the sky gave.")
+            "Queued. The finished picture lands beside its 16-bit "
+            "stack, with the certificate in the run's log; if a gate "
+            "refuses, the log says which one and why.")
 
     def treat_current(self) -> None:
         """Ask for a Kimiya Treatment of this frame, budget stated first."""

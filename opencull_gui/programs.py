@@ -68,6 +68,9 @@ BUILT_INS = (
     ("night_show.kim",
      "One click: night frames in, the finished starfield out, "
      "verified at every step."),
+    ("night_trails.kim",
+     "Star trails, finished: brightest wins, then developed by "
+     "measurement like the starfield."),
 )
 
 _PARAM_RE = re.compile(

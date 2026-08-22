@@ -1,0 +1,46 @@
+-- Star trails, finished: the sky's own turning draws the picture,
+-- and the picture is developed the same way the verified starfield
+-- is -- by measurement, with the recipe that won the blind panels.
+--
+-- Trails register nothing and average nothing: each pixel keeps the
+-- brightest thing that ever crossed it, so a doubled placement
+-- cannot ghost it and a clouded frame cannot poison it. The gates
+-- that guard registration are therefore not asked; the gates that
+-- guard the DELIVERED picture -- its blacks, its whites, its sky,
+-- the honesty of what it shows -- still are.
+
+param photos: text = "."
+param pattern: text = "*.RAF"
+param focal_mm: num = 0
+param sensor_mm: num = 23.5
+param darks: text = ""
+param flats: text = ""
+param bias: text = ""
+param colour: num = 100
+param glow_level: num = 18
+param flatten: num = 100
+param velvet: num = 0
+param output: text = ""
+param only: text = ""
+param demosaic: bool = true
+
+use python "night_show_kernel.py"
+
+-- The frames, found and read; trails leave them where they were.
+placed := register(photos, pattern, only, focal_mm, sensor_mm, demosaic)
+
+-- Brightest wins, frame after frame.
+stacked := superimpose(placed, "trails", output, darks, 2.5, flats, bias, 2.0, 0.8)
+check stack_valid(stacked)
+print(stack_note(stacked))
+
+-- Developed by measurement, uncropped: unmoved frames leave no
+-- uncovered band to trim.
+shown := develop_show(stacked, "", pattern, colour, glow_level, flatten, velvet)
+print(show_note(shown))
+
+where := show_home(shown)
+check shown_well(shown)
+act file.overwrite(where, shown)
+settle until check file_exists(where) within 5
+commit(shown)

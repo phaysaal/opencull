@@ -1,12 +1,20 @@
-"""One button's worth of night sky: trails, or a stack.
+"""One button's worth of night sky: the finished picture, either way.
 
-The kernel takes ten parameters and eight of them are things the
+The kernel takes many parameters and most of them are things the
 process already knows -- the folder, its dominant file type, where
 outputs conventionally land, the sensor's width. This dialog asks only
 what is genuinely the photographer's to say: which of the two pictures
 they are after, what lens it was shot with (so the sky's own turning
-rate becomes a bound in pixels), and whether there are dark frames.
-The answers become an ordinary program run on the ordinary queue.
+rate becomes a bound in pixels), and whether there are calibration
+frames. The answer becomes an ordinary program run on the ordinary
+queue, and both roads end at a DEVELOPED picture, verified before it
+is handed over.
+
+The bare stacking modes this dialog once offered -- the unclipped
+average, the drizzle grid, the stack without the develop -- were not
+wrong, they were contained: the verified pipeline writes the same
+16-bit stack on its way to the show, and the specialist modes remain
+as programs in the Studio for the hands that want them.
 """
 
 from __future__ import annotations
@@ -52,10 +60,12 @@ class SuperimposeDialog(QDialog):
 
         column = QVBoxLayout(self)
         lead = QLabel(
-            "Many frames of one sky, laid on each other. Either the "
-            "sky's motion draws the picture, or it is taken back out "
-            "and the frames are averaged -- which buys the cleanliness "
-            "of one long exposure without its blown stars.")
+            "Many frames of one sky, made into one finished picture. "
+            "Either the frames are registered on their own stars and "
+            "stacked -- the cleanliness of one long exposure without "
+            "its blown stars -- or the sky's motion is left in and "
+            "draws the trails. Both are developed by measurement and "
+            "verified before they are handed over.")
         lead.setWordWrap(True)
         lead.setFont(theme.body(9))
         column.addWidget(lead)
@@ -66,8 +76,9 @@ class SuperimposeDialog(QDialog):
         column.addWidget(title)
 
         self.finished = QRadioButton(
-            "The finished starfield — stacked, verified at every step, "
-            "developed. One click")
+            "The finished starfield — stacked, verified at every "
+            "step, developed")
+        self.finished.setChecked(True)
         self.finished.setFont(theme.body(10))
         self.finished.setToolTip(tooltip(
             "The whole night pipeline with nobody watching it: "
@@ -76,89 +87,26 @@ class SuperimposeDialog(QDialog):
             "-- and REFUSED unless every star appears once. Only then "
             "is it developed, by measurement, with the recipe that won "
             "the blind panels. If any gate fails it abstains and says "
-            "why, rather than hand over a ruined picture. No model is "
-            "asked for anything."))
+            "why, rather than hand over a ruined picture. The 16-bit "
+            "stack lands beside the show for any hand that wants to "
+            "develop it differently. No model is asked for anything."))
         column.addWidget(self.finished)
         self.trails = QRadioButton(
-            "Star trails — brightest wins, frames left where they were")
-        self.trails.setChecked(True)
+            "Star trails — the sky's own turning draws the picture, "
+            "finished the same way")
         self.trails.setFont(theme.body(10))
         self.trails.setToolTip(tooltip(
-            "The sky's own turning is the subject. Nothing is "
-            "registered; each pixel keeps the brightest thing that "
-            "ever crossed it."))
+            "The sky's turning is the subject. Nothing is registered; "
+            "each pixel keeps the brightest thing that ever crossed "
+            "it, which is why a satellite stays and a cloud cannot "
+            "poison it. The drawn picture is then developed by the "
+            "same measured recipe and held to the same delivery "
+            "gates as the starfield."))
         column.addWidget(self.trails)
-        self.clipped = QRadioButton(
-            "Stack, rejecting strays — registered, averaged, satellites "
-            "and aeroplanes left out")
-        self.clipped.setFont(theme.body(10))
-        self.clipped.setToolTip(tooltip(
-            "The frames are registered on the stars and averaged, and "
-            "a pixel far from what the stack agrees on is left out of "
-            "it -- which is what a satellite, an aeroplane and a "
-            "cosmic ray all are."))
-        column.addWidget(self.clipped)
-        self.drizzle = QRadioButton(
-            "Drizzle — a finer grid, for frames that dithered")
-        self.drizzle.setFont(theme.body(10))
-        self.drizzle.setToolTip(tooltip(
-            "Each input pixel is shrunk and dropped on to a finer "
-            "grid, sharing its light with whatever output pixels it "
-            "actually lands on -- nothing is interpolated, so nothing "
-            "is blurred. It repays two things and nothing else: "
-            "frames that shifted by FRACTIONS of a pixel between "
-            "exposures, and stars so small the sensor could not "
-            "sample them properly. On a wide lens with well-sampled "
-            "stars it costs four times the memory and buys nothing."))
-        column.addWidget(self.drizzle)
-        self.average = QRadioButton(
-            "Stack, plain average — registered, everything kept")
-        self.average.setFont(theme.body(10))
-        self.average.setToolTip(tooltip(
-            "The same registration, with nothing rejected. Honest for "
-            "a clean sequence, and it keeps a meteor."))
-        column.addWidget(self.average)
 
-        # Two questions, two groups. Radio buttons sharing a parent are
-        # one exclusive group as far as Qt is concerned, so choosing
-        # "handheld" silently un-chose "clipped" -- two answers fighting
-        # over one slot.
         self._picture = QButtonGroup(self)
-        for choice in (self.finished, self.trails, self.clipped,
-                       self.drizzle, self.average):
+        for choice in (self.finished, self.trails):
             self._picture.addButton(choice)
-
-        held_title = QLabel("HOW IT WAS HELD")
-        held_title.setObjectName("eyebrow")
-        held_title.setFont(theme.display(8))
-        column.addWidget(held_title)
-
-        self.tripod = QRadioButton(
-            "A tripod — the sky's own turning rate does the work, free")
-        self.tripod.setChecked(True)
-        self.tripod.setFont(theme.body(10))
-        self.tripod.setToolTip(tooltip(
-            "On a tripod the only thing moving is the sky, and it "
-            "turns at a rate the clock knows. The angle is read off "
-            "the timestamps and the shift is searched inside a disc "
-            "of known size. No model is asked for anything."))
-        column.addWidget(self.tripod)
-        self.handheld = QRadioButton(
-            "Handheld — a model names a star group to narrow the "
-            "search (paid, a handful of calls)")
-        self.handheld.setFont(theme.body(10))
-        self.handheld.setToolTip(tooltip(
-            "A hand moves further than the sky does, so nothing is "
-            "bounded and the clock says nothing. Star pairs still "
-            "give the roll -- shape survives what a hand does -- and "
-            "a model naming a pattern it recognises on a few "
-            "keyframes narrows where to look. The stars still settle "
-            "it to a fraction of a pixel."))
-        column.addWidget(self.handheld)
-
-        self._holding = QButtonGroup(self)
-        for choice in (self.tripod, self.handheld):
-            self._holding.addButton(choice)
 
         asks = QFormLayout()
         self.focal = QDoubleSpinBox()
@@ -184,30 +132,6 @@ class SuperimposeDialog(QDialog):
             "medium-format back is larger. Only used with the focal "
             "length, to turn the sky's turning rate into pixels."))
         asks.addRow("Sensor width", self.sensor)
-
-        self.scale = QDoubleSpinBox()
-        self.scale.setRange(1.0, 4.0)
-        self.scale.setDecimals(1)
-        self.scale.setSingleStep(0.5)
-        self.scale.setValue(2.0)
-        self.scale.setSuffix(" ×")
-        self.scale.setToolTip(tooltip(
-            "How much finer the output grid is. Two is the usual "
-            "answer and costs four times the memory; more than that "
-            "wants hundreds of frames to fill honestly."))
-        asks.addRow("Drizzle grid", self.scale)
-        self.pixfrac = QDoubleSpinBox()
-        self.pixfrac.setRange(0.05, 1.0)
-        self.pixfrac.setDecimals(2)
-        self.pixfrac.setSingleStep(0.05)
-        self.pixfrac.setValue(0.8)
-        self.pixfrac.setToolTip(tooltip(
-            "How far each input pixel is shrunk before it is dropped. "
-            "Smaller drops recover more detail in theory and need far "
-            "more frames in practice: measured on twenty, 0.5 came "
-            "back both noisier and blunter than 0.8, because each "
-            "output pixel heard from too few drops."))
-        asks.addRow("Drop size", self.pixfrac)
 
         darks_row = QHBoxLayout()
         darks_row.setSpacing(8)
@@ -286,18 +210,6 @@ class SuperimposeDialog(QDialog):
         self.only_selected.setEnabled(bool(self.selection))
         column.addWidget(self.only_selected)
 
-        self.judge = QCheckBox(
-            "Ask about the frames the star count cannot call (paid, a "
-            "few calls)")
-        self.judge.setFont(theme.body(9))
-        self.judge.setToolTip(tooltip(
-            "Cloud hides stars and brightens the sky, and both are "
-            "already measured -- so most frames are judged for "
-            "nothing. What is left is the band where a threshold is a "
-            "coin toss: thin cloud, a brightening sky, haze. Those "
-            "frames, and only those, are shown to a model."))
-        column.addWidget(self.judge)
-
         self.demosaic = QCheckBox(
             "Demosaic every frame — slower, and the only honest way to "
             "stack a raw")
@@ -323,42 +235,23 @@ class SuperimposeDialog(QDialog):
         cancel.setFont(theme.body(10))
         cancel.clicked.connect(self.reject)
         buttons.addWidget(cancel)
-        self.go = QPushButton("Superimpose")
+        self.go = QPushButton("Make the picture")
         self.go.setFont(theme.body(10))
         self.go.setDefault(True)
         self.go.clicked.connect(self.accept)
         buttons.addWidget(self.go)
         column.addLayout(buttons)
 
-        for choice in (self.finished, self.trails, self.clipped,
-                       self.average, self.tripod, self.handheld):
+        for choice in (self.finished, self.trails):
             choice.toggled.connect(self._retell)
         self._retell()
 
     # --- small mechanics ---------------------------------------------------
 
     def _retell(self) -> None:
-        """Trails register nothing, so how it was held cannot matter."""
-        finished = self.finished.isChecked()
-        if finished and not self.tripod.isChecked():
-            # The verified pipeline is the deterministic one; a
-            # handheld sky goes through its own program instead.
-            self.tripod.setChecked(True)
-        registering = not self.trails.isChecked()
-        self.tripod.setEnabled(registering and not finished)
-        self.handheld.setEnabled(registering and not finished)
-        held = registering and self.tripod.isChecked()
-        self.focal.setEnabled(held)
-        self.sensor.setEnabled(held)
-        # Trails average nothing, so a clouded frame cannot poison
-        # them; handheld already spends its calls on recognition; the
-        # finished pipeline screens its own frames, deterministically.
-        self.judge.setEnabled(held and not finished)
-        drizzling = self.drizzle.isChecked()
-        self.scale.setEnabled(drizzling)
-        self.pixfrac.setEnabled(drizzling)
-        self.go.setText("Make the picture" if finished
-                        else "Superimpose")
+        """The button says which picture it will make."""
+        self.go.setText("Draw the trails" if self.trails.isChecked()
+                        else "Make the picture")
 
     def _choose_darks(self) -> None:
         self._choose_into(self.darks, "The dark frames")
@@ -371,19 +264,9 @@ class SuperimposeDialog(QDialog):
 
     def _choose_where(self) -> None:
         chosen = QFileDialog.getExistingDirectory(
-            self, "Where the stack lands", self.where.text())
+            self, "Where the picture lands", self.where.text())
         if chosen:
             self.where.setText(chosen)
-
-    def mode(self) -> str:
-        if self.finished.isChecked():
-            return "clipped"
-        for choice, name in ((self.trails, "trails"),
-                             (self.clipped, "clipped"),
-                             (self.drizzle, "drizzle")):
-            if choice.isChecked():
-                return name
-        return "average"
 
     # --- the run -----------------------------------------------------------
 
@@ -393,29 +276,15 @@ class SuperimposeDialog(QDialog):
         parameters = {
             "photos": self.photos,
             "pattern": self.pattern,
-            "mode": self.mode(),
             "only": "",
             "darks": self.darks.text().strip(),
             "flats": self.flats.text().strip(),
             "bias": self.bias.text().strip(),
-            "sigma": "2.5",
-            "scale": str(self.scale.value()),
-            "pixfrac": str(self.pixfrac.value()),
+            "focal_mm": str(self.focal.value()),
+            "sensor_mm": str(self.sensor.value()),
             "output": str(home),
             "demosaic": "true" if self.demosaic.isChecked() else "false",
         }
-        if self.handheld.isChecked():
-            # A different program: the deterministic one has nothing to
-            # bound its search with, and asking a model is a decision
-            # the photographer makes rather than a fallback taken
-            # quietly on their behalf.
-            parameters["every"] = "20"
-            parameters["proofs_dir"] = str(home / "keyframes")
-        else:
-            parameters["focal_mm"] = str(self.focal.value())
-            parameters["sensor_mm"] = str(self.sensor.value())
-            if self.judge.isEnabled() and self.judge.isChecked():
-                parameters["proofs_dir"] = str(home / "keyframes")
         if self.only_selected.isChecked() and self.selection:
             # Three hundred names do not fit in a parameter; they ride
             # in a small file beside the run's own outputs.
@@ -429,14 +298,6 @@ class SuperimposeDialog(QDialog):
                     f"The selection could not be written: {exc}")
                 return None
             parameters["only"] = str(chosen)
-        if self.finished.isChecked():
-            # The one-click: the same stack, then the gates and the
-            # develop. The queue and the progress bar are the same.
-            program = "night_show.kim"
-        elif self.handheld.isChecked():
-            program = "handheld_stack.kim"
-        elif self.judge.isEnabled() and self.judge.isChecked():
-            program = "clear_stack.kim"
-        else:
-            program = "superimpose.kim"
+        program = ("night_trails.kim" if self.trails.isChecked()
+                   else "night_show.kim")
         return {"program": program, "parameters": parameters}
