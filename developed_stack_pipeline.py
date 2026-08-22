@@ -58,6 +58,7 @@ def _workspace(photos: Path, names: list[str]):
 def run_developed_stack(
     photos: Path, plan_path: Path, output: Path, mode: str,
     focal_mm: float, sensor_mm: float, engine: str, demosaic: str,
+    receipt: Path | None = None,
 ) -> dict[str, Any]:
     import superimpose_kernel as sky
 
@@ -92,7 +93,8 @@ def run_developed_stack(
         result = json.loads(told)
         if result.get("error"):
             raise ValueError(str(result["error"]))
-    receipt = output / "developed-stack.json"
+    receipt = (receipt.expanduser().resolve() if receipt is not None
+               else output / "developed-stack.json")
     receipt.write_text(json.dumps({
         "format": "darkimiya-developed-stack-v1",
         "photos": str(photos),
@@ -115,11 +117,13 @@ def main() -> None:
     told.add_argument("--sensor-mm", type=float, default=23.5)
     told.add_argument("--engine", default="default")
     told.add_argument("--demosaic", default="markesteijn-1-pass")
+    told.add_argument("--receipt", default="")
     asked = told.parse_args()
     result = run_developed_stack(
         Path(asked.photos), Path(asked.plan), Path(asked.output),
         asked.mode, asked.focal_mm, asked.sensor_mm,
-        asked.engine, asked.demosaic)
+        asked.engine, asked.demosaic,
+        receipt=Path(asked.receipt) if asked.receipt else None)
     print(f"{result.get('frames_used')} developed frames stacked into "
           f"{result.get('stack')}")
 

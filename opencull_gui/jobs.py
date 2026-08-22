@@ -544,6 +544,7 @@ class JobManager:
                 str(self.project_root / "developed_stack_pipeline.py"),
                 "--photos", job["photos"], "--plan", job["plan"],
                 "--output", job["stack_home"], "--mode", job["mode"],
+                "--receipt", job["output"],
                 "--focal-mm", str(job["focal_mm"]),
                 "--sensor-mm", str(job["sensor_mm"]),
                 "--engine", job["engine"], "--demosaic", job["demosaic"],
@@ -1224,8 +1225,24 @@ class JobManager:
         plan_path = Path(plan).expanduser().resolve()
         if not plan_path.is_file():
             raise JobError(f"the frame plan is missing: {plan_path}")
-        home = self._validate_output(Path(output))
+        # The output is a FOLDER -- the stack, its proof and the
+        # receipt all land in it -- so the .json receipt rule applies
+        # to the receipt, not to the folder itself.
+        home = Path(output).expanduser().resolve()
+        if not home.parent.is_dir():
+            raise JobError(
+                f"output parent directory does not exist: {home.parent}")
+        try:
+            home.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise JobError(f"cannot create the output folder: {exc}") from exc
         receipt = home / "developed-stack.json"
+        number = 2
+        while receipt.exists():
+            # A folder may be stacked again; the last receipt is not
+            # something a new run silently overwrites.
+            receipt = home / f"developed-stack-{number}.json"
+            number += 1
         with self._lock:
             job_id = uuid.uuid4().hex[:12]
             job = {
