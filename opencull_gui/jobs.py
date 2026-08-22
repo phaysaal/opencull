@@ -1266,7 +1266,7 @@ class JobManager:
             }
             self._state["jobs"].append(job)
             self._save()
-        self._wake()
+        self._wake.set()
         return dict(job)
 
     def add_control_zones(

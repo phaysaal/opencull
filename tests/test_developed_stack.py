@@ -76,3 +76,39 @@ class DevelopedStackTests(unittest.TestCase):
 
 if __name__ == "__main__":                           # pragma: no cover
     unittest.main()
+
+
+class DevelopedStackJobTests(unittest.TestCase):
+    """The queue accepts the other road and knows how to run it."""
+
+    def test_the_job_queues_and_builds_its_command(self):
+        from opencull_gui.jobs import JobManager
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve()
+            (root / "photos").mkdir()
+            plan = root / "plan.json"
+            plan.write_text(json.dumps({"frames": {}}))
+            manager = JobManager(
+                root / "state.json",
+                Path(__file__).resolve().parent.parent,
+                autostart=False)
+            job = manager.add_developed_stack(
+                photos=str(root / "photos"), plan=str(plan),
+                output=str(root / "out"), mode="clipped",
+                focal_mm=16.0, sensor_mm=23.5)
+            self.assertEqual(job["kind"], "developed_stack")
+            self.assertTrue(job["output"].endswith(
+                "developed-stack.json"))
+            command = manager.command_builder(job)
+            self.assertIn("developed_stack_pipeline.py",
+                          " ".join(command))
+            self.assertIn("--receipt", command)
+            # Stacking the same folder again numbers the receipt
+            # instead of refusing or overwriting.
+            Path(job["output"]).write_text("{}")
+            again = manager.add_developed_stack(
+                photos=str(root / "photos"), plan=str(plan),
+                output=str(root / "out"))
+            self.assertTrue(again["output"].endswith(
+                "developed-stack-2.json"))
