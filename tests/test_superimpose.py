@@ -813,6 +813,7 @@ class DialogTests(unittest.TestCase):
 
     def test_the_default_is_the_verified_starfield(self):
         with tempfile.TemporaryDirectory() as folder:
+            night(Path(folder).resolve(), [(0.0, 0.0), (4.0, 1.0)])
             dialog = self.dialog(folder)
             self.assertTrue(dialog.finished.isChecked())
             self.assertEqual(dialog.go.text(), "Make the picture")
@@ -822,6 +823,7 @@ class DialogTests(unittest.TestCase):
 
     def test_trails_are_their_own_finished_program(self):
         with tempfile.TemporaryDirectory() as folder:
+            night(Path(folder).resolve(), [(0.0, 0.0), (4.0, 1.0)])
             dialog = self.dialog(folder)
             dialog.trails.setChecked(True)
             self.assertEqual(dialog.go.text(), "Draw the trails")
@@ -830,6 +832,7 @@ class DialogTests(unittest.TestCase):
 
     def test_the_lens_reaches_both_programs(self):
         with tempfile.TemporaryDirectory() as folder:
+            night(Path(folder).resolve(), [(0.0, 0.0), (4.0, 1.0)])
             dialog = self.dialog(folder)
             dialog.focal.setValue(16.0)
             for choice in (dialog.finished, dialog.trails):
@@ -838,19 +841,49 @@ class DialogTests(unittest.TestCase):
                 self.assertEqual(told["focal_mm"], "16.0")
                 self.assertEqual(told["sensor_mm"], "23.5")
 
-    def test_the_marked_frames_ride_in_a_file(self):
+    def test_the_frames_are_the_dialog_own_choice(self):
+        from PySide6.QtCore import Qt
+
         with tempfile.TemporaryDirectory() as folder:
-            night(Path(folder).resolve(), [(0.0, 0.0), (4.0, 1.0)])
-            dialog = self.dialog(folder, selection=["N000.jpg"])
+            night(Path(folder).resolve(),
+                  [(0.0, 0.0), (4.0, 1.0), (8.0, 2.0)])
+            dialog = self.dialog(folder)
             dialog.where.setText(str(Path(folder).resolve() / "out"))
+            # Everything ticked: the whole folder, no selection file.
+            self.assertEqual(dialog.frame_names(None),
+                             ["N000.jpg", "N001.jpg", "N002.jpg"])
+            self.assertEqual(dialog.run_request()["parameters"]["only"],
+                             "")
+            # Untick the stray, and only the ticked ride in the file.
+            dialog.frame_list.item(2).setCheckState(
+                Qt.CheckState.Unchecked)
             told = dialog.run_request()["parameters"]
             self.assertTrue(told["only"].endswith("selection.json"))
             self.assertEqual(
                 json.loads(Path(told["only"]).read_text())["names"],
-                ["N000.jpg"])
+                ["N000.jpg", "N001.jpg"])
+
+    def test_the_project_marks_arrive_preticked(self):
+        with tempfile.TemporaryDirectory() as folder:
+            night(Path(folder).resolve(),
+                  [(0.0, 0.0), (4.0, 1.0), (8.0, 2.0)])
+            dialog = self.dialog(
+                folder, selection=["N000.jpg", "N002.jpg"])
+            self.assertEqual(dialog.frame_names(True),
+                             ["N000.jpg", "N002.jpg"])
+            self.assertEqual(dialog.frame_names(False), ["N001.jpg"])
+
+    def test_one_frame_is_not_a_stack(self):
+        with tempfile.TemporaryDirectory() as folder:
+            night(Path(folder).resolve(), [(0.0, 0.0), (4.0, 1.0)])
+            dialog = self.dialog(folder, selection=["N000.jpg"])
+            dialog.where.setText(str(Path(folder).resolve() / "out"))
+            self.assertIsNone(dialog.run_request())
+            self.assertIn("at least two", dialog.status.text())
 
     def test_the_calibration_folders_reach_the_program(self):
         with tempfile.TemporaryDirectory() as folder:
+            night(Path(folder).resolve(), [(0.0, 0.0), (4.0, 1.0)])
             dialog = self.dialog(folder)
             dialog.darks.setText("/darks")
             dialog.flats.setText("/flats")

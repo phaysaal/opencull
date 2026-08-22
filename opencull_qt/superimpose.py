@@ -23,6 +23,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -33,6 +34,8 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QPushButton,
     QRadioButton,
     QVBoxLayout,
@@ -203,12 +206,52 @@ class SuperimposeDialog(QDialog):
         asks.addRow("Lands in", where_row)
         column.addLayout(asks)
 
-        self.only_selected = QCheckBox(
-            f"Only the {len(self.selection)} frames marked in this project")
-        self.only_selected.setFont(theme.body(9))
-        self.only_selected.setChecked(bool(self.selection))
-        self.only_selected.setEnabled(bool(self.selection))
-        column.addWidget(self.only_selected)
+        frames_title = QLabel("THE FRAMES")
+        frames_title.setObjectName("eyebrow")
+        frames_title.setFont(theme.display(8))
+        column.addWidget(frames_title)
+        self.frame_list = QListWidget()
+        self.frame_list.setSelectionMode(
+            QListWidget.SelectionMode.NoSelection)
+        self.frame_list.setMaximumHeight(150)
+        self.frame_list.setFont(theme.body(9))
+        self.frame_list.setToolTip(tooltip(
+            "Which frames go in. Everything the folder holds is here; "
+            "untick a stray -- a re-aim, a changed exposure, the frame "
+            "the confidence gate named -- and it stays out of the "
+            "stack. Frames marked in the project arrive pre-ticked."))
+        names = sorted(
+            path.name
+            for path in Path(self.photos).glob(self.pattern))
+        chosen = set(self.selection) & set(names)
+        for name in names:
+            entry = QListWidgetItem(name)
+            entry.setFlags(entry.flags()
+                           | Qt.ItemFlag.ItemIsUserCheckable)
+            entry.setCheckState(
+                Qt.CheckState.Checked
+                if not chosen or name in chosen
+                else Qt.CheckState.Unchecked)
+            self.frame_list.addItem(entry)
+        self.frame_list.itemChanged.connect(self._recount)
+        column.addWidget(self.frame_list)
+        count_row = QHBoxLayout()
+        count_row.setSpacing(8)
+        self.frame_count = QLabel("")
+        self.frame_count.setObjectName("hint")
+        self.frame_count.setFont(theme.body(9))
+        count_row.addWidget(self.frame_count, 1)
+        take_all = QPushButton("All")
+        take_all.setObjectName("ghost")
+        take_all.setFont(theme.body(9))
+        take_all.clicked.connect(lambda: self._check_every(True))
+        count_row.addWidget(take_all)
+        take_none = QPushButton("None")
+        take_none.setObjectName("ghost")
+        take_none.setFont(theme.body(9))
+        take_none.clicked.connect(lambda: self._check_every(False))
+        count_row.addWidget(take_none)
+        column.addLayout(count_row)
 
         self.demosaic = QCheckBox(
             "Demosaic every frame — slower, and the only honest way to "
@@ -245,6 +288,7 @@ class SuperimposeDialog(QDialog):
         for choice in (self.finished, self.trails):
             choice.toggled.connect(self._retell)
         self._retell()
+        self._recount()
 
     # --- small mechanics ---------------------------------------------------
 
@@ -252,6 +296,31 @@ class SuperimposeDialog(QDialog):
         """The button says which picture it will make."""
         self.go.setText("Draw the trails" if self.trails.isChecked()
                         else "Make the picture")
+
+    def frame_names(self, checked: bool | None = True) -> list[str]:
+        """The frames as ticked; None means every frame listed."""
+        out = []
+        for row in range(self.frame_list.count()):
+            item = self.frame_list.item(row)
+            if checked is None or (
+                    (item.checkState() == Qt.CheckState.Checked)
+                    == checked):
+                out.append(item.text())
+        return out
+
+    def _check_every(self, wanted: bool) -> None:
+        state = (Qt.CheckState.Checked if wanted
+                 else Qt.CheckState.Unchecked)
+        self.frame_list.blockSignals(True)
+        for row in range(self.frame_list.count()):
+            self.frame_list.item(row).setCheckState(state)
+        self.frame_list.blockSignals(False)
+        self._recount()
+
+    def _recount(self) -> None:
+        total = self.frame_list.count()
+        going = len(self.frame_names(True))
+        self.frame_count.setText(f"{going} of {total} frames go in")
 
     def _choose_darks(self) -> None:
         self._choose_into(self.darks, "The dark frames")
@@ -285,14 +354,19 @@ class SuperimposeDialog(QDialog):
             "output": str(home),
             "demosaic": "true" if self.demosaic.isChecked() else "false",
         }
-        if self.only_selected.isChecked() and self.selection:
+        going = self.frame_names(True)
+        if len(going) < 2:
+            self.status.setText(
+                "A stack needs at least two frames; tick more of them.")
+            return None
+        if len(going) < self.frame_list.count():
             # Three hundred names do not fit in a parameter; they ride
             # in a small file beside the run's own outputs.
             chosen = home / "selection.json"
             try:
                 home.mkdir(parents=True, exist_ok=True)
                 chosen.write_text(json.dumps(
-                    {"names": self.selection}), encoding="utf-8")
+                    {"names": going}), encoding="utf-8")
             except OSError as exc:
                 self.status.setText(
                     f"The selection could not be written: {exc}")
