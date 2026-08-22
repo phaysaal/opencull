@@ -1249,6 +1249,19 @@ class DevelopPage(QWidget):
         self.superimpose_button.clicked.connect(self.superimpose_current)
         layout.addWidget(self.superimpose_button)
 
+        self.tune_show_button = QPushButton("Tune the show…")
+        self.tune_show_button.setObjectName("ghost")
+        self.tune_show_button.setFont(theme.body(10))
+        self.tune_show_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.tune_show_button.setToolTip(tooltip(
+            "Open the finished starfield in Fine Tune, starting from "
+            "the recipe the program measured for it: every dial live "
+            "on the real 16-bit stack -- the flatten, the velvet, the "
+            "levels -- with the program's own version to compare "
+            "against. Appears once a Superimpose run has landed."))
+        self.tune_show_button.clicked.connect(self.tune_show_current)
+        layout.addWidget(self.tune_show_button)
+
         # What a treatment run for this frame is doing right now: a busy
         # bar because the work is real, and words because a bar that
         # cannot say "round 2 of 3" is just a light left on.
@@ -1813,6 +1826,37 @@ class DevelopPage(QWidget):
             "Queued. The frames land in the timelapse folder's frames/; "
             "the report beside them ends with the ffmpeg line that makes "
             "the video.")
+
+    def show_recipe_path(self) -> Path | None:
+        """Where the last Superimpose run left its measured recipe."""
+        photos = str(self.workspace.project.get("source_folder") or "")
+        if not photos:
+            return None
+        found = Path(photos) / ".darkimiya" / "Superimpose" \
+            / "show-recipe.json"
+        return found if found.is_file() else None
+
+    def tune_show_current(self) -> None:
+        """The finished starfield, opened with its measured dials live."""
+        recipe_file = self.show_recipe_path()
+        if recipe_file is None:
+            self._report(
+                "No finished show yet: run Superimpose first, and the "
+                "measured recipe will land beside the stack.")
+            return
+        try:
+            told = self.workspace.import_recipe(recipe_file)
+        except (OSError, ValueError) as exc:
+            self._report(f"The show's recipe could not be read: {exc}",
+                         "alarm")
+            return
+        artifact = told["recipe"]
+        photo = str(artifact.get("photo") or "")
+        if not photo:
+            self._report("The show's recipe names no stack to open.",
+                         "alarm")
+            return
+        self.finetune_wanted.emit(photo, str(artifact["id"]))
 
     def superimpose_current(self) -> None:
         """The night-sky combiner, obvious parameters pre-filled."""

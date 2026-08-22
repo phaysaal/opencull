@@ -219,6 +219,37 @@ class LevelCapTests(unittest.TestCase):
         self.assertLessEqual(report_["finish_level"], nk.FINISH_LEVEL)
 
 
+class ShowRecipeTests(unittest.TestCase):
+    """The measured recipe leaves with the show, executable."""
+
+    def test_the_recipe_file_is_portable_and_bound(self):
+        import tifffile
+
+        rng = np.random.default_rng(21)
+        field = np.clip(np.full((300, 400, 3), 0.05, np.float32)
+                        + rng.normal(0, 0.004, (300, 400, 3)), 0, 1)
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve()
+            tifffile.imwrite(root / "stack.tiff",
+                             (field * 65535).astype(np.uint16))
+            from PIL import Image
+
+            Image.fromarray((field * 255).astype(np.uint8)).save(
+                root / "frame.png")
+            told = json.dumps({"stack": str(root / "stack.tiff"),
+                               "photos": str(root), "frames_used": 5})
+            report_ = json.loads(nk.develop_show(told, "", "*.png"))
+            written = json.loads(Path(report_["recipe"]).read_text())
+        self.assertEqual(written["photo"], "stack.tiff")
+        operations = written["recipe"]["operations"]
+        self.assertTrue(operations)
+        self.assertTrue(all(isinstance(item, dict) and item.get("op")
+                            for item in operations))
+        # The finishing level rides along with its measured value.
+        self.assertTrue(any(item["op"] == "levels.black_input"
+                            for item in operations))
+
+
 class FlattenDialTests(unittest.TestCase):
     """The sky's weather is a choice, not an inevitability."""
 

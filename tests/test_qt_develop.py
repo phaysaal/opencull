@@ -556,6 +556,58 @@ class FinetuneDoorTests(unittest.TestCase):
         self.assertEqual(len(asked), 1)
 
 
+class TuneShowDoorTests(FinetuneDoorTests):
+    """The finished starfield opens in Fine Tune with its own recipe."""
+
+    def show_recipe(self, root: Path) -> Path:
+        import numpy as np
+        import tifffile
+
+        home = root / ".darkimiya" / "Superimpose"
+        home.mkdir(parents=True, exist_ok=True)
+        tifffile.imwrite(home / "clipped.tiff", (np.full(
+            (60, 80, 3), 0.05, np.float32) * 65535).astype("uint16"))
+        target = home / "show-recipe.json"
+        target.write_text(json.dumps({
+            "name": "The show, as measured",
+            "photo": ".darkimiya/Superimpose/clipped.tiff",
+            "recipe": {"title": "The show, as measured",
+                       "operations": [
+                           {"op": "color.vibrance", "unit": "percent",
+                            "mode": "delta", "value": 22.0,
+                            "enabled": True},
+                           {"op": "levels.black_input",
+                            "unit": "level-8bit", "mode": "absolute",
+                            "value": 18.0, "enabled": True}]}}))
+        return target
+
+    def test_the_door_imports_and_opens_the_stack(self):
+        page = self.page()
+        self.show_recipe(self.photos_path)
+        seen: list[tuple[str, str]] = []
+        page.finetune_wanted.connect(
+            lambda photo, treatment: seen.append((photo, treatment)))
+        page.tune_show_current()
+        self.assertEqual(len(seen), 1)
+        photo, treatment = seen[0]
+        self.assertEqual(photo, ".darkimiya/Superimpose/clipped.tiff")
+        self.assertTrue(treatment.startswith("custom-"))
+        # The stack was never a candidate, and the recipe still
+        # compiles for it -- the bound portable is its own authority.
+        recipe = page.workspace.compiled_recipe(
+            photo, treatment, "default")
+        names = [item.get("op") for item in recipe["operations"]]
+        self.assertIn("color.vibrance", names)
+
+    def test_without_a_show_the_door_says_so(self):
+        page = self.page()
+        seen: list[tuple[str, str]] = []
+        page.finetune_wanted.connect(
+            lambda photo, treatment: seen.append((photo, treatment)))
+        page.tune_show_current()
+        self.assertEqual(seen, [])
+
+
 class TimelapseDoorTests(FinetuneDoorTests):
     """One button's worth of timelapse: the process fills the geeky parts."""
 

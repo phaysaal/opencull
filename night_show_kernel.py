@@ -434,6 +434,22 @@ def develop_show(stacked: str, placed: str = "",
     import tifffile
 
     tifffile.imwrite(deep, (shown * 65535.0 + 0.5).astype(np.uint16))
+    # The recipe, portable: every operation with its measured value,
+    # bound to the very stack it was measured on. This is what lets
+    # the app's Fine Tune open the show with the program's own dials
+    # live -- the report below names the operations, this file IS them.
+    stack_file = Path(told["stack"]).resolve()
+    photos_root = Path(str(told.get("photos") or ".")).resolve()
+    try:
+        bound = stack_file.relative_to(photos_root).as_posix()
+    except ValueError:
+        bound = str(stack_file)
+    recipe_file = home / "show-recipe.json"
+    recipe_file.write_text(json.dumps({
+        "name": "The show, as measured",
+        "photo": bound,
+        "recipe": {"title": "The show, as measured",
+                   "operations": operations}}, indent=2))
     # Measured as DELIVERED: the report describes the very file a
     # person will open -- read back from disk, its eight bits and its
     # compression included -- because a report about a finer picture
@@ -446,6 +462,7 @@ def develop_show(stacked: str, placed: str = "",
     return json.dumps({
         "format": "darkimiya-night-show-v1",
         "picture": str(picture), "deep": str(deep),
+        "recipe": str(recipe_file),
         "stack": told["stack"],
         "cropped_border_px": int(inset),
         "cropped_insets": {"top": int(top), "bottom": int(bottom),

@@ -664,8 +664,19 @@ class DevelopmentWorkspace:
                 (item for item in self.finished_treatments(photo)
                  if item["id"] == style), None)
         if entry is None:
+            # A portable recipe bound to this very photograph is its own
+            # authority -- the Superimpose show arrives exactly so, a
+            # stack that was never a candidate carrying the recipe the
+            # program measured for it.
+            carried = any(
+                isinstance(item, dict)
+                and item.get("format") == "darkimiya-portable-recipe-v1"
+                and item.get("id") == style
+                and str(item.get("photo", "")) in {"", photo}
+                for item in workspace.get("recipes", []))
             if style not in {"calibrated", "as-shot"} \
-                    and preset is None and treatment is None:
+                    and preset is None and treatment is None \
+                    and not carried:
                 raise ValueError("photograph has no edit direction")
             # The baseline interprets nothing, so it needs no direction. Only
             # the RAW match matters, and that is indexed separately.
