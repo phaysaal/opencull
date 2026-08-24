@@ -2232,6 +2232,48 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class DeliveryStripParityTests(FineTunePageTests):
+    """The export's voice matches the develop page's, word for word."""
+
+    def test_the_strip_is_the_shared_widget(self):
+        from opencull_qt.develop import DeliveryStrip
+
+        page = self.page()
+        self.assertIsInstance(page.delivery, DeliveryStrip)
+        self.assertIs(page.delivery.exporter, page.exporter)
+
+    def test_an_export_says_how_far_through_the_batch_it_is(self):
+        page = self.page()
+        self.assertFalse(page.delivery.meter.isVisibleTo(page))
+
+        page.exporter.pending = 2
+        page.delivery._progress(0, 2)
+        self.assertTrue(page.delivery.meter.isVisibleTo(page))
+        self.assertIn("1 of 2", page.delivery.note.text())
+        self.assertEqual(page.delivery.meter.value(), 0)
+
+        page.exporter.pending = 1
+        page.delivery._progress(1, 2)
+        self.assertIn("2 of 2", page.delivery.note.text())
+        self.assertEqual(page.delivery.meter.value(), 50)
+
+        page.exporter.pending = 0
+        page.delivery._progress(2, 2)
+        self.assertFalse(page.delivery.meter.isVisibleTo(page))
+
+    def test_the_bar_moves_through_the_adjustments_of_one_photograph(self):
+        page = self.page()
+        page.exporter.pending = 1
+        page.exporter.asked = 1
+
+        page.delivery._step("A.JPG", 0, 1, "developing the raw")
+        self.assertIn("developing the raw", page.delivery.note.text())
+
+        page.delivery._step("A.JPG", 5, 20, "tone.contrast")
+        self.assertEqual(page.delivery.meter.value(), 25)
+        self.assertIn("contrast", page.delivery.note.text())
+
+
 class PastedRecipeFidelityTests(FineTunePageTests):
     """What was pasted is what renders when the frame is chosen."""
 

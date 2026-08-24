@@ -1388,6 +1388,12 @@ class FineTunePage(QWidget):
         self.keep_button.clicked.connect(self.keep)
         layout.addWidget(self.keep_button)
 
+        # The same bar and the same words the develop page's export
+        # wears: one door, one voice, wherever an export runs from.
+        from .develop import DeliveryStrip
+        self.delivery = DeliveryStrip(self.exporter)
+        layout.addWidget(self.delivery)
+
         self.status = QLabel("")
         self.status.setObjectName("status")
         self.status.setWordWrap(True)
@@ -3280,11 +3286,12 @@ class FineTunePage(QWidget):
             options=QFileDialog.Option.DontConfirmOverwrite)
         return chosen
 
-    def _export_stepped(self, photo: str, done: int, total: int,
+    def _export_stepped(self, _photo: str, _done: int, _total: int,
                         _what: str) -> None:
-        if photo == self.current and total > 0:
-            self.keep_button.setText(
-                f"Exporting… {int(done * 100 / total)}%")
+        # The percentage and the adjustment now live on the delivery
+        # strip below the button, the same voice the develop page's
+        # export wears; the button itself just says it is working.
+        pass
 
     def _exported(self, photo: str, _requested: str, written: str) -> None:
         self.keep_button.setEnabled(True)

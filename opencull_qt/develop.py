@@ -238,6 +238,79 @@ class _ExportJob(QRunnable):
             self.photo, self.destination, str(record["destination"]))
 
 
+class DeliveryStrip(QWidget):
+    """The export's own voice: a thin bar and a line saying what it does.
+
+    One implementation, worn by every page an export can run from --
+    the develop page and the fine-tune page are the same door in
+    principle, so their exports must speak identically: how far
+    through the batch, how far inside the frame, and which adjustment
+    is being applied right now.
+    """
+
+    def __init__(self, exporter: Exporter,
+                 parent: QWidget | None = None):
+        super().__init__(parent)
+        self.exporter = exporter
+        column = QVBoxLayout(self)
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(4)
+        self.meter = QProgressBar()
+        self.meter.setRange(0, 100)
+        self.meter.setTextVisible(False)
+        self.meter.setFixedHeight(4)
+        self.meter.hide()
+        column.addWidget(self.meter)
+        self.note = QLabel("")
+        self.note.setObjectName("hint")
+        self.note.setWordWrap(True)
+        self.note.setFont(theme.body(9))
+        self.note.hide()
+        column.addWidget(self.note)
+        exporter.stepped.connect(self._step)
+        exporter.progressed.connect(self._progress)
+
+    def _step(self, photo: str, done: int, total: int,
+              what: str) -> None:
+        """Where inside one photograph the render has got to.
+
+        A treatment is twenty-odd adjustments and a demosaic. Counting
+        them turns a bar that could only say "started" into one that
+        says how far, which is the difference between waiting and
+        wondering.
+        """
+        if self.exporter.pending <= 0:
+            return
+        self.meter.setRange(0, 100)
+        self.meter.setValue(round(100 * done / total) if total else 0)
+        self.meter.show()
+        said = _adjustment_name(what)
+        batch = ""
+        if self.exporter.asked > 1:
+            made = self.exporter.asked - self.exporter.pending + 1
+            batch = f"{photo}, {made} of {self.exporter.asked} — "
+        self.note.setText(f"{batch}{said}.")
+        self.note.show()
+
+    def _progress(self, done: int, total: int) -> None:
+        """How far through the batch, while it is still being made."""
+        running = self.exporter.pending > 0
+        self.meter.setVisible(running)
+        self.note.setVisible(running)
+        if not running:
+            return
+        # The one being rendered now is the one after those finished.
+        self.meter.setRange(0, 0 if total <= 1 else 100)
+        if total > 1:
+            self.meter.setValue(round(100 * done / total))
+        self.note.setText(
+            f"Rendering {done + 1} of {total} at full size, then "
+            "writing it out. About a minute and a half each; you can "
+            "keep looking at other frames." if total > 1 else
+            "Rendering at full size, then writing it out. About a "
+            "minute and a half; you can keep looking at other frames.")
+
+
 class Exporter(QObject):
     """Deliveries in flight.
 
@@ -1045,8 +1118,6 @@ class DevelopPage(QWidget):
         self.previews: dict[tuple[str, str], QPixmap] = {}
         self.exporter = Exporter(workspace, self)
         self.exporter.done.connect(self._exported)
-        self.exporter.progressed.connect(self._delivery_progress)
-        self.exporter.stepped.connect(self._delivery_step)
         self.exporter.failed.connect(self._export_failed)
         self.verifier = Verifier(workspace, self)
         self.verifier.ready.connect(self._verification_ready)
@@ -1428,59 +1499,21 @@ class DevelopPage(QWidget):
 
         # A full-size render takes a minute and a half of somebody's
         # evening. A disabled button says only that it is unavailable.
-        self.delivery_meter = QProgressBar()
-        self.delivery_meter.setRange(0, 100)
-        self.delivery_meter.setTextVisible(False)
-        self.delivery_meter.setFixedHeight(4)
-        self.delivery_meter.hide()
-        layout.addWidget(self.delivery_meter)
-        self.delivery_note = QLabel("")
-        self.delivery_note.setObjectName("hint")
-        self.delivery_note.setWordWrap(True)
-        self.delivery_note.setFont(theme.body(9))
-        self.delivery_note.hide()
-        layout.addWidget(self.delivery_note)
+        self.delivery = DeliveryStrip(self.exporter)
+        layout.addWidget(self.delivery)
+        # The strip's own widgets, under the names the page always
+        # used for them.
+        self.delivery_meter = self.delivery.meter
+        self.delivery_note = self.delivery.note
         return panel
 
     def _delivery_step(self, photo: str, done: int, total: int,
                        what: str) -> None:
-        """Where inside one photograph the render has got to.
-
-        A treatment is twenty-odd adjustments and a demosaic. Counting
-        them turns a bar that could only say "started" into one that says
-        how far, which is the difference between waiting and wondering.
-        """
-        if self.exporter.pending <= 0:
-            return
-        self.delivery_meter.setRange(0, 100)
-        self.delivery_meter.setValue(
-            round(100 * done / total) if total else 0)
-        self.delivery_meter.show()
-        said = _adjustment_name(what)
-        batch = ""
-        if self.exporter.asked > 1:
-            made = self.exporter.asked - self.exporter.pending + 1
-            batch = f"{photo}, {made} of {self.exporter.asked} — "
-        self.delivery_note.setText(f"{batch}{said}.")
-        self.delivery_note.show()
+        """The strip's step, under the name the page always had."""
+        self.delivery._step(photo, done, total, what)
 
     def _delivery_progress(self, done: int, total: int) -> None:
-        """How far through the batch, while it is still being made."""
-        running = self.exporter.pending > 0
-        self.delivery_meter.setVisible(running)
-        self.delivery_note.setVisible(running)
-        if not running:
-            return
-        # The one being rendered now is the one after those finished.
-        self.delivery_meter.setRange(0, 0 if total <= 1 else 100)
-        if total > 1:
-            self.delivery_meter.setValue(round(100 * done / total))
-        self.delivery_note.setText(
-            f"Rendering {done + 1} of {total} at full size, then writing "
-            "it out. About a minute and a half each; you can keep looking "
-            "at other frames." if total > 1 else
-            "Rendering at full size, then writing it out. About a minute "
-            "and a half; you can keep looking at other frames.")
+        self.delivery._progress(done, total)
 
     # --- photographs -----------------------------------------------------
 
