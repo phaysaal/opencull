@@ -359,6 +359,34 @@ def hsl_state(recipe: dict[str, Any]) -> dict[tuple, dict[str, float]]:
     return held
 
 
+def mask_hsl_state(recipe: dict[str, Any],
+                   ordinal: int) -> dict[tuple, dict[str, float]]:
+    """One mask's own colour-band moves, keyed the same way hsl_state is.
+
+    A mask's bands live inside its own effects list rather than among
+    the frame's operations, so they are read from there -- the same
+    shape hsl_state returns, so the same HslPanel serves both layers.
+    """
+    placed = _mask_operations(recipe)
+    if not 1 <= ordinal <= len(placed):
+        return {}
+    effects = placed[ordinal - 1]["value"].get("effects", []) or []
+    held: dict[tuple, dict[str, float]] = {}
+    for op in effects:
+        if not isinstance(op, dict) or op.get("op") != "color.hsl_range":
+            continue
+        channel = str(op.get("channel", "")).casefold()
+        component = str(op.get("component", "")).casefold()
+        if channel not in HSL_BANDS or component not in HSL_COMPONENTS:
+            continue
+        value = op.get("value")
+        if not isinstance(value, (int, float)):
+            continue
+        held[(channel, component)] = {"value": float(value),
+                                      "asked": float(value)}
+    return held
+
+
 def masks(recipe: dict[str, Any]) -> list[dict[str, Any]]:
     """Every mask in one recipe, its geometry parsed and its effects bounded.
 
@@ -411,12 +439,20 @@ def masks(recipe: dict[str, Any]) -> list[dict[str, Any]]:
                 "unit": unit, "low": low, "high": high,
                 "enabled": True, "source": "",
             })
+        curve = None
+        for effect in value.get("effects", []) or []:
+            if (isinstance(effect, dict) and effect.get("op") == "tone.curve"
+                    and isinstance(effect.get("value"), dict)):
+                curve = {
+                    "points": effect["value"].get("points"),
+                    "preserve": effect["value"].get("preserve", 0.0)}
         found.append({
             "id": f"mask:{ordinal}",
             "ordinal": ordinal,
             "shape": shape,
             "label": str(operation.get("source") or f"mask {ordinal}"),
             "geometry": geometry,
+            "curve": curve,
             "enabled": operation.get("enabled", True) is not False,
             "effects": effects,
         })
@@ -805,6 +841,73 @@ def apply(recipe: dict[str, Any], changes: dict[str, Any]) -> dict[str, Any]:
                                  "set": float(item.get("value", 0.0)),
                                  "enabled": True, "unit": unit,
                                  "inserted": True})
+            # The tone curve, scoped to this mask alone: drawn on top of
+            # everything else the layer does, the same way the base
+            # layer's curve sits on top of the whole frame. Stored as
+            # one effect among the others so the engine's per-effect
+            # blend -- run this op, blend it in by the mask's own
+            # weight -- needs nothing extra to know about it.
+            if "curve" in change:
+                effects_list = value.setdefault("effects", [])
+                existing_curve = next(
+                    (item for item in effects_list
+                     if isinstance(item, dict)
+                     and item.get("op") == "tone.curve"), None)
+                curve_change = change["curve"]
+                points = (curve_change.get("points")
+                          if isinstance(curve_change, dict) else None)
+                if points and len(points) >= 2:
+                    drawn = {
+                        "points": [[float(x), float(y)] for x, y in points],
+                        "preserve": float(
+                            curve_change.get("preserve", 0) or 0)}
+                    if existing_curve is not None:
+                        existing_curve["value"] = drawn
+                    else:
+                        effects_list.append({
+                            "op": "tone.curve", "unit": "curve",
+                            "mode": "absolute", "value": drawn})
+                elif existing_curve is not None:
+                    effects_list.remove(existing_curve)
+                recorded.append({"id": f"{head}/curve", "op": "tone.curve",
+                                 "asked": 0.0, "set": 0.0,
+                                 "enabled": True, "unit": "curve"})
+            # This mask's own colour bands, the same eight hues and
+            # three components the whole frame has -- mirroring the
+            # +hsl compile above, but landing inside this mask's own
+            # effects rather than among the frame's operations.
+            for item in change.get("hsl", []) or []:
+                if not isinstance(item, dict):
+                    continue
+                channel = str(item.get("channel", "")).casefold()
+                component = str(item.get("component", "")).casefold()
+                if channel not in HSL_BANDS or component not in HSL_COMPONENTS:
+                    continue
+                bound = 45.0 if component == "hue" else 100.0
+                band_value = max(
+                    -bound, min(bound, float(item.get("value", 0.0))))
+                effects_list = value.setdefault("effects", [])
+                existing_band = next(
+                    (op for op in effects_list
+                     if isinstance(op, dict)
+                     and op.get("op") == "color.hsl_range"
+                     and str(op.get("channel", "")).casefold() == channel
+                     and str(op.get("component", "")).casefold()
+                     == component), None)
+                if existing_band is not None:
+                    if band_value == 0.0:
+                        effects_list.remove(existing_band)
+                    else:
+                        existing_band["value"] = band_value
+                elif band_value != 0.0:
+                    effects_list.append({
+                        "op": "color.hsl_range", "channel": channel,
+                        "component": component, "value": band_value,
+                        "unit": "percent", "mode": "delta"})
+                recorded.append({
+                    "id": f"{head}/hsl:{channel}/{component}",
+                    "op": "color.hsl_range", "asked": 0.0,
+                    "set": band_value, "enabled": True, "unit": "percent"})
         if effect_op:
             for effect in list(value.get("effects", []) or []):
                 if not isinstance(effect, dict) or str(

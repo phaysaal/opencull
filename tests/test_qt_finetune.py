@@ -2308,3 +2308,54 @@ class PastedRecipeFidelityTests(FineTunePageTests):
             item.get("op") == "detail.dehaze"
             and float(item.get("value") or 0) == 12.0
             for item in applied["operations"]))
+
+
+class MaskCurveAndBandDoorTests(FineTunePageTests):
+    """The base layer's curve and colour bands answer inside a mask too."""
+
+    def test_selecting_a_mask_shows_its_own_curve_and_bands(self):
+        from opencull_qt.finetune import CurvePanel, HslPanel
+
+        page = self.page()
+        page._create_mask("radial")           # selects the new mask
+        self.assertGreater(page.layer, 0)
+        self.assertTrue(page.findChildren(CurvePanel))
+        self.assertTrue(page.findChildren(HslPanel))
+
+    def test_a_curve_drawn_on_a_mask_lands_in_that_mask_alone(self):
+        page = self.page()
+        page._create_mask("radial")
+        ordinal = page.layer
+        page._mask_curve_changed(
+            ordinal, [[0.0, 0.0], [128.0, 190.0], [255.0, 255.0]])
+        placed = adjustments.masks(page.recipe)
+        mask = next(m for m in placed if m["ordinal"] == ordinal)
+        self.assertIsNone(mask["curve"])   # not baked into self.recipe
+        # It lives in self.changes, addressed to this ordinal, exactly
+        # where the render path reads it from.
+        held = page.changes.get(f"mask:{ordinal}", {}).get("curve")
+        self.assertEqual(held["points"][1], [128.0, 190.0])
+
+    def test_a_band_moved_on_a_mask_lands_in_that_mask_alone(self):
+        page = self.page()
+        page._create_mask("radial")
+        first = page.layer
+        page._create_mask("linear")
+        second = page.layer
+        self.assertNotEqual(first, second)
+        page._mask_hsl_changed(second, "blue", "saturation", 40.0)
+        self.assertEqual(
+            adjustments.mask_hsl_state(page.recipe, second)
+            [("blue", "saturation")]["value"], 40.0)
+        self.assertEqual(
+            adjustments.mask_hsl_state(page.recipe, first), {})
+
+    def test_reopening_the_mask_reseeds_the_drawn_curve(self):
+        page = self.page()
+        page._create_mask("radial")
+        ordinal = page.layer
+        page._mask_curve_changed(
+            ordinal, [[0.0, 0.0], [128.0, 40.0], [255.0, 255.0]])
+        page._show_controls()
+        panel = page._curve_panel
+        self.assertEqual(panel.points[1], [128.0, 40.0])

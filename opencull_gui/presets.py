@@ -53,6 +53,13 @@ PRESETS_ENVIRONMENT = "DARKIMIYA_PRESETS"
 # when a tuned treatment is kept as a preset. Applying somebody else's
 # crop to a frame it was not made for damages the frame.
 UNPORTABLE = ("geometry.",)
+# A painted mask's weights are a bitmap drawn in one photograph's own
+# pixels; carried into a preset it would land wherever those same
+# pixel coordinates happen to fall on a different frame, rather than
+# on the region it was painted for. The mask shapes measured in scene
+# terms -- luma, radial, linear, colour -- travel faithfully; the
+# brush does not, so it is the one shape a preset never keeps.
+UNPORTABLE_MASKS = ("mask.brush",)
 
 # The built-in set, written as the instructions a preset is. Each is one
 # thing done clearly rather than a slight variation of its neighbour: a
@@ -602,6 +609,7 @@ def portable_operations(operations: list[dict[str, Any]]) -> list[dict[str, Any]
         and not item.get("camera_look")
         and not item.get("dust_map")
         and not str(item.get("op", "")).startswith(UNPORTABLE)
+        and str(item.get("op", "")) not in UNPORTABLE_MASKS
     ]
 
 

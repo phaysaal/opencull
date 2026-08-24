@@ -923,10 +923,49 @@ class MidtoneBandTests(unittest.TestCase):
         self.assertGreater(
             float(_spatial_mask(dark, "luma", {"anchor": "shadows"}).mean()),
             0.8)
-        bright = np.full((2, 2, 3), 0.9, dtype=np.float32)
+        # Highlights mirror shadows exactly: weight climbs from 0 at
+        # middle grey to 1 at white, so 0.95 -- not merely bright, but
+        # close to it -- is where 0.8 is actually earned. A pixel just
+        # past middle grey earning full highlight weight was the bug.
+        bright = np.full((2, 2, 3), 0.95, dtype=np.float32)
         self.assertGreater(
             float(_spatial_mask(bright, "luma", {"anchor": "highlights"}).mean()),
             0.8)
+
+
+class HighlightBandTests(unittest.TestCase):
+    """The shadow band's mirror: it used to select almost everything."""
+
+    def band(self, luminance: float, anchor: str) -> float:
+        from development_engine import _spatial_mask
+
+        frame = np.full((2, 2, 3), luminance, dtype=np.float32)
+        return float(
+            _spatial_mask(frame, "luma", {"anchor": anchor}).mean())
+
+    def test_highlights_are_the_exact_mirror_of_shadows(self):
+        # Shadows: weight 1 at black, 0 at middle grey. Highlights
+        # must read the same distance from the other end: 0 at middle
+        # grey, 1 at white -- not "everything above middle grey", which
+        # is what the missing branch fell back to.
+        for luminance in (0.0, 0.2, 0.5, 0.8, 1.0):
+            shadow = self.band(luminance, "shadows")
+            highlight = self.band(1.0 - luminance, "highlights")
+            self.assertAlmostEqual(shadow, highlight, places=5)
+
+    def test_a_typical_bright_half_photo_is_not_selected_whole(self):
+        # The actual bug: a luma mask asked for "highlights" on an
+        # ordinary photo whose sky and midtones sit above middle grey
+        # came back selecting nearly the whole frame at full weight --
+        # which read, to the person who asked for it, as "it selected
+        # all". A pixel barely past middle grey must earn barely any
+        # weight, not full weight.
+        self.assertLess(self.band(0.55, "highlights"), 0.15)
+        self.assertLess(self.band(0.65, "highlights"), 0.35)
+
+    def test_only_the_bright_end_earns_full_weight(self):
+        self.assertAlmostEqual(self.band(0.5, "highlights"), 0.0, places=3)
+        self.assertAlmostEqual(self.band(1.0, "highlights"), 1.0, places=3)
 
 
 class GreyMixTests(unittest.TestCase):

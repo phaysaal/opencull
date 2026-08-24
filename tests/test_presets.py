@@ -275,3 +275,49 @@ class FilmSpiritTests(unittest.TestCase):
         self.assertLess(value("Cinema Flat", "color.saturation"), -15)
         self.assertLess(value("Negative Portrait", "tone.contrast"), 0)
         self.assertEqual(value("Silver Film", "color.saturation"), -100)
+
+
+class PortableMaskTests(unittest.TestCase):
+    """A preset carries the masks that describe a scene, not a bitmap."""
+
+    def shaped_mask(self, shape: str, **value) -> dict:
+        return {"op": f"mask.{shape}", "unit": "mask", "mode": "absolute",
+               "enabled": True, "value": {
+                   "anchor": f"{shape} gradient", "opacity": 1.0,
+                   "feather": 1.0, **value,
+                   "effects": [{"op": "tone.exposure", "value": 0.3,
+                               "unit": "EV", "mode": "delta"}]}}
+
+    def test_luma_radial_linear_and_color_masks_travel(self):
+        operations = [
+            self.shaped_mask("luma"), self.shaped_mask("radial"),
+            self.shaped_mask("linear"), self.shaped_mask("color"),
+        ]
+        kept = {item["op"] for item in
+               presets.portable_operations(operations)}
+        self.assertEqual(
+            kept, {"mask.luma", "mask.radial", "mask.linear",
+                  "mask.color"})
+
+    def test_a_painted_mask_does_not_travel(self):
+        operations = [
+            self.shaped_mask("luma"),
+            self.shaped_mask("brush", map="BASE64BITMAPDATA=="),
+        ]
+        kept = presets.portable_operations(operations)
+        self.assertEqual([item["op"] for item in kept], ["mask.luma"])
+        # The bitmap itself never even risks leaving with it.
+        self.assertNotIn("BASE64BITMAPDATA==", json.dumps(kept))
+
+    def test_a_kept_preset_never_carries_a_painted_mask(self):
+        operations = [
+            {"op": "tone.exposure", "value": 0.2, "unit": "EV",
+             "mode": "delta", "enabled": True},
+            self.shaped_mask("brush", map="STROKES"),
+        ]
+        with tempfile.TemporaryDirectory() as folder:
+            kept = presets.save("Brushed", operations,
+                                root=Path(folder))
+        ops = {item["op"] for item in kept["operations"]}
+        self.assertIn("tone.exposure", ops)
+        self.assertNotIn("mask.brush", ops)

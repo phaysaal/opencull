@@ -2170,53 +2170,76 @@ class FineTunePage(QWidget):
             self.current) if self.current else {}
         if on_mask:
             self._show_geometry(self.layer)
+        # The tone curve: the whole frame's on the base layer, one
+        # mask's own on a mask layer -- drawn on top of everything
+        # else that layer does. Seeded from the curve already drawn --
+        # pending change first, then the recipe's own operation -- so
+        # reopening the frame, or reopening the layer, reopens the
+        # same curve.
+        mask_now = None
+        if on_mask:
+            mask_now = next(
+                (item for item in adjustments.masks(self.recipe)
+                 if item["ordinal"] == self.layer), None)
+            pending = (self.changes.get(f"mask:{self.layer}")
+                      or {}).get("curve")
         else:
-            # The tone curve belongs to the whole frame, so it lives on
-            # the base layer, above the sections. Seeded from the curve
-            # already drawn -- pending change first, then the recipe's own
-            # operation -- so reopening the frame reopens the same curve.
             pending = self.changes.get("curve")
-            held_preserve = None
-            if isinstance(pending, dict) and pending.get("points"):
-                points = pending["points"]
-                held_preserve = pending.get("preserve")
-            else:
-                drawn = next(
-                    (item for item in self.recipe.get("operations", []) or []
-                     if isinstance(item, dict)
-                     and item.get("op") == "tone.curve"
-                     and isinstance(item.get("value"), dict)),
-                    None)
-                points = (drawn["value"].get("points")
-                          if drawn is not None else None)
-                if drawn is not None:
-                    held_preserve = drawn["value"].get("preserve")
-            self.body.addWidget(self._heading("Curve", ""))
-            curve = CurvePanel(points)
-            curve.setToolTip(tooltip(
-                "The classic RGB tone curve, on top of everything else "
-                "the treatment does. Drag a point; click the line to add "
-                "one; right-click a middle point to remove it. The line "
-                "is the renderer's own interpolation -- what is drawn is "
-                "what develops."))
+        held_preserve = None
+        if isinstance(pending, dict) and pending.get("points"):
+            points = pending["points"]
+            held_preserve = pending.get("preserve")
+        elif on_mask:
+            drawn_mask = mask_now.get("curve") if mask_now else None
+            points = drawn_mask.get("points") if drawn_mask else None
+            held_preserve = (drawn_mask.get("preserve")
+                             if drawn_mask else None)
+        else:
+            drawn = next(
+                (item for item in self.recipe.get("operations", []) or []
+                 if isinstance(item, dict)
+                 and item.get("op") == "tone.curve"
+                 and isinstance(item.get("value"), dict)),
+                None)
+            points = (drawn["value"].get("points")
+                      if drawn is not None else None)
+            if drawn is not None:
+                held_preserve = drawn["value"].get("preserve")
+        self.body.addWidget(self._heading("Curve", ""))
+        curve = CurvePanel(points)
+        curve.setToolTip(tooltip(
+            "The classic RGB tone curve, on top of everything else "
+            "this layer does. Drag a point; click the line to add "
+            "one; right-click a middle point to remove it. The line "
+            "is the renderer's own interpolation -- what is drawn is "
+            "what develops."))
+        if on_mask:
+            curve.changed.connect(
+                lambda pts, m=self.layer: self._mask_curve_changed(m, pts))
+        else:
             curve.changed.connect(self._curve_changed)
-            self.body.addWidget(curve)
-            self._curve_panel = curve
-            # How faithfully colour rides the curve. At 0 the curve runs
-            # on all three channels -- contrast saturates and bends hue,
-            # the way film bought its pop. At 100 the curve lifts only
-            # brightness and every hue stays exactly what it was.
-            self._curve_preserve = float(held_preserve or 0.0)
-            hold = GeometrySlider("preserve", "Keep colour", 0.0, 100.0,
-                                  self._curve_preserve)
-            hold.setToolTip(tooltip(
-                "How faithfully colour rides the curve. At 0 contrast "
-                "also saturates and bends hue -- the classic film trade. "
-                "At 100 the curve changes brightness only and every hue "
-                "stays exactly what it was. Skin and skies usually want "
-                "some of this; a sunset may want none."))
+        self.body.addWidget(curve)
+        self._curve_panel = curve
+        # How faithfully colour rides the curve. At 0 the curve runs
+        # on all three channels -- contrast saturates and bends hue,
+        # the way film bought its pop. At 100 the curve lifts only
+        # brightness and every hue stays exactly what it was.
+        self._curve_preserve = float(held_preserve or 0.0)
+        hold = GeometrySlider("preserve", "Keep colour", 0.0, 100.0,
+                              self._curve_preserve)
+        hold.setToolTip(tooltip(
+            "How faithfully colour rides the curve. At 0 contrast "
+            "also saturates and bends hue -- the classic film trade. "
+            "At 100 the curve changes brightness only and every hue "
+            "stays exactly what it was. Skin and skies usually want "
+            "some of this; a sunset may want none."))
+        if on_mask:
+            hold.changed.connect(
+                lambda _k, v, m=self.layer:
+                    self._mask_curve_preserved(m, v))
+        else:
             hold.changed.connect(self._curve_preserved)
-            self.body.addWidget(hold)
+        self.body.addWidget(hold)
         # Every control of every section, always. The first shape folded
         # the unused ones behind a per-section count, and the fold read
         # as absence: the photographer this page is for looked at it and
@@ -2243,15 +2266,21 @@ class FineTunePage(QWidget):
                 widget.wanted.connect(self._control_wanted)
                 self.controls.append(widget)
                 self.body.addWidget(widget)
-        if not on_mask:
-            self.body.addWidget(self._heading("Colour bands", ""))
-            bands = HslPanel(adjustments.hsl_state(self.recipe))
-            bands.setToolTip(tooltip(
-                "Each band of colour, turned, saturated or lightened on "
-                "its own. The same vocabulary the treatments write; here "
-                "it answers to the hand."))
+        self.body.addWidget(self._heading("Colour bands", ""))
+        bands = HslPanel(
+            adjustments.mask_hsl_state(self.recipe, self.layer)
+            if on_mask else adjustments.hsl_state(self.recipe))
+        bands.setToolTip(tooltip(
+            "Each band of colour, turned, saturated or lightened on "
+            "its own. The same vocabulary the treatments write; here "
+            "it answers to the hand."))
+        if on_mask:
+            bands.changed.connect(
+                lambda band, comp, v, m=self.layer:
+                    self._mask_hsl_changed(m, band, comp, v))
+        else:
             bands.changed.connect(self._hsl_changed)
-            self.body.addWidget(bands)
+        self.body.addWidget(bands)
         promises = adjustments.guardrails(self.recipe)
         if promises:
             # The promises fold. A treatment's guardrails can run to a
@@ -2477,6 +2506,55 @@ class FineTunePage(QWidget):
         self.changes["curve"] = {
             "points": [list(p) for p in panel.points],
             "preserve": self._curve_preserve}
+        self.render()
+
+    def _mask_curve_changed(self, ordinal: int, points: list) -> None:
+        """One mask's own curve -- the base layer's dial, layer-scoped."""
+        self._remember(f"mask {ordinal} curve")
+        head = f"mask:{ordinal}"
+        entry = self.changes.setdefault(head, {})
+        if points == [[0.0, 0.0], [255.0, 255.0]]:
+            entry.pop("curve", None)
+            if not entry:
+                self.changes.pop(head, None)
+        else:
+            drawn = {"points": points}
+            if self._curve_preserve:
+                drawn["preserve"] = self._curve_preserve
+            entry["curve"] = drawn
+        self.render()
+
+    def _mask_curve_preserved(self, ordinal: int, value: float) -> None:
+        """The colour-hold dial under a mask's curve."""
+        self._curve_preserve = float(value)
+        panel = getattr(self, "_curve_panel", None)
+        if panel is None or panel.is_identity():
+            return
+        self._remember(f"mask {ordinal} curve hold")
+        self.changes.setdefault(f"mask:{ordinal}", {})["curve"] = {
+            "points": [list(p) for p in panel.points],
+            "preserve": self._curve_preserve}
+        self.render()
+
+    def _mask_hsl_changed(self, ordinal: int, band: str, component: str,
+                          value: float) -> None:
+        """One mask's own colour bands -- the base layer's wheel, scoped
+        to this mask's own effects rather than the whole frame."""
+        self._remember(f"mask {ordinal} hsl {band} {component}")
+        head = f"mask:{ordinal}"
+        entry = self.changes.setdefault(head, {})
+        held = entry.setdefault("hsl", [])
+        existing = next((item for item in held
+                         if item.get("channel") == band
+                         and item.get("component") == component), None)
+        if existing is None:
+            held.append({"channel": band, "component": component,
+                         "value": float(value)})
+        else:
+            existing["value"] = float(value)
+        self.recipe = adjustments.apply(self.recipe, {head: {"hsl": [
+            {"channel": band, "component": component,
+             "value": float(value)}]}})
         self.render()
 
     def _ask_zones(self) -> None:

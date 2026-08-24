@@ -1031,7 +1031,18 @@ def _spatial_mask(rgb: np.ndarray, shape: str, value: dict[str, Any],
             # looks and mid grey sits at 0.18 of the light.
             shown = np.power(np.clip(lum, 0.0, 1.0), 1.0 / _ENCODE_GAMMA)
             return np.clip(1.0 - np.abs(shown - 0.5) * 2.5, 0.0, 1.0)
-        return np.clip((1 - lum * 2) if "shadow" in anchor else lum * 2, 0, 1)
+        if "shadow" in anchor:
+            return np.clip(1 - lum * 2, 0, 1)
+        if "highlight" in anchor:
+            # The shadow band's mirror: weight rises from the middle to
+            # white instead of falling from black to the middle.
+            # Highlights had no branch of its own and fell through to
+            # this same "lum * 2" un-inverted -- which saturates every
+            # pixel above middle grey to FULL weight rather than favouring
+            # only the bright half, so on most photographs the mask read
+            # as if it had selected everything.
+            return np.clip(lum * 2 - 1, 0, 1)
+        return np.clip(lum * 2, 0, 1)
     if shape == "brush":
         # Painted by hand: the weights are a small greyscale map carried
         # inside the operation itself -- base64, bounded resolution -- so
